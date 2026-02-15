@@ -5,7 +5,7 @@ STATUS: IN PROGRESS
 ## Phase 1: Project Setup & Database
 
 - [x] 1.1: Initialize backend project (FastAPI, SQLAlchemy, pyproject.toml, virtual env)
-- [ ] 1.2: Create database models (Message, Category, Tag, MessageTag) with async SQLite
+- [x] 1.2: Create database models (Message, Category, Tag, MessageTag) with async SQLite
 - [ ] 1.3: Create default categories with seed data
 - [ ] 1.4: Initialize frontend project (React 19, Vite 7, TypeScript, Tailwind CSS 4)
 - [ ] 1.5: Set up frontend tooling (shadcn/ui, Framer Motion, Zustand, React Router)
@@ -64,3 +64,4 @@ STATUS: IN PROGRESS
 ## Blockers
 
 - 2026-02-15: Fresh backend dependency installation is still blocked by offline package index access (`pip install -e ".[dev]"`), but existing `backend/.venv` currently includes the required tooling for lint/test backpressure.
+- 2026-02-15: Async SQLite operations (`aiosqlite.connect(...)`) hang in this sandbox because thread callbacks do not wake the asyncio loop promptly; avoid live async DB I/O in tests here.

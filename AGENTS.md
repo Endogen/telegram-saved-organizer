@@ -44,3 +44,4 @@ Run after each implementation:
 - 2026-02-15: `backend/.venv` can bootstrap `setuptools` from `/usr/share/python-wheels/setuptools-68.1.2-py3-none-any.whl`, but editable install still blocks (`bdist_wheel` missing and no index access for project/runtime dependencies).
 - 2026-02-15: Existing `backend/.venv` currently has `ruff`/`pytest` and can run backend backpressure checks even though fresh dependency installation remains offline-blocked.
 - 2026-02-15: `fastapi.testclient.TestClient` hangs in this environment during tests; use `httpx.AsyncClient` with `ASGITransport` for backend API tests.
+- 2026-02-15: `aiosqlite.connect(...)` hangs in this sandbox (thread callbacks do not wake the asyncio loop promptly), so tests should avoid live async SQLite I/O.
