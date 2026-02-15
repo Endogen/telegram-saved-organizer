@@ -11,6 +11,8 @@ from app.messages.service import (
     MessageNotFoundError,
     MessageService,
     MessageSort,
+    TelegramClientNotConnectedError,
+    TelegramMessageDeleteError,
 )
 from app.models import Category, Message, Tag
 
@@ -52,6 +54,26 @@ class _FakeSession:
 
     async def commit(self) -> None:
         self.commit_calls += 1
+
+
+class _FakeTelegramClient:
+    def __init__(self) -> None:
+        self.delete_calls: list[tuple[str, tuple[int, ...]]] = []
+        self.delete_error: Exception | None = None
+
+    async def delete_messages(self, entity: str, message_ids: list[int] | tuple[int, ...] | int) -> None:
+        normalized_ids = (message_ids,) if isinstance(message_ids, int) else tuple(message_ids)
+        self.delete_calls.append((entity, normalized_ids))
+        if self.delete_error is not None:
+            raise self.delete_error
+
+
+class _FakeTelegramManager:
+    def __init__(self, client: _FakeTelegramClient | None) -> None:
+        self.client = client
+
+    def get_connected_client(self) -> _FakeTelegramClient | None:
+        return self.client
 
 
 def _build_message(
@@ -205,10 +227,15 @@ async def test_delete_message_removes_item_and_commits() -> None:
     session = _FakeSession()
     message = _build_message()
     session.scalar_values = [message]
-    service = MessageService(session=session)  # type: ignore[arg-type]
+    telegram_client = _FakeTelegramClient()
+    service = MessageService(
+        session=session,  # type: ignore[arg-type]
+        manager=_FakeTelegramManager(telegram_client),
+    )
 
     await service.delete_message(message_id=message.id)
 
+    assert telegram_client.delete_calls == [("me", (message.telegram_id,))]
     assert session.delete_calls == [message]
     assert session.commit_calls == 1
 
@@ -219,11 +246,16 @@ async def test_bulk_delete_messages_removes_items_and_commits() -> None:
     first = _build_message(message_id=1, telegram_id=1001)
     second = _build_message(message_id=2, telegram_id=1002)
     session.scalars_values = [[first, second]]
-    service = MessageService(session=session)  # type: ignore[arg-type]
+    telegram_client = _FakeTelegramClient()
+    service = MessageService(
+        session=session,  # type: ignore[arg-type]
+        manager=_FakeTelegramManager(telegram_client),
+    )
 
     deleted_count = await service.bulk_delete_messages(message_ids=[1, 2, 2])
 
     assert deleted_count == 2
+    assert telegram_client.delete_calls == [("me", (1001, 1002))]
     assert session.delete_calls == [first, second]
     assert session.commit_calls == 1
 
@@ -233,11 +265,53 @@ async def test_bulk_delete_messages_raises_when_any_message_missing() -> None:
     session = _FakeSession()
     first = _build_message(message_id=1, telegram_id=1001)
     session.scalars_values = [[first]]
-    service = MessageService(session=session)  # type: ignore[arg-type]
+    telegram_client = _FakeTelegramClient()
+    service = MessageService(
+        session=session,  # type: ignore[arg-type]
+        manager=_FakeTelegramManager(telegram_client),
+    )
 
     with pytest.raises(MessageNotFoundError, match="Message 2 was not found."):
         await service.bulk_delete_messages(message_ids=[1, 2])
 
+    assert telegram_client.delete_calls == []
+    assert session.delete_calls == []
+    assert session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_message_raises_when_telegram_not_connected() -> None:
+    session = _FakeSession()
+    message = _build_message()
+    session.scalar_values = [message]
+    service = MessageService(
+        session=session,  # type: ignore[arg-type]
+        manager=_FakeTelegramManager(None),
+    )
+
+    with pytest.raises(TelegramClientNotConnectedError, match="Telegram client is not connected."):
+        await service.delete_message(message_id=message.id)
+
+    assert session.delete_calls == []
+    assert session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_message_raises_when_telegram_delete_fails() -> None:
+    session = _FakeSession()
+    message = _build_message()
+    session.scalar_values = [message]
+    telegram_client = _FakeTelegramClient()
+    telegram_client.delete_error = RuntimeError("boom")
+    service = MessageService(
+        session=session,  # type: ignore[arg-type]
+        manager=_FakeTelegramManager(telegram_client),
+    )
+
+    with pytest.raises(TelegramMessageDeleteError, match="Failed to delete message\\(s\\) on Telegram."):
+        await service.delete_message(message_id=message.id)
+
+    assert telegram_client.delete_calls == [("me", (message.telegram_id,))]
     assert session.delete_calls == []
     assert session.commit_calls == 0
 

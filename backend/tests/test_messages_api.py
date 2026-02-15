@@ -14,6 +14,8 @@ from app.messages.service import (
     MessageListResult,
     MessageNotFoundError,
     MessageSort,
+    TelegramClientNotConnectedError,
+    TelegramMessageDeleteError,
 )
 
 
@@ -248,6 +250,39 @@ async def test_bulk_delete_endpoint_returns_not_found(
 
 
 @pytest.mark.asyncio
+async def test_bulk_delete_endpoint_returns_bad_request_when_telegram_not_connected(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.bulk_delete_error = TelegramClientNotConnectedError(
+        "Telegram client is not connected. Connect first before deleting messages."
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/messages/bulk-delete", json={"message_ids": [404]})
+
+    assert response.status_code == 400
+    assert (
+        response.json()["detail"]
+        == "Telegram client is not connected. Connect first before deleting messages."
+    )
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_endpoint_returns_bad_gateway_when_telegram_delete_fails(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.bulk_delete_error = TelegramMessageDeleteError("Telegram rejected message deletion request.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/messages/bulk-delete", json={"message_ids": [404]})
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Telegram rejected message deletion request."
+
+
+@pytest.mark.asyncio
 async def test_bulk_move_endpoint_returns_moved_count(
     message_context: tuple[Any, _FakeMessageService],
 ) -> None:
@@ -396,3 +431,36 @@ async def test_delete_message_endpoint_returns_not_found(
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Message 404 was not found."
+
+
+@pytest.mark.asyncio
+async def test_delete_message_endpoint_returns_bad_request_when_telegram_not_connected(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.delete_error = TelegramClientNotConnectedError(
+        "Telegram client is not connected. Connect first before deleting messages."
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.delete("/api/messages/12")
+
+    assert response.status_code == 400
+    assert (
+        response.json()["detail"]
+        == "Telegram client is not connected. Connect first before deleting messages."
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_message_endpoint_returns_bad_gateway_when_telegram_delete_fails(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.delete_error = TelegramMessageDeleteError("Telegram rejected message deletion request.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.delete("/api/messages/12")
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Telegram rejected message deletion request."

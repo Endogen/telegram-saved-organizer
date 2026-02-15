@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Protocol, Sequence
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from telethon.errors import RPCError
 
 from app.models import Category, Message, Tag
+from app.telegram.client import telegram_client_manager
 
 
 class MessageNotFoundError(RuntimeError):
@@ -19,6 +21,26 @@ class MessageNotFoundError(RuntimeError):
 
 class CategoryNotFoundError(RuntimeError):
     """Raised when a category does not exist."""
+
+
+class TelegramClientNotConnectedError(RuntimeError):
+    """Raised when Telegram deletion is attempted without an active connection."""
+
+
+class TelegramMessageDeleteError(RuntimeError):
+    """Raised when Telegram message deletion fails."""
+
+
+class TelegramDeleteClientProtocol(Protocol):
+    """Telethon client methods used for message deletion."""
+
+    async def delete_messages(self, entity: str, message_ids: Sequence[int] | int) -> Any: ...
+
+
+class TelegramDeleteManagerProtocol(Protocol):
+    """Telegram manager methods used for message deletion."""
+
+    def get_connected_client(self) -> TelegramDeleteClientProtocol | None: ...
 
 
 class MessageSort(StrEnum):
@@ -43,6 +65,7 @@ class MessageService:
     """CRUD operations for cached Telegram messages."""
 
     session: AsyncSession
+    manager: TelegramDeleteManagerProtocol = telegram_client_manager
 
     async def list_messages(
         self,
@@ -152,17 +175,21 @@ class MessageService:
         return await self.get_message(message_id=message_id)
 
     async def delete_message(self, *, message_id: int) -> None:
-        """Delete a message from local storage."""
+        """Delete a message from Telegram and local storage."""
 
         message = await self.get_message(message_id=message_id)
+        await self._delete_telegram_messages(telegram_message_ids=(message.telegram_id,))
         await self.session.delete(message)
         await self.session.commit()
 
     async def bulk_delete_messages(self, *, message_ids: Sequence[int]) -> int:
-        """Delete multiple messages from local storage."""
+        """Delete multiple messages from Telegram and local storage."""
 
         normalized_message_ids = self._normalize_message_ids(message_ids=message_ids)
         messages = await self._load_messages_by_ids(message_ids=normalized_message_ids)
+        await self._delete_telegram_messages(
+            telegram_message_ids=tuple(message.telegram_id for message in messages),
+        )
 
         for message in messages:
             await self.session.delete(message)
@@ -213,6 +240,22 @@ class MessageService:
         category = await self.session.get(Category, category_id)
         if category is None:
             raise CategoryNotFoundError(f"Category {category_id} was not found.")
+
+    async def _delete_telegram_messages(self, *, telegram_message_ids: Sequence[int]) -> None:
+        client = self.manager.get_connected_client()
+        if client is None:
+            raise TelegramClientNotConnectedError(
+                "Telegram client is not connected. Connect first before deleting messages."
+            )
+
+        try:
+            await client.delete_messages("me", list(telegram_message_ids))
+        except RPCError as exc:
+            raise TelegramMessageDeleteError(
+                "Telegram rejected message deletion request."
+            ) from exc
+        except Exception as exc:
+            raise TelegramMessageDeleteError("Failed to delete message(s) on Telegram.") from exc
 
     def _normalize_message_ids(self, *, message_ids: Sequence[int]) -> tuple[int, ...]:
         if not message_ids:
