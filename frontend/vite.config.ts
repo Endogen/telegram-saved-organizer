@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath, URL } from "node:url";
@@ -11,8 +11,13 @@ export default defineConfig({
     },
   },
   server: {
+    host: "127.0.0.1",
     proxy: {
-      "/api": "http://localhost:8500",
+      "/api": "http://127.0.0.1:8500",
     },
+  },
+  test: {
+    environment: "jsdom",
+    setupFiles: "./src/test/setup.ts",
   },
 });

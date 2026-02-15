@@ -55,7 +55,7 @@ STATUS: IN PROGRESS
 - [x] 7.1: Write backend tests for auth and telegram modules (mock Telethon)
 - [x] 7.2: Write backend tests for message, category, tag services and endpoints
 - [x] 7.3: Write backend tests for scanner and categorizer
-- [ ] 7.4: Write frontend tests for message card, grid, and sidebar components
+- [x] 7.4: Write frontend tests for message card, grid, and sidebar components
 - [ ] 7.5: Write frontend tests for search, filter, and API client
 - [ ] 7.6: Achieve ≥80% backend code coverage (add missing tests)
 - [ ] 7.7: Achieve ≥80% frontend code coverage (add missing tests)
