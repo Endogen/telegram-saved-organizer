@@ -39,4 +39,6 @@ Run after each implementation:
 
 ## Learnings
 
-*(none yet)*
+- 2026-02-15: Current execution environment has no outbound package index access; `pip install -e ".[dev]"` fails when resolving dependencies.
+- 2026-02-15: `openclaw gateway wake ...` fails in this environment with `uv_interface_addresses` system error, so automated notifications may not send from sandbox.
+- 2026-02-15: `backend/.venv` can bootstrap `setuptools` from `/usr/share/python-wheels/setuptools-68.1.2-py3-none-any.whl`, but editable install still blocks (`bdist_wheel` missing and no index access for project/runtime dependencies).

@@ -1,6 +1,6 @@
 # Implementation Plan
 
-STATUS: READY
+STATUS: BLOCKED (environment dependency access)
 
 ## Phase 1: Project Setup & Database
 
@@ -60,3 +60,8 @@ STATUS: READY
 - [ ] 7.6: Achieve ≥80% backend code coverage (add missing tests)
 - [ ] 7.7: Achieve ≥80% frontend code coverage (add missing tests)
 - [ ] 7.8: Final UI polish — consistent spacing, dark mode, mobile refinements
+
+## Blockers
+
+- 2026-02-15: Backend scaffold for `1.1` is created, but dependency installation is blocked by offline package resolution (`pip install -e ".[dev]"` cannot reach package index), so required backpressure checks cannot run yet.
+- 2026-02-15: Re-attempted `1.1` verification; `backend/.venv` only has `pip`, `ruff`/`pytest` are unavailable, and dependency install still fails offline (including editable install fallback without `wheel`), so lint/test backpressure remains blocked.
