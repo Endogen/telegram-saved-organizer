@@ -63,3 +63,4 @@ Run after each implementation:
 - 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) continue to pass after adding `/messages` filter controls (search, category dropdown, tag multi-select, sort, clear filters).
 - 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) continue to pass after implementing `/messages` card actions (move dialog, tag management, delete).
 - 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) continue to pass after implementing `/messages` bulk selection mode and bulk actions toolbar (select, move, delete).
+- 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) continue to pass after implementing drag-to-move from `/messages` cards into sidebar categories via shared drag/drop events.

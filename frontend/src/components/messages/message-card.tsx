@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { type DragEvent, useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import {
   Archive,
@@ -7,6 +7,7 @@ import {
   FileText,
   FolderInput,
   FolderKanban,
+  GripVertical,
   ImageIcon,
   Link2,
   MessageSquareText,
@@ -19,6 +20,7 @@ import {
 } from "lucide-react";
 
 import type { MessageListItem } from "@/types/message";
+import { announceMessageDragEnd, announceMessageDragStart, setDraggedMessageId } from "@/lib/message-drag-events";
 
 const categoryIconMap: Record<string, LucideIcon> = {
   video: Video,
@@ -155,6 +157,7 @@ export function MessageCard({
   const shouldReduceMotion = useReducedMotion();
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [isActionsOpen, setIsActionsOpen] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const CategoryIcon = resolveCategoryIcon(message.category.icon);
   const urlDomain = parseUrlDomain(message.url);
   const hasUrl = message.url !== null && message.url.trim().length > 0;
@@ -205,6 +208,27 @@ export function MessageCard({
     };
   }, [isActionsOpen]);
 
+  function handleDragStart(event: DragEvent<HTMLElement>) {
+    if (isDeletePending) {
+      event.preventDefault();
+      return;
+    }
+
+    setDraggedMessageId(event.dataTransfer, message.id);
+    if (event.dataTransfer !== null) {
+      event.dataTransfer.effectAllowed = "move";
+    }
+
+    setIsActionsOpen(false);
+    setIsDragging(true);
+    announceMessageDragStart({ messageId: message.id, categoryId: message.category.id });
+  }
+
+  function handleDragEnd() {
+    setIsDragging(false);
+    announceMessageDragEnd();
+  }
+
   return (
     <motion.article
       layout
@@ -218,7 +242,14 @@ export function MessageCard({
       }}
       exit={cardExitAnimation}
       whileHover={hoverAnimation}
-      className="group rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.96)] p-4 shadow-sm"
+      draggable={!isDeletePending}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      className={[
+        "group rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.96)] p-4 shadow-sm transition-colors",
+        isDeletePending ? "cursor-not-allowed opacity-80" : "cursor-grab active:cursor-grabbing",
+        isDragging ? "border-[hsl(var(--primary)/0.55)] bg-[hsl(var(--card)/0.88)] shadow-lg" : "",
+      ].join(" ")}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-2">
@@ -316,9 +347,15 @@ export function MessageCard({
         </div>
       </div>
 
-      <div className="mt-3 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.08em] text-[hsl(var(--muted-foreground))]">
-        <MediaIcon className="size-3.5" />
-        <span>{mediaLabel}</span>
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.08em] text-[hsl(var(--muted-foreground))]">
+          <MediaIcon className="size-3.5" />
+          <span>{mediaLabel}</span>
+        </div>
+        <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[hsl(var(--muted-foreground))]">
+          <GripVertical className="size-3" />
+          Drag
+        </span>
       </div>
 
       <p className="mt-2 text-sm text-[hsl(var(--foreground))]">{previewText}</p>

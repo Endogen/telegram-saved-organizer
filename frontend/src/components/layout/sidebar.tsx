@@ -1,3 +1,4 @@
+import { type DragEvent, useEffect, useState } from "react";
 import {
   Archive,
   Code2,
@@ -13,6 +14,15 @@ import {
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 
+import {
+  announceMessageDragEnd,
+  announceMessageDropToCategory,
+  getDraggedMessageId,
+  MESSAGE_DRAG_END_EVENT,
+  MESSAGE_DRAG_START_EVENT,
+  readMessageDragStartEvent,
+  type MessageDragStartDetail,
+} from "@/lib/message-drag-events";
 import { cn } from "@/lib/utils";
 import type { CategoryWithCount } from "@/types/category";
 
@@ -60,6 +70,76 @@ export function Sidebar({ items, categories, isCategoriesLoading, isOpen, onClos
   const activeCategory =
     location.pathname.startsWith("/messages") ? new URLSearchParams(location.search).get("category") ?? "all" : null;
   const totalMessageCount = categories.reduce((sum, category) => sum + category.message_count, 0);
+  const [activeDrag, setActiveDrag] = useState<MessageDragStartDetail | null>(null);
+  const [dropCategoryId, setDropCategoryId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    function handleDragStart(event: Event) {
+      const detail = readMessageDragStartEvent(event);
+      if (detail === null) {
+        return;
+      }
+      setActiveDrag(detail);
+    }
+
+    function handleDragEnd() {
+      setActiveDrag(null);
+      setDropCategoryId(null);
+    }
+
+    window.addEventListener(MESSAGE_DRAG_START_EVENT, handleDragStart);
+    window.addEventListener(MESSAGE_DRAG_END_EVENT, handleDragEnd);
+    return () => {
+      window.removeEventListener(MESSAGE_DRAG_START_EVENT, handleDragStart);
+      window.removeEventListener(MESSAGE_DRAG_END_EVENT, handleDragEnd);
+    };
+  }, []);
+
+  function handleCategoryDragOver(event: DragEvent<HTMLAnchorElement>, categoryId: number) {
+    const messageId = getDraggedMessageId(event.dataTransfer);
+    if (messageId === null) {
+      return;
+    }
+
+    event.preventDefault();
+    event.dataTransfer.dropEffect = activeDrag?.categoryId === categoryId ? "none" : "move";
+    if (dropCategoryId !== categoryId) {
+      setDropCategoryId(categoryId);
+    }
+  }
+
+  function handleCategoryDragLeave(event: DragEvent<HTMLAnchorElement>, categoryId: number) {
+    const nextTarget = event.relatedTarget as Node | null;
+    if (nextTarget !== null && event.currentTarget.contains(nextTarget)) {
+      return;
+    }
+
+    if (dropCategoryId === categoryId) {
+      setDropCategoryId(null);
+    }
+  }
+
+  function handleCategoryDrop(event: DragEvent<HTMLAnchorElement>, category: CategoryWithCount) {
+    event.preventDefault();
+    setDropCategoryId(null);
+
+    const messageId = getDraggedMessageId(event.dataTransfer);
+    if (messageId === null) {
+      return;
+    }
+
+    if (activeDrag?.categoryId === category.id) {
+      announceMessageDragEnd();
+      return;
+    }
+
+    announceMessageDropToCategory({ messageId, categoryId: category.id });
+    announceMessageDragEnd();
+  }
 
   return (
     <>
@@ -131,13 +211,22 @@ export function Sidebar({ items, categories, isCategoriesLoading, isOpen, onClos
               {categories.map((category) => {
                 const Icon = resolveCategoryIcon(category.icon);
                 const isActive = activeCategory === category.slug;
+                const isDropTarget = dropCategoryId === category.id;
+                const isDropBlocked = isDropTarget && activeDrag?.categoryId === category.id;
 
                 return (
                   <Link
                     key={category.id}
                     to={`/messages?category=${encodeURIComponent(category.slug)}`}
-                    className={navItemClassName(isActive)}
+                    className={cn(
+                      navItemClassName(isActive),
+                      isDropTarget && !isDropBlocked && "ring-2 ring-[hsl(var(--primary)/0.5)] ring-offset-1",
+                      isDropTarget && isDropBlocked && "ring-2 ring-red-500/45 ring-offset-1",
+                    )}
                     onClick={onClose}
+                    onDragOver={(event) => handleCategoryDragOver(event, category.id)}
+                    onDragLeave={(event) => handleCategoryDragLeave(event, category.id)}
+                    onDrop={(event) => handleCategoryDrop(event, category)}
                   >
                     <span className="flex min-w-0 items-center gap-2">
                       <Icon className="size-4 shrink-0" style={{ color: category.color }} />
@@ -150,6 +239,12 @@ export function Sidebar({ items, categories, isCategoriesLoading, isOpen, onClos
                 );
               })}
             </div>
+
+            {activeDrag !== null ? (
+              <p className="mt-2 rounded-md border border-[hsl(var(--primary)/0.25)] bg-[hsl(var(--primary)/0.1)] px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[hsl(var(--primary))]">
+                Drop a message on a category to move it.
+              </p>
+            ) : null}
           </div>
         </nav>
       </aside>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckSquare2, Search, X } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
@@ -16,6 +16,7 @@ import { MessageGrid } from "@/components/messages/message-grid";
 import { TagInputDialog } from "@/components/tags/tag-input";
 import { Button } from "@/components/ui/button";
 import { useCategories } from "@/hooks/use-categories";
+import { MESSAGE_DROP_TO_CATEGORY_EVENT, readMessageDropToCategoryEvent } from "@/lib/message-drag-events";
 import type { CategoryWithCount } from "@/types/category";
 import type { MessageListItem, MessageTag } from "@/types/message";
 
@@ -516,6 +517,54 @@ export function MessagesPage() {
     selectedTagFilters.length > 0 ||
     sortOption !== "date_desc";
 
+  const moveSingleMessageToCategory = useCallback(
+    async (messageId: number, categoryId: number) => {
+      if (isApiBackedData) {
+        const updatedMessage = await moveMessageToCategory(messageId, categoryId);
+        setMessages((currentMessages) =>
+          currentMessages.map((message) => (message.id === messageId ? updatedMessage : message)),
+        );
+        return;
+      }
+
+      const targetCategory = actionCategories.find((category) => category.id === categoryId);
+      if (!targetCategory) {
+        throw new Error("Selected category was not found.");
+      }
+
+      setMessages((currentMessages) => localMoveMessage(currentMessages, messageId, targetCategory));
+    },
+    [actionCategories, isApiBackedData],
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    function handleDropToCategory(event: Event) {
+      const detail = readMessageDropToCategoryEvent(event);
+      if (detail === null) {
+        return;
+      }
+
+      const targetMessage = messages.find((message) => message.id === detail.messageId);
+      if (targetMessage === undefined || targetMessage.category_id === detail.categoryId) {
+        return;
+      }
+
+      setPageError(null);
+      void moveSingleMessageToCategory(detail.messageId, detail.categoryId).catch((error) => {
+        setPageError(toErrorMessage(error, "Unable to move this message right now."));
+      });
+    }
+
+    window.addEventListener(MESSAGE_DROP_TO_CATEGORY_EVENT, handleDropToCategory);
+    return () => {
+      window.removeEventListener(MESSAGE_DROP_TO_CATEGORY_EVENT, handleDropToCategory);
+    };
+  }, [messages, moveSingleMessageToCategory]);
+
   function setCategoryParam(nextCategory: string) {
     const nextSearchParams = new URLSearchParams(searchParams);
     if (nextCategory.length === 0) {
@@ -587,18 +636,7 @@ export function MessagesPage() {
     setIsMoveSubmitting(true);
 
     try {
-      if (isApiBackedData) {
-        const updatedMessage = await moveMessageToCategory(messageId, categoryId);
-        setMessages((currentMessages) =>
-          currentMessages.map((message) => (message.id === messageId ? updatedMessage : message)),
-        );
-      } else {
-        const targetCategory = actionCategories.find((category) => category.id === categoryId);
-        if (!targetCategory) {
-          throw new Error("Selected category was not found.");
-        }
-        setMessages((currentMessages) => localMoveMessage(currentMessages, messageId, targetCategory));
-      }
+      await moveSingleMessageToCategory(messageId, categoryId);
 
       setMoveDialogMessageId(null);
     } catch (error) {
