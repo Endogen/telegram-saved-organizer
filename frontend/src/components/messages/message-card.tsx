@@ -1,14 +1,18 @@
+import { useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import {
   Archive,
   Code2,
   FileText,
+  FolderInput,
   FolderKanban,
   ImageIcon,
   Link2,
   MessageSquareText,
   MoreHorizontal,
   Music2,
+  Tags,
+  Trash2,
   type LucideIcon,
   Video,
 } from "lucide-react";
@@ -128,10 +132,22 @@ function withAlpha(color: string | null, alphaHex: string): string | null {
 
 type MessageCardProps = {
   message: MessageListItem;
+  isDeletePending?: boolean;
+  onMoveRequest: (message: MessageListItem) => void;
+  onTagRequest: (message: MessageListItem) => void;
+  onDeleteRequest: (message: MessageListItem) => void;
 };
 
-export function MessageCard({ message }: MessageCardProps) {
+export function MessageCard({
+  message,
+  isDeletePending = false,
+  onMoveRequest,
+  onTagRequest,
+  onDeleteRequest,
+}: MessageCardProps) {
   const shouldReduceMotion = useReducedMotion();
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [isActionsOpen, setIsActionsOpen] = useState(false);
   const CategoryIcon = resolveCategoryIcon(message.category.icon);
   const urlDomain = parseUrlDomain(message.url);
   const hasUrl = message.url !== null && message.url.trim().length > 0;
@@ -152,6 +168,35 @@ export function MessageCard({ message }: MessageCardProps) {
         boxShadow: "0 24px 44px -28px rgba(15, 23, 42, 0.55)",
         transition: { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] },
       };
+
+  useEffect(() => {
+    if (!isActionsOpen) {
+      return;
+    }
+
+    function handleOutsideClick(event: MouseEvent) {
+      if (menuRef.current === null) {
+        return;
+      }
+
+      if (!menuRef.current.contains(event.target as Node)) {
+        setIsActionsOpen(false);
+      }
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsActionsOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleOutsideClick);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [isActionsOpen]);
 
   return (
     <motion.article
@@ -181,7 +226,7 @@ export function MessageCard({ message }: MessageCardProps) {
           {message.category.name}
         </span>
 
-        <div className="flex items-center gap-1.5">
+        <div className="relative flex items-center gap-1.5" ref={menuRef}>
           <time
             className="text-xs text-[hsl(var(--muted-foreground))]"
             dateTime={message.date}
@@ -192,10 +237,55 @@ export function MessageCard({ message }: MessageCardProps) {
           <button
             type="button"
             aria-label="Message actions"
+            aria-expanded={isActionsOpen}
+            aria-haspopup="menu"
             className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
+            onClick={() => setIsActionsOpen((previous) => !previous)}
           >
             <MoreHorizontal className="size-4" />
           </button>
+
+          {isActionsOpen ? (
+            <div className="absolute right-0 top-8 z-20 w-44 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-1 shadow-xl" role="menu">
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--muted))]"
+                onClick={() => {
+                  onMoveRequest(message);
+                  setIsActionsOpen(false);
+                }}
+                role="menuitem"
+              >
+                <FolderInput className="size-3.5" />
+                Move to category
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--muted))]"
+                onClick={() => {
+                  onTagRequest(message);
+                  setIsActionsOpen(false);
+                }}
+                role="menuitem"
+              >
+                <Tags className="size-3.5" />
+                Manage tags
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-red-200 transition-colors hover:bg-red-500/20"
+                onClick={() => {
+                  onDeleteRequest(message);
+                  setIsActionsOpen(false);
+                }}
+                disabled={isDeletePending}
+                role="menuitem"
+              >
+                <Trash2 className="size-3.5" />
+                {isDeletePending ? "Deleting..." : "Delete message"}
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
 

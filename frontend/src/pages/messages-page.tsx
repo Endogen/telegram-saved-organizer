@@ -1,10 +1,16 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, X } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
+import { deleteMessage, listMessages, moveMessageToCategory } from "@/api/messages";
+import { addTagsToMessage, createTag, listTags, removeTagFromMessage } from "@/api/tags";
+import { MoveDialog } from "@/components/categories/move-dialog";
 import { MessageGrid } from "@/components/messages/message-grid";
+import { TagInputDialog } from "@/components/tags/tag-input";
 import { Button } from "@/components/ui/button";
-import type { MessageListItem } from "@/types/message";
+import { useCategories } from "@/hooks/use-categories";
+import type { CategoryWithCount } from "@/types/category";
+import type { MessageListItem, MessageTag } from "@/types/message";
 
 function isoHoursAgo(hours: number): string {
   return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
@@ -132,12 +138,6 @@ const sortOptions: { value: SortOption; label: string }[] = [
   { value: "sender", label: "Sender" },
 ];
 
-type TagFilterOption = {
-  key: string;
-  label: string;
-  count: number;
-};
-
 function compareByDate(first: MessageListItem, second: MessageListItem): number {
   const firstTimestamp = Date.parse(first.date);
   const secondTimestamp = Date.parse(second.date);
@@ -146,52 +146,228 @@ function compareByDate(first: MessageListItem, second: MessageListItem): number 
   return safeSecond - safeFirst;
 }
 
+function normalizeTagKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function toErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  return fallback;
+}
+
+function mergeTags(current: MessageTag[], incoming: MessageTag[]): MessageTag[] {
+  const byId = new Map<number, MessageTag>();
+
+  for (const tag of current) {
+    byId.set(tag.id, tag);
+  }
+  for (const tag of incoming) {
+    byId.set(tag.id, tag);
+  }
+
+  return [...byId.values()].sort((first, second) => first.name.localeCompare(second.name));
+}
+
+function deriveTagsFromMessages(messages: MessageListItem[]): MessageTag[] {
+  return mergeTags(
+    [],
+    messages.flatMap((message) => message.tags),
+  );
+}
+
+function deriveCategoriesFromMessages(messages: MessageListItem[]): CategoryWithCount[] {
+  const byId = new Map<number, CategoryWithCount>();
+
+  for (const message of messages) {
+    const existing = byId.get(message.category.id);
+    if (existing) {
+      existing.message_count += 1;
+      continue;
+    }
+
+    byId.set(message.category.id, {
+      id: message.category.id,
+      name: message.category.name,
+      slug: message.category.slug,
+      icon: message.category.icon,
+      color: message.category.color,
+      position: message.category.id,
+      is_default: false,
+      message_count: 1,
+    });
+  }
+
+  return [...byId.values()].sort((first, second) => {
+    if (first.position !== second.position) {
+      return first.position - second.position;
+    }
+    return first.id - second.id;
+  });
+}
+
+function createLocalTag(name: string, existingTags: MessageTag[]): MessageTag {
+  const maxId = existingTags.reduce((currentMax, tag) => Math.max(currentMax, tag.id), 0);
+  return { id: maxId + 1, name, color: null };
+}
+
+function localMoveMessage(
+  messages: MessageListItem[],
+  messageId: number,
+  targetCategory: CategoryWithCount,
+): MessageListItem[] {
+  const now = new Date().toISOString();
+
+  return messages.map((message) => {
+    if (message.id !== messageId) {
+      return message;
+    }
+
+    return {
+      ...message,
+      category_id: targetCategory.id,
+      category: {
+        id: targetCategory.id,
+        name: targetCategory.name,
+        slug: targetCategory.slug,
+        icon: targetCategory.icon,
+        color: targetCategory.color,
+      },
+      updated_at: now,
+    };
+  });
+}
+
+function localAddTag(messages: MessageListItem[], messageId: number, tag: MessageTag): MessageListItem[] {
+  const now = new Date().toISOString();
+
+  return messages.map((message) => {
+    if (message.id !== messageId) {
+      return message;
+    }
+    if (message.tags.some((currentTag) => currentTag.id === tag.id)) {
+      return message;
+    }
+
+    return { ...message, tags: [...message.tags, tag], updated_at: now };
+  });
+}
+
+function localRemoveTag(messages: MessageListItem[], messageId: number, tagId: number): MessageListItem[] {
+  const now = new Date().toISOString();
+
+  return messages.map((message) => {
+    if (message.id !== messageId) {
+      return message;
+    }
+
+    return {
+      ...message,
+      tags: message.tags.filter((tag) => tag.id !== tagId),
+      updated_at: now,
+    };
+  });
+}
+
 export function MessagesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const [messages, setMessages] = useState<MessageListItem[]>(sampleMessages);
+  const [knownTags, setKnownTags] = useState<MessageTag[]>(deriveTagsFromMessages(sampleMessages));
+  const [isApiBackedData, setIsApiBackedData] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTagFilters, setSelectedTagFilters] = useState<string[]>([]);
   const [sortOption, setSortOption] = useState<SortOption>("date_desc");
+  const [moveDialogMessageId, setMoveDialogMessageId] = useState<number | null>(null);
+  const [tagDialogMessageId, setTagDialogMessageId] = useState<number | null>(null);
+  const [pendingDeleteMessageId, setPendingDeleteMessageId] = useState<number | null>(null);
+  const [isMoveSubmitting, setIsMoveSubmitting] = useState(false);
+  const [isTagSubmitting, setIsTagSubmitting] = useState(false);
+  const [moveDialogError, setMoveDialogError] = useState<string | null>(null);
+  const [tagDialogError, setTagDialogError] = useState<string | null>(null);
+  const { categories: fetchedCategories } = useCategories();
   const categoryFilter = searchParams.get("category")?.trim().toLowerCase() ?? "";
-
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
-  const availableCategories = useMemo(() => {
-    const categoryBySlug = new Map<string, string>();
 
-    for (const message of sampleMessages) {
-      if (!categoryBySlug.has(message.category.slug)) {
-        categoryBySlug.set(message.category.slug, message.category.name);
+  useEffect(() => {
+    let isCanceled = false;
+
+    async function hydrateFromApi() {
+      try {
+        const messageResponse = await listMessages({ page: 1, per_page: 200, sort: "date_desc" });
+        if (isCanceled) {
+          return;
+        }
+
+        setMessages(messageResponse.items);
+        setIsApiBackedData(true);
+        setStatusMessage(null);
+
+        try {
+          const apiTags = await listTags();
+          if (!isCanceled) {
+            setKnownTags(mergeTags(apiTags, deriveTagsFromMessages(messageResponse.items)));
+          }
+        } catch {
+          if (!isCanceled) {
+            setKnownTags(deriveTagsFromMessages(messageResponse.items));
+          }
+        }
+      } catch {
+        if (isCanceled) {
+          return;
+        }
+
+        setMessages(sampleMessages);
+        setKnownTags(deriveTagsFromMessages(sampleMessages));
+        setIsApiBackedData(false);
+        setStatusMessage("API unavailable. Showing local sample messages with local-only actions.");
       }
     }
 
-    return [...categoryBySlug.entries()]
-      .map(([slug, name]) => ({ slug, name }))
-      .sort((first, second) => first.name.localeCompare(second.name));
+    void hydrateFromApi();
+
+    return () => {
+      isCanceled = true;
+    };
   }, []);
+
+  const actionCategories = useMemo(
+    () => (fetchedCategories.length > 0 ? fetchedCategories : deriveCategoriesFromMessages(messages)),
+    [fetchedCategories, messages],
+  );
+
+  const availableCategories = useMemo(
+    () =>
+      [...actionCategories]
+        .map((category) => ({ slug: category.slug, name: category.name }))
+        .sort((first, second) => first.name.localeCompare(second.name)),
+    [actionCategories],
+  );
 
   const availableTags = useMemo(() => {
-    const tagMap = new Map<string, TagFilterOption>();
+    const tagCounts = new Map<string, number>();
 
-    for (const message of sampleMessages) {
+    for (const message of messages) {
       for (const tag of message.tags) {
-        const key = tag.name.trim().toLowerCase();
-        if (key.length === 0) {
-          continue;
-        }
-
-        const existing = tagMap.get(key);
-        if (existing) {
-          existing.count += 1;
-        } else {
-          tagMap.set(key, { key, label: tag.name, count: 1 });
-        }
+        const key = normalizeTagKey(tag.name);
+        tagCounts.set(key, (tagCounts.get(key) ?? 0) + 1);
       }
     }
 
-    return [...tagMap.values()].sort((first, second) => first.label.localeCompare(second.label));
-  }, []);
+    return mergeTags(knownTags, deriveTagsFromMessages(messages)).map((tag) => ({
+      key: normalizeTagKey(tag.name),
+      label: tag.name,
+      count: tagCounts.get(normalizeTagKey(tag.name)) ?? 0,
+      id: tag.id,
+      color: tag.color,
+    }));
+  }, [knownTags, messages]);
 
   const filteredAndSorted = useMemo(() => {
-    const filtered = sampleMessages.filter((message) => {
+    const filtered = messages.filter((message) => {
       const searchableContent = [
         message.content ?? "",
         message.url ?? "",
@@ -201,7 +377,7 @@ export function MessagesPage() {
         .join(" ")
         .toLowerCase();
 
-      const messageTags = new Set(message.tags.map((tag) => tag.name.trim().toLowerCase()));
+      const messageTags = new Set(message.tags.map((tag) => normalizeTagKey(tag.name)));
       const matchesSearch = searchableContent.includes(normalizedSearchQuery);
       const matchesCategory = categoryFilter.length === 0 || message.category.slug === categoryFilter;
       const matchesTags =
@@ -235,7 +411,28 @@ export function MessagesPage() {
       }
       return compareByDate(first, second);
     });
-  }, [categoryFilter, normalizedSearchQuery, selectedTagFilters, sortOption]);
+  }, [categoryFilter, messages, normalizedSearchQuery, selectedTagFilters, sortOption]);
+
+  const activeMoveMessage = useMemo(
+    () => messages.find((message) => message.id === moveDialogMessageId) ?? null,
+    [messages, moveDialogMessageId],
+  );
+  const activeTagMessage = useMemo(
+    () => messages.find((message) => message.id === tagDialogMessageId) ?? null,
+    [messages, tagDialogMessageId],
+  );
+
+  useEffect(() => {
+    if (moveDialogMessageId !== null && activeMoveMessage === null) {
+      setMoveDialogMessageId(null);
+    }
+  }, [activeMoveMessage, moveDialogMessageId]);
+
+  useEffect(() => {
+    if (tagDialogMessageId !== null && activeTagMessage === null) {
+      setTagDialogMessageId(null);
+    }
+  }, [activeTagMessage, tagDialogMessageId]);
 
   const hasActiveFilters =
     normalizedSearchQuery.length > 0 ||
@@ -270,6 +467,142 @@ export function MessagesPage() {
     setCategoryParam("");
   }
 
+  async function handleMoveMessage(messageId: number, categoryId: number) {
+    setMoveDialogError(null);
+    setIsMoveSubmitting(true);
+
+    try {
+      if (isApiBackedData) {
+        const updatedMessage = await moveMessageToCategory(messageId, categoryId);
+        setMessages((currentMessages) =>
+          currentMessages.map((message) => (message.id === messageId ? updatedMessage : message)),
+        );
+      } else {
+        const targetCategory = actionCategories.find((category) => category.id === categoryId);
+        if (!targetCategory) {
+          throw new Error("Selected category was not found.");
+        }
+        setMessages((currentMessages) => localMoveMessage(currentMessages, messageId, targetCategory));
+      }
+
+      setMoveDialogMessageId(null);
+    } catch (error) {
+      setMoveDialogError(toErrorMessage(error, "Unable to move this message right now."));
+    } finally {
+      setIsMoveSubmitting(false);
+    }
+  }
+
+  async function handleAddTag(messageId: number, tagId: number) {
+    setTagDialogError(null);
+    setIsTagSubmitting(true);
+
+    try {
+      if (isApiBackedData) {
+        const updatedTags = await addTagsToMessage(messageId, [tagId]);
+        setKnownTags((currentTags) => mergeTags(currentTags, updatedTags));
+        setMessages((currentMessages) =>
+          currentMessages.map((message) => (message.id === messageId ? { ...message, tags: updatedTags } : message)),
+        );
+      } else {
+        const tag = knownTags.find((entry) => entry.id === tagId);
+        if (!tag) {
+          throw new Error("Selected tag was not found.");
+        }
+        setMessages((currentMessages) => localAddTag(currentMessages, messageId, tag));
+      }
+    } catch (error) {
+      setTagDialogError(toErrorMessage(error, "Unable to add that tag."));
+    } finally {
+      setIsTagSubmitting(false);
+    }
+  }
+
+  async function handleRemoveTag(messageId: number, tagId: number) {
+    setTagDialogError(null);
+    setIsTagSubmitting(true);
+
+    try {
+      if (isApiBackedData) {
+        const updatedTags = await removeTagFromMessage(messageId, tagId);
+        setKnownTags((currentTags) => mergeTags(currentTags, updatedTags));
+        setMessages((currentMessages) =>
+          currentMessages.map((message) => (message.id === messageId ? { ...message, tags: updatedTags } : message)),
+        );
+      } else {
+        setMessages((currentMessages) => localRemoveTag(currentMessages, messageId, tagId));
+      }
+    } catch (error) {
+      setTagDialogError(toErrorMessage(error, "Unable to remove that tag."));
+    } finally {
+      setIsTagSubmitting(false);
+    }
+  }
+
+  async function handleCreateAndAttachTag(name: string) {
+    const normalizedName = name.trim().replace(/\s+/g, " ");
+    if (normalizedName.length === 0 || activeTagMessage === null) {
+      return;
+    }
+
+    setTagDialogError(null);
+    setIsTagSubmitting(true);
+
+    try {
+      if (isApiBackedData) {
+        const created = await createTag({ name: normalizedName });
+        const updatedTags = await addTagsToMessage(activeTagMessage.id, [created.id]);
+        setKnownTags((currentTags) => mergeTags(currentTags, [created, ...updatedTags]));
+        setMessages((currentMessages) =>
+          currentMessages.map((message) =>
+            message.id === activeTagMessage.id ? { ...message, tags: updatedTags } : message,
+          ),
+        );
+      } else {
+        const existingTag = knownTags.find(
+          (tag) => normalizeTagKey(tag.name) === normalizeTagKey(normalizedName),
+        );
+        const tagToAttach = existingTag ?? createLocalTag(normalizedName, knownTags);
+        setKnownTags((currentTags) => mergeTags(currentTags, [tagToAttach]));
+        setMessages((currentMessages) => localAddTag(currentMessages, activeTagMessage.id, tagToAttach));
+      }
+    } catch (error) {
+      setTagDialogError(toErrorMessage(error, "Unable to create tag."));
+    } finally {
+      setIsTagSubmitting(false);
+    }
+  }
+
+  async function handleDeleteMessage(targetMessage: MessageListItem) {
+    const hasConfirmed = window.confirm("Delete this message from the organizer? This cannot be undone.");
+    if (!hasConfirmed) {
+      return;
+    }
+
+    setPageError(null);
+    setPendingDeleteMessageId(targetMessage.id);
+
+    try {
+      if (isApiBackedData) {
+        await deleteMessage(targetMessage.id);
+      }
+
+      setMessages((currentMessages) =>
+        currentMessages.filter((message) => message.id !== targetMessage.id),
+      );
+      if (moveDialogMessageId === targetMessage.id) {
+        setMoveDialogMessageId(null);
+      }
+      if (tagDialogMessageId === targetMessage.id) {
+        setTagDialogMessageId(null);
+      }
+    } catch (error) {
+      setPageError(toErrorMessage(error, "Unable to delete this message right now."));
+    } finally {
+      setPendingDeleteMessageId(null);
+    }
+  }
+
   return (
     <section>
       <div>
@@ -278,6 +611,16 @@ export function MessagesPage() {
           Search by content, URL, sender, and tags. Layer filters to narrow down your Saved Messages quickly.
           {categoryFilter.length > 0 ? ` Active category: ${formatCategoryFilter(categoryFilter)}.` : ""}
         </p>
+        {statusMessage ? (
+          <p className="mt-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.6)] px-3 py-2 text-xs text-[hsl(var(--muted-foreground))]">
+            {statusMessage}
+          </p>
+        ) : null}
+        {pageError ? (
+          <p className="mt-2 rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+            {pageError}
+          </p>
+        ) : null}
       </div>
 
       <div className="mt-4 rounded-xl border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--card)/0.72)] p-3 sm:p-4">
@@ -354,7 +697,7 @@ export function MessagesPage() {
                 const isActive = selectedTagFilters.includes(tag.key);
                 return (
                   <button
-                    key={tag.key}
+                    key={tag.id}
                     type="button"
                     onClick={() => toggleTagFilter(tag.key)}
                     className={[
@@ -379,16 +722,58 @@ export function MessagesPage() {
       </div>
 
       <p className="mt-4 text-sm text-[hsl(var(--muted-foreground))]">
-        Showing {filteredAndSorted.length} of {sampleMessages.length} messages.
+        Showing {filteredAndSorted.length} of {messages.length} messages.
       </p>
 
-      <MessageGrid messages={filteredAndSorted} />
+      <MessageGrid
+        messages={filteredAndSorted}
+        pendingDeleteMessageId={pendingDeleteMessageId}
+        onMoveRequest={(message) => {
+          setMoveDialogError(null);
+          setMoveDialogMessageId(message.id);
+        }}
+        onTagRequest={(message) => {
+          setTagDialogError(null);
+          setTagDialogMessageId(message.id);
+        }}
+        onDeleteRequest={(message) => {
+          void handleDeleteMessage(message);
+        }}
+      />
 
       {filteredAndSorted.length === 0 ? (
         <p className="mt-5 rounded-xl border border-dashed border-[hsl(var(--border))] bg-[hsl(var(--card)/0.7)] p-4 text-sm text-[hsl(var(--muted-foreground))]">
           No messages match the current search and filter controls.
         </p>
       ) : null}
+
+      <MoveDialog
+        open={moveDialogMessageId !== null}
+        message={activeMoveMessage}
+        categories={actionCategories}
+        isSubmitting={isMoveSubmitting}
+        errorMessage={moveDialogError}
+        onClose={() => {
+          setMoveDialogError(null);
+          setMoveDialogMessageId(null);
+        }}
+        onSubmit={handleMoveMessage}
+      />
+
+      <TagInputDialog
+        open={tagDialogMessageId !== null}
+        message={activeTagMessage}
+        availableTags={availableTags.map(({ id, label, color }) => ({ id, name: label, color }))}
+        isSubmitting={isTagSubmitting}
+        errorMessage={tagDialogError}
+        onClose={() => {
+          setTagDialogError(null);
+          setTagDialogMessageId(null);
+        }}
+        onAddTag={handleAddTag}
+        onRemoveTag={handleRemoveTag}
+        onCreateTag={handleCreateAndAttachTag}
+      />
     </section>
   );
 }

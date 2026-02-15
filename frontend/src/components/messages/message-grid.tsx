@@ -5,9 +5,19 @@ import type { MessageListItem } from "@/types/message";
 
 type MessageGridProps = {
   messages: MessageListItem[];
+  pendingDeleteMessageId: number | null;
+  onMoveRequest: (message: MessageListItem) => void;
+  onTagRequest: (message: MessageListItem) => void;
+  onDeleteRequest: (message: MessageListItem) => void;
 };
 
-export function MessageGrid({ messages }: MessageGridProps) {
+export function MessageGrid({
+  messages,
+  pendingDeleteMessageId,
+  onMoveRequest,
+  onTagRequest,
+  onDeleteRequest,
+}: MessageGridProps) {
   const shouldReduceMotion = useReducedMotion();
 
   return (
@@ -18,7 +28,14 @@ export function MessageGrid({ messages }: MessageGridProps) {
     >
       <AnimatePresence initial={!shouldReduceMotion} mode="popLayout">
         {messages.map((message) => (
-          <MessageCard key={message.id} message={message} />
+          <MessageCard
+            key={message.id}
+            message={message}
+            isDeletePending={pendingDeleteMessageId === message.id}
+            onMoveRequest={onMoveRequest}
+            onTagRequest={onTagRequest}
+            onDeleteRequest={onDeleteRequest}
+          />
         ))}
       </AnimatePresence>
     </motion.div>
