@@ -72,3 +72,4 @@ Run after each implementation:
 - 2026-02-15: Scanner/categorizer branch coverage can be completed with pure fake message/client objects (including malformed IDs, dates, and URLs), reaching deterministic 100% module coverage with no Telegram/network or SQLite I/O.
 - 2026-02-15: Vitest startup in this sandbox fails DNS lookup for `localhost`; setting Vite `server.host` and frontend proxy target to `127.0.0.1` keeps frontend test execution reliable.
 - 2026-02-15: Framer Motion exit animations can keep filtered cards briefly in the DOM during tests; use `waitFor` for post-filter removal assertions to avoid flaky false negatives.
+- 2026-02-15: Backend coverage command (`cd backend && .venv/bin/pytest tests/ --cov=app --cov-report=term-missing`) reports 99% total coverage in this sandbox, so implementation plan task 7.6 can be marked complete.
