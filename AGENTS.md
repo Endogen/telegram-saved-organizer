@@ -57,3 +57,4 @@ Run after each implementation:
 - 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) pass in this sandbox after layout component refactors.
 - 2026-02-15: Sidebar category navigation can safely fetch `/api/categories` via the Vite `/api` proxy and fall back to seeded category metadata when backend/API is unavailable.
 - 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) continue to pass after adding the scan progress polling UI (`/api/scan/start|status|stop`) on the dashboard.
+- 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) continue to pass after introducing the reusable message card UI on `/messages`.

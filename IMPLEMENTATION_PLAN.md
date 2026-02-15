@@ -36,7 +36,7 @@ STATUS: IN PROGRESS
 
 ## Phase 5: Message UI
 
-- [ ] 5.1: Build message card component with category badge, content preview, date, tags
+- [x] 5.1: Build message card component with category badge, content preview, date, tags
 - [ ] 5.2: Create responsive message grid with Framer Motion layout animations
 - [ ] 5.3: Implement card enter/exit/hover animations
 - [ ] 5.4: Build search bar and filter controls (category dropdown, tag multi-select, sort)
