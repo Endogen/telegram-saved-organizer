@@ -12,7 +12,7 @@ STATUS: IN PROGRESS
 
 ## Phase 2: Telegram Integration
 
-- [ ] 2.1: Implement Telethon client wrapper with session management
+- [x] 2.1: Implement Telethon client wrapper with session management
 - [ ] 2.2: Create auth endpoints (connect, verify code, status, disconnect)
 - [ ] 2.3: Implement Saved Messages scanner with pagination and progress tracking
 - [ ] 2.4: Implement auto-categorization logic for scanned messages

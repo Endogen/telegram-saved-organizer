@@ -8,6 +8,7 @@ from fastapi import APIRouter, FastAPI
 
 from app.config import settings
 from app.database import dispose_engine
+from app.telegram.client import telegram_client_manager
 
 api_router = APIRouter(prefix="/api")
 
@@ -19,8 +20,11 @@ async def health() -> dict[str, str]:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    yield
-    await dispose_engine()
+    try:
+        yield
+    finally:
+        await telegram_client_manager.disconnect()
+        await dispose_engine()
 
 
 def create_app() -> FastAPI:
