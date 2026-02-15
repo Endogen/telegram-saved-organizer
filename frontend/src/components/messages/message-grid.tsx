@@ -8,6 +8,7 @@ type MessageGridProps = {
   pendingDeleteMessageId: number | null;
   isSelectionMode: boolean;
   selectedMessageIds: number[];
+  onOpenDetailRequest: (message: MessageListItem) => void;
   onMoveRequest: (message: MessageListItem) => void;
   onTagRequest: (message: MessageListItem) => void;
   onDeleteRequest: (message: MessageListItem) => void;
@@ -19,6 +20,7 @@ export function MessageGrid({
   pendingDeleteMessageId,
   isSelectionMode,
   selectedMessageIds,
+  onOpenDetailRequest,
   onMoveRequest,
   onTagRequest,
   onDeleteRequest,
@@ -41,6 +43,7 @@ export function MessageGrid({
             isDeletePending={pendingDeleteMessageId === message.id}
             isSelectionMode={isSelectionMode}
             isSelected={selectedIdSet.has(message.id)}
+            onOpenDetailRequest={onOpenDetailRequest}
             onMoveRequest={onMoveRequest}
             onTagRequest={onTagRequest}
             onDeleteRequest={onDeleteRequest}

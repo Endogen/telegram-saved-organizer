@@ -4,6 +4,7 @@ import {
   Archive,
   Check,
   Code2,
+  Eye,
   FileText,
   FolderInput,
   FolderKanban,
@@ -138,6 +139,7 @@ type MessageCardProps = {
   isDeletePending?: boolean;
   isSelectionMode?: boolean;
   isSelected?: boolean;
+  onOpenDetailRequest: (message: MessageListItem) => void;
   onMoveRequest: (message: MessageListItem) => void;
   onTagRequest: (message: MessageListItem) => void;
   onDeleteRequest: (message: MessageListItem) => void;
@@ -149,6 +151,7 @@ export function MessageCard({
   isDeletePending = false,
   isSelectionMode = false,
   isSelected = false,
+  onOpenDetailRequest,
   onMoveRequest,
   onTagRequest,
   onDeleteRequest,
@@ -309,6 +312,18 @@ export function MessageCard({
                 type="button"
                 className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--muted))]"
                 onClick={() => {
+                  onOpenDetailRequest(message);
+                  setIsActionsOpen(false);
+                }}
+                role="menuitem"
+              >
+                <Eye className="size-3.5" />
+                View details
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--muted))]"
+                onClick={() => {
                   onMoveRequest(message);
                   setIsActionsOpen(false);
                 }}
@@ -359,6 +374,14 @@ export function MessageCard({
       </div>
 
       <p className="mt-2 text-sm text-[hsl(var(--foreground))]">{previewText}</p>
+      <button
+        type="button"
+        onClick={() => onOpenDetailRequest(message)}
+        className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[hsl(var(--primary))] transition-opacity hover:opacity-80"
+      >
+        <Eye className="size-3.5" />
+        View full message
+      </button>
 
       {urlDomain !== null ? (
         <p className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-[hsl(var(--primary))]">

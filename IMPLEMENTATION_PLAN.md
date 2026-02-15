@@ -46,7 +46,7 @@ STATUS: IN PROGRESS
 ## Phase 6: Advanced Features
 
 - [x] 6.1: Implement drag-to-move (drag message card to sidebar category)
-- [ ] 6.2: Build message detail modal/drawer with full content view
+- [x] 6.2: Build message detail modal/drawer with full content view
 - [ ] 6.3: Add empty states, loading skeletons, and error handling throughout
 - [ ] 6.4: Implement real-time scan progress updates
 

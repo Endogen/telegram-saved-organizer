@@ -12,6 +12,7 @@ import {
 import { addTagsToMessage, createTag, listTags, removeTagFromMessage } from "@/api/tags";
 import { MoveDialog } from "@/components/categories/move-dialog";
 import { BulkActions } from "@/components/messages/bulk-actions";
+import { MessageDetail } from "@/components/messages/message-detail";
 import { MessageGrid } from "@/components/messages/message-grid";
 import { TagInputDialog } from "@/components/tags/tag-input";
 import { Button } from "@/components/ui/button";
@@ -318,6 +319,7 @@ export function MessagesPage() {
   const [sortOption, setSortOption] = useState<SortOption>("date_desc");
   const [moveDialogMessageId, setMoveDialogMessageId] = useState<number | null>(null);
   const [tagDialogMessageId, setTagDialogMessageId] = useState<number | null>(null);
+  const [detailDialogMessageId, setDetailDialogMessageId] = useState<number | null>(null);
   const [pendingDeleteMessageId, setPendingDeleteMessageId] = useState<number | null>(null);
   const [isMoveSubmitting, setIsMoveSubmitting] = useState(false);
   const [isTagSubmitting, setIsTagSubmitting] = useState(false);
@@ -498,6 +500,10 @@ export function MessagesPage() {
     () => messages.find((message) => message.id === tagDialogMessageId) ?? null,
     [messages, tagDialogMessageId],
   );
+  const activeDetailMessage = useMemo(
+    () => messages.find((message) => message.id === detailDialogMessageId) ?? null,
+    [detailDialogMessageId, messages],
+  );
 
   useEffect(() => {
     if (moveDialogMessageId !== null && activeMoveMessage === null) {
@@ -510,6 +516,12 @@ export function MessagesPage() {
       setTagDialogMessageId(null);
     }
   }, [activeTagMessage, tagDialogMessageId]);
+
+  useEffect(() => {
+    if (detailDialogMessageId !== null && activeDetailMessage === null) {
+      setDetailDialogMessageId(null);
+    }
+  }, [activeDetailMessage, detailDialogMessageId]);
 
   const hasActiveFilters =
     normalizedSearchQuery.length > 0 ||
@@ -752,6 +764,9 @@ export function MessagesPage() {
       if (tagDialogMessageId === targetMessage.id) {
         setTagDialogMessageId(null);
       }
+      if (detailDialogMessageId === targetMessage.id) {
+        setDetailDialogMessageId(null);
+      }
     } catch (error) {
       setPageError(toErrorMessage(error, "Unable to delete this message right now."));
     } finally {
@@ -828,6 +843,9 @@ export function MessagesPage() {
       }
       if (tagDialogMessageId !== null && targetIdSet.has(tagDialogMessageId)) {
         setTagDialogMessageId(null);
+      }
+      if (detailDialogMessageId !== null && targetIdSet.has(detailDialogMessageId)) {
+        setDetailDialogMessageId(null);
       }
     } catch (error) {
       setBulkActionError(toErrorMessage(error, "Unable to delete selected messages right now."));
@@ -1000,6 +1018,9 @@ export function MessagesPage() {
         pendingDeleteMessageId={pendingDeleteMessageId}
         isSelectionMode={isBulkSelectionMode}
         selectedMessageIds={selectedMessageIds}
+        onOpenDetailRequest={(message) => {
+          setDetailDialogMessageId(message.id);
+        }}
         onMoveRequest={(message) => {
           setMoveDialogError(null);
           setMoveDialogMessageId(message.id);
@@ -1019,6 +1040,26 @@ export function MessagesPage() {
           No messages match the current search and filter controls.
         </p>
       ) : null}
+
+      <MessageDetail
+        open={detailDialogMessageId !== null}
+        message={activeDetailMessage}
+        isDeletePending={pendingDeleteMessageId === detailDialogMessageId}
+        onClose={() => {
+          setDetailDialogMessageId(null);
+        }}
+        onMoveRequest={(message) => {
+          setMoveDialogError(null);
+          setMoveDialogMessageId(message.id);
+        }}
+        onTagRequest={(message) => {
+          setTagDialogError(null);
+          setTagDialogMessageId(message.id);
+        }}
+        onDeleteRequest={(message) => {
+          void handleDeleteMessage(message);
+        }}
+      />
 
       <MoveDialog
         open={moveDialogMessageId !== null}
