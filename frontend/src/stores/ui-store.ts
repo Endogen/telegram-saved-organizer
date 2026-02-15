@@ -9,7 +9,7 @@ type UiState = {
 };
 
 export const useUiStore = create<UiState>()((set) => ({
-  isSidebarOpen: true,
+  isSidebarOpen: false,
   searchQuery: "",
   setSidebarOpen: (isOpen) => set({ isSidebarOpen: isOpen }),
   toggleSidebar: () => set((state) => ({ isSidebarOpen: !state.isSidebarOpen })),
