@@ -60,3 +60,4 @@ Run after each implementation:
 - 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) continue to pass after introducing the reusable message card UI on `/messages`.
 - 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) continue to pass after extracting the responsive animated `MessageGrid` component for `/messages`.
 - 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) continue to pass after enabling first-render `AnimatePresence` card enter motion and reduced-motion-safe hover/exit card animations.
+- 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) continue to pass after adding `/messages` filter controls (search, category dropdown, tag multi-select, sort, clear filters).
