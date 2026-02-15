@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 
 from app.auth.router import router as auth_router
+from app.categories.router import router as categories_router
 from app.config import settings
 from app.database import dispose_engine
 from app.messages.router import router as messages_router
@@ -16,6 +17,7 @@ from app.telegram.router import router as scan_router
 api_router = APIRouter(prefix="/api")
 api_router.include_router(auth_router)
 api_router.include_router(scan_router)
+api_router.include_router(categories_router)
 api_router.include_router(messages_router)
 
 
