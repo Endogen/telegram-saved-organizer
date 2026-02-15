@@ -56,3 +56,4 @@ Run after each implementation:
 - 2026-02-15: Tag service/API behavior can be tested with fake async sessions (`scalar`/`scalars`/`get`) plus async dependency overrides (`httpx.ASGITransport`), avoiding live SQLite and threadpool hangs in this sandbox.
 - 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) pass in this sandbox after layout component refactors.
 - 2026-02-15: Sidebar category navigation can safely fetch `/api/categories` via the Vite `/api` proxy and fall back to seeded category metadata when backend/API is unavailable.
+- 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) continue to pass after adding the scan progress polling UI (`/api/scan/start|status|stop`) on the dashboard.

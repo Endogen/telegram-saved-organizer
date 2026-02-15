@@ -1,6 +1,8 @@
 import { motion } from "framer-motion";
 import { CheckCircle2, Sparkles, Workflow } from "lucide-react";
 
+import { ScanProgress } from "@/components/scan/scan-progress";
+
 const items = [
   {
     title: "React Router 7",
@@ -22,11 +24,15 @@ const items = [
 export function DashboardPage() {
   return (
     <section>
-      <h2 className="text-2xl font-semibold text-[hsl(var(--foreground))]">Frontend Tooling Ready</h2>
+      <h2 className="text-2xl font-semibold text-[hsl(var(--foreground))]">Dashboard</h2>
       <p className="mt-2 max-w-3xl text-sm text-[hsl(var(--muted-foreground))] md:text-base">
-        This project baseline now includes shadcn-style UI primitives, route-level navigation, shared state, and
-        motion-ready components.
+        Telegram connection, scan lifecycle controls, and motion-ready message tooling are now wired into the frontend
+        shell.
       </p>
+
+      <div className="mt-6">
+        <ScanProgress />
+      </div>
 
       <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {items.map((item, index) => (

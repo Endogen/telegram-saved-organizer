@@ -1,0 +1,386 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { CheckCircle2, CircleAlert, LoaderCircle, Play, RefreshCw, Square } from "lucide-react";
+
+import { fetchScanStatus, startScan, stopScan } from "@/api/scan";
+import { Button } from "@/components/ui/button";
+import type { ScanStatus } from "@/types/scan";
+
+const POLL_INTERVAL_ACTIVE_MS = 1500;
+const POLL_INTERVAL_IDLE_MS = 8000;
+
+const INITIAL_SCAN_STATUS: ScanStatus = {
+  is_running: false,
+  is_complete: false,
+  stop_requested: false,
+  messages_scanned: 0,
+  pages_scanned: 0,
+  page_size: 100,
+  last_message_id: null,
+  started_at: null,
+  finished_at: null,
+  error: null,
+};
+
+type RefreshMode = "initial" | "manual" | "poll";
+
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  return "Scan request failed. Check backend logs and try again.";
+}
+
+function clampPageSize(rawValue: number): number {
+  if (!Number.isFinite(rawValue)) {
+    return 100;
+  }
+  return Math.min(1000, Math.max(1, Math.trunc(rawValue)));
+}
+
+function formatTimestamp(value: string | null): string {
+  if (value === null) {
+    return "—";
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "—";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(parsed);
+}
+
+function formatDuration(startedAt: string | null, finishedAt: string | null, now: number): string {
+  if (startedAt === null) {
+    return "—";
+  }
+
+  const startedMs = new Date(startedAt).getTime();
+  if (Number.isNaN(startedMs)) {
+    return "—";
+  }
+
+  const finishedMs = finishedAt === null ? now : new Date(finishedAt).getTime();
+  if (Number.isNaN(finishedMs)) {
+    return "—";
+  }
+
+  const elapsedSeconds = Math.max(0, Math.floor((finishedMs - startedMs) / 1000));
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = elapsedSeconds % 60;
+
+  if (minutes === 0) {
+    return `${seconds}s`;
+  }
+  return `${minutes}m ${seconds}s`;
+}
+
+export function ScanProgress() {
+  const [status, setStatus] = useState<ScanStatus>(INITIAL_SCAN_STATUS);
+  const [pageSizeInput, setPageSizeInput] = useState("100");
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const inFlightRef = useRef(false);
+
+  const refreshStatus = useCallback(async (mode: RefreshMode) => {
+    if (inFlightRef.current) {
+      return;
+    }
+
+    inFlightRef.current = true;
+    if (mode === "initial") {
+      setIsInitialLoading(true);
+    }
+    if (mode === "manual") {
+      setIsRefreshing(true);
+    }
+
+    try {
+      const nextStatus = await fetchScanStatus();
+      setStatus(nextStatus);
+      setNow(Date.now());
+      setRequestError(null);
+      setPageSizeInput(String(nextStatus.page_size));
+    } catch (error) {
+      if (mode !== "poll") {
+        setRequestError(toErrorMessage(error));
+      }
+    } finally {
+      inFlightRef.current = false;
+      if (mode === "initial") {
+        setIsInitialLoading(false);
+      }
+      if (mode === "manual") {
+        setIsRefreshing(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshStatus("initial");
+  }, [refreshStatus]);
+
+  useEffect(() => {
+    let isCancelled = false;
+    let timeoutId: number | undefined;
+
+    const scheduleNext = () => {
+      if (isCancelled) {
+        return;
+      }
+
+      const delay = status.is_running ? POLL_INTERVAL_ACTIVE_MS : POLL_INTERVAL_IDLE_MS;
+      timeoutId = window.setTimeout(async () => {
+        await refreshStatus("poll");
+        scheduleNext();
+      }, delay);
+    };
+
+    scheduleNext();
+
+    return () => {
+      isCancelled = true;
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [refreshStatus, status.is_running]);
+
+  useEffect(() => {
+    if (!status.is_running) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [status.is_running]);
+
+  const handleStartScan = useCallback(async () => {
+    setRequestError(null);
+    setIsStarting(true);
+
+    const normalizedPageSize = clampPageSize(Number.parseInt(pageSizeInput, 10));
+    setPageSizeInput(String(normalizedPageSize));
+
+    try {
+      const nextStatus = await startScan(normalizedPageSize);
+      setStatus(nextStatus);
+      setNow(Date.now());
+    } catch (error) {
+      setRequestError(toErrorMessage(error));
+      try {
+        const syncedStatus = await fetchScanStatus();
+        setStatus(syncedStatus);
+      } catch {
+        // Keep the existing status when the sync request fails.
+      }
+    } finally {
+      setIsStarting(false);
+    }
+  }, [pageSizeInput]);
+
+  const handleStopScan = useCallback(async () => {
+    setRequestError(null);
+    setIsStopping(true);
+
+    try {
+      const nextStatus = await stopScan();
+      setStatus(nextStatus);
+      setNow(Date.now());
+    } catch (error) {
+      setRequestError(toErrorMessage(error));
+    } finally {
+      setIsStopping(false);
+    }
+  }, []);
+
+  const statusTone = useMemo(() => {
+    if (status.error) {
+      return "border-amber-300/80 bg-amber-50/75 text-amber-800";
+    }
+    if (status.is_running) {
+      return "border-sky-300/80 bg-sky-50/80 text-sky-800";
+    }
+    if (status.is_complete) {
+      return "border-emerald-300/80 bg-emerald-50/80 text-emerald-800";
+    }
+    return "border-[hsl(var(--border))] bg-[hsl(var(--background)/0.75)] text-[hsl(var(--muted-foreground))]";
+  }, [status.error, status.is_complete, status.is_running]);
+
+  const statusLabel = useMemo(() => {
+    if (status.error) {
+      return "Scan failed";
+    }
+    if (status.is_running && status.stop_requested) {
+      return "Stopping scan";
+    }
+    if (status.is_running) {
+      return "Scanning Saved Messages";
+    }
+    if (status.is_complete) {
+      return "Scan complete";
+    }
+    return "Ready to scan";
+  }, [status.error, status.is_complete, status.is_running, status.stop_requested]);
+
+  const duration = formatDuration(status.started_at, status.finished_at, now);
+  const isBusy = isInitialLoading || isStarting || isStopping;
+  const canStart = !isBusy && !status.is_running;
+  const canStop = !isBusy && status.is_running && !status.stop_requested;
+
+  return (
+    <section className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.94)] p-4 shadow-sm md:p-5">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[hsl(var(--muted-foreground))]">
+            Scanner
+          </p>
+          <h3 className="mt-1 text-lg font-semibold text-[hsl(var(--foreground))]">Saved Messages Scan Progress</h3>
+          <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
+            Real-time status from Telegram scanner endpoints with automatic polling.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="inline-flex items-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background)/0.72)] px-2.5 py-1.5 text-xs font-semibold text-[hsl(var(--muted-foreground))]">
+            Page size
+            <input
+              type="number"
+              min={1}
+              max={1000}
+              value={pageSizeInput}
+              onChange={(event) => setPageSizeInput(event.target.value)}
+              onBlur={() => setPageSizeInput((current) => String(clampPageSize(Number.parseInt(current, 10))))}
+              disabled={status.is_running || isStarting}
+              className="h-7 w-20 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 text-sm text-[hsl(var(--foreground))] outline-none ring-[hsl(var(--ring))] transition focus:ring-2"
+            />
+          </label>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void refreshStatus("manual")}
+            disabled={isBusy || isRefreshing}
+            className="gap-1.5"
+          >
+            <RefreshCw className={isRefreshing ? "size-4 animate-spin" : "size-4"} />
+            Refresh
+          </Button>
+
+          <Button size="sm" onClick={() => void handleStartScan()} disabled={!canStart} className="gap-1.5">
+            {isStarting ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}
+            {isStarting ? "Starting..." : "Start"}
+          </Button>
+
+          <Button variant="ghost" size="sm" onClick={() => void handleStopScan()} disabled={!canStop} className="gap-1.5">
+            {isStopping ? <LoaderCircle className="size-4 animate-spin" /> : <Square className="size-4" />}
+            {isStopping ? "Stopping..." : "Stop"}
+          </Button>
+        </div>
+      </div>
+
+      {isInitialLoading ? (
+        <div className="mt-4 flex items-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background)/0.6)] px-3 py-2 text-sm text-[hsl(var(--muted-foreground))]">
+          <LoaderCircle className="size-4 animate-spin" />
+          Loading scan status...
+        </div>
+      ) : (
+        <>
+          <div className={`mt-4 rounded-lg border px-3 py-2 text-sm font-medium ${statusTone}`}>{statusLabel}</div>
+
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-[hsl(var(--muted))]">
+            {status.is_running ? (
+              <motion.div
+                className="h-full w-1/3 rounded-full bg-[hsl(var(--primary))]"
+                initial={{ x: "-30%" }}
+                animate={{ x: ["-30%", "240%"] }}
+                transition={{ duration: 1.2, ease: "linear", repeat: Infinity }}
+              />
+            ) : status.error ? (
+              <motion.div initial={{ width: 0 }} animate={{ width: "100%" }} className="h-full bg-amber-400" />
+            ) : status.is_complete ? (
+              <motion.div initial={{ width: 0 }} animate={{ width: "100%" }} className="h-full bg-emerald-500" />
+            ) : (
+              <div className="h-full w-0" />
+            )}
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <article className="rounded-lg border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--background)/0.7)] px-3 py-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[hsl(var(--muted-foreground))]">
+                Messages Scanned
+              </p>
+              <p className="mt-1 text-lg font-semibold text-[hsl(var(--foreground))]">{status.messages_scanned}</p>
+            </article>
+
+            <article className="rounded-lg border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--background)/0.7)] px-3 py-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[hsl(var(--muted-foreground))]">
+                Pages Processed
+              </p>
+              <p className="mt-1 text-lg font-semibold text-[hsl(var(--foreground))]">{status.pages_scanned}</p>
+            </article>
+
+            <article className="rounded-lg border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--background)/0.7)] px-3 py-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[hsl(var(--muted-foreground))]">Duration</p>
+              <p className="mt-1 text-lg font-semibold text-[hsl(var(--foreground))]">{duration}</p>
+            </article>
+
+            <article className="rounded-lg border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--background)/0.7)] px-3 py-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[hsl(var(--muted-foreground))]">Started</p>
+              <p className="mt-1 text-sm font-medium text-[hsl(var(--foreground))]">{formatTimestamp(status.started_at)}</p>
+            </article>
+
+            <article className="rounded-lg border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--background)/0.7)] px-3 py-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[hsl(var(--muted-foreground))]">Finished</p>
+              <p className="mt-1 text-sm font-medium text-[hsl(var(--foreground))]">{formatTimestamp(status.finished_at)}</p>
+            </article>
+
+            <article className="rounded-lg border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--background)/0.7)] px-3 py-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[hsl(var(--muted-foreground))]">
+                Last Message ID
+              </p>
+              <p className="mt-1 text-lg font-semibold text-[hsl(var(--foreground))]">{status.last_message_id ?? "—"}</p>
+            </article>
+          </div>
+        </>
+      )}
+
+      <AnimatePresence>
+        {status.error || requestError ? (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 6 }}
+            className="mt-4 rounded-lg border border-amber-300/80 bg-amber-50/80 px-3 py-2 text-sm text-amber-800"
+          >
+            <p className="flex items-center gap-2 font-medium">
+              <CircleAlert className="size-4" />
+              {status.error ? "Scanner reported an error." : "Request failed."}
+            </p>
+            <p className="mt-1">{status.error ?? requestError}</p>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      {!status.error && !requestError && status.is_complete ? (
+        <div className="mt-4 inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+          <CheckCircle2 className="size-3.5" />
+          Scan finished successfully
+        </div>
+      ) : null}
+    </section>
+  );
+}
