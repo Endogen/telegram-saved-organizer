@@ -6,11 +6,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
+from app.auth.router import router as auth_router
 from app.config import settings
 from app.database import dispose_engine
 from app.telegram.client import telegram_client_manager
 
 api_router = APIRouter(prefix="/api")
+api_router.include_router(auth_router)
 
 
 @api_router.get("/health", tags=["health"])

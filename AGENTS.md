@@ -47,3 +47,4 @@ Run after each implementation:
 - 2026-02-15: `aiosqlite.connect(...)` hangs in this sandbox (thread callbacks do not wake the asyncio loop promptly), so tests should avoid live async SQLite I/O.
 - 2026-02-15: Category seed behavior can be tested with fake async-session objects (mocked `scalars`/`commit`) to avoid sandbox SQLite hangs while still validating idempotent seed logic.
 - 2026-02-15: Telethon wrapper behavior can be tested with an injected fake `client_factory` so tests fully avoid real Telegram API/network usage.
+- 2026-02-15: FastAPI sync dependencies can hang in this sandbox's threadpool path; prefer `async def` dependency providers (and async test overrides) for API tests.
