@@ -42,3 +42,5 @@ Run after each implementation:
 - 2026-02-15: Current execution environment has no outbound package index access; `pip install -e ".[dev]"` fails when resolving dependencies.
 - 2026-02-15: `openclaw gateway wake ...` fails in this environment with `uv_interface_addresses` system error, so automated notifications may not send from sandbox.
 - 2026-02-15: `backend/.venv` can bootstrap `setuptools` from `/usr/share/python-wheels/setuptools-68.1.2-py3-none-any.whl`, but editable install still blocks (`bdist_wheel` missing and no index access for project/runtime dependencies).
+- 2026-02-15: Existing `backend/.venv` currently has `ruff`/`pytest` and can run backend backpressure checks even though fresh dependency installation remains offline-blocked.
+- 2026-02-15: `fastapi.testclient.TestClient` hangs in this environment during tests; use `httpx.AsyncClient` with `ASGITransport` for backend API tests.

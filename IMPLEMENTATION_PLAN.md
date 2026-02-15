@@ -1,10 +1,10 @@
 # Implementation Plan
 
-STATUS: BLOCKED (environment dependency access)
+STATUS: IN PROGRESS
 
 ## Phase 1: Project Setup & Database
 
-- [ ] 1.1: Initialize backend project (FastAPI, SQLAlchemy, pyproject.toml, virtual env)
+- [x] 1.1: Initialize backend project (FastAPI, SQLAlchemy, pyproject.toml, virtual env)
 - [ ] 1.2: Create database models (Message, Category, Tag, MessageTag) with async SQLite
 - [ ] 1.3: Create default categories with seed data
 - [ ] 1.4: Initialize frontend project (React 19, Vite 7, TypeScript, Tailwind CSS 4)
@@ -63,5 +63,4 @@ STATUS: BLOCKED (environment dependency access)
 
 ## Blockers
 
-- 2026-02-15: Backend scaffold for `1.1` is created, but dependency installation is blocked by offline package resolution (`pip install -e ".[dev]"` cannot reach package index), so required backpressure checks cannot run yet.
-- 2026-02-15: Re-attempted `1.1` verification; `backend/.venv` only has `pip`, `ruff`/`pytest` are unavailable, and dependency install still fails offline (including editable install fallback without `wheel`), so lint/test backpressure remains blocked.
+- 2026-02-15: Fresh backend dependency installation is still blocked by offline package index access (`pip install -e ".[dev]"`), but existing `backend/.venv` currently includes the required tooling for lint/test backpressure.
