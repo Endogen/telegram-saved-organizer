@@ -30,7 +30,7 @@ STATUS: IN PROGRESS
 ## Phase 4: Frontend Layout & Navigation
 
 - [x] 4.1: Create app layout with responsive sidebar and top bar
-- [ ] 4.2: Build category sidebar navigation with message counts and icons
+- [x] 4.2: Build category sidebar navigation with message counts and icons
 - [ ] 4.3: Create Telegram connection flow (connect form → verify code → status)
 - [ ] 4.4: Build scan progress component with real-time updates
 

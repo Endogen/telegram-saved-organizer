@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { FolderKanban, Search } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 
 import { useUiStore } from "@/stores/ui-store";
 
@@ -8,29 +9,43 @@ const sampleMessages = [
     id: 1,
     preview: "FastAPI async patterns and testing notes.",
     category: "Text",
+    categorySlug: "text",
     date: "Today",
   },
   {
     id: 2,
     preview: "https://github.com/telethon/telethon release highlights",
     category: "Repositories",
+    categorySlug: "repositories",
     date: "Yesterday",
   },
   {
     id: 3,
     preview: "Voice memo from design sync and action items.",
     category: "Audio",
+    categorySlug: "audio",
     date: "2 days ago",
   },
 ];
 
+function formatCategoryFilter(slug: string): string {
+  return slug
+    .split("-")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 export function MessagesPage() {
+  const [searchParams] = useSearchParams();
   const searchQuery = useUiStore((state) => state.searchQuery);
   const setSearchQuery = useUiStore((state) => state.setSearchQuery);
+  const categoryFilter = searchParams.get("category")?.trim().toLowerCase() ?? "";
 
-  const filtered = sampleMessages.filter((message) =>
-    message.preview.toLowerCase().includes(searchQuery.trim().toLowerCase()),
-  );
+  const filtered = sampleMessages.filter((message) => {
+    const matchesSearch = message.preview.toLowerCase().includes(searchQuery.trim().toLowerCase());
+    const matchesCategory = categoryFilter.length === 0 || message.categorySlug === categoryFilter;
+    return matchesSearch && matchesCategory;
+  });
 
   return (
     <section>
@@ -39,6 +54,7 @@ export function MessagesPage() {
           <h2 className="text-2xl font-semibold text-[hsl(var(--foreground))]">Messages</h2>
           <p className="text-sm text-[hsl(var(--muted-foreground))]">
             Starter message grid with layout, enter/exit, and hover animations.
+            {categoryFilter.length > 0 ? ` Active category: ${formatCategoryFilter(categoryFilter)}.` : ""}
           </p>
         </div>
 
@@ -77,6 +93,12 @@ export function MessagesPage() {
           ))}
         </AnimatePresence>
       </motion.div>
+
+      {filtered.length === 0 ? (
+        <p className="mt-5 rounded-xl border border-dashed border-[hsl(var(--border))] bg-[hsl(var(--card)/0.7)] p-4 text-sm text-[hsl(var(--muted-foreground))]">
+          No messages match the current search and category filter.
+        </p>
+      ) : null}
     </section>
   );
 }

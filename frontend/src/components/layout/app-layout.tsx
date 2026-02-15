@@ -3,11 +3,12 @@ import { AnimatePresence, motion } from "framer-motion";
 import { MessageSquareMore, PlugZap, Rows3 } from "lucide-react";
 import { Outlet, useLocation } from "react-router-dom";
 
-import { Sidebar, type SidebarItem } from "@/components/layout/sidebar";
+import { Sidebar, type SidebarPrimaryItem } from "@/components/layout/sidebar";
+import { useCategories } from "@/hooks/use-categories";
 import { TopBar } from "@/components/layout/top-bar";
 import { useUiStore } from "@/stores/ui-store";
 
-const navigation: SidebarItem[] = [
+const navigation: SidebarPrimaryItem[] = [
   { to: "/", label: "Dashboard", icon: Rows3, end: true },
   { to: "/messages", label: "Messages", icon: MessageSquareMore },
   { to: "/connect", label: "Connect", icon: PlugZap },
@@ -36,6 +37,7 @@ export function AppLayout() {
   const isSidebarOpen = useUiStore((state) => state.isSidebarOpen);
   const toggleSidebar = useUiStore((state) => state.toggleSidebar);
   const setSidebarOpen = useUiStore((state) => state.setSidebarOpen);
+  const { categories, isLoading: isCategoriesLoading } = useCategories();
 
   useEffect(() => {
     setSidebarOpen(false);
@@ -51,7 +53,13 @@ export function AppLayout() {
         <TopBar title={activeRoute.title} subtitle={activeRoute.subtitle} onMenuClick={toggleSidebar} />
 
         <div className="flex gap-4 md:gap-6">
-          <Sidebar items={navigation} isOpen={isSidebarOpen} onClose={() => setSidebarOpen(false)} />
+          <Sidebar
+            items={navigation}
+            categories={categories}
+            isCategoriesLoading={isCategoriesLoading}
+            isOpen={isSidebarOpen}
+            onClose={() => setSidebarOpen(false)}
+          />
 
           <main className="min-h-[calc(100vh-11.5rem)] min-w-0 flex-1 rounded-2xl border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--card)/0.8)] p-4 shadow-sm backdrop-blur md:p-6">
             <AnimatePresence mode="wait">
