@@ -65,3 +65,4 @@ Run after each implementation:
 - 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) continue to pass after implementing `/messages` bulk selection mode and bulk actions toolbar (select, move, delete).
 - 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) continue to pass after implementing drag-to-move from `/messages` cards into sidebar categories via shared drag/drop events.
 - 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) continue to pass after adding the responsive message detail modal/drawer with full-content view and quick actions on `/messages`.
+- 2026-02-15: Frontend backpressure checks (`npx tsc --noEmit` and `npm run build`) continue to pass after adding shared loading/empty/error state UI, message-page skeleton/empty handling, sidebar category fallback states, and router-level error fallback rendering.

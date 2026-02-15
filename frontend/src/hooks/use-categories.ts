@@ -91,6 +91,7 @@ type UseCategoriesResult = {
   categories: CategoryWithCount[];
   isLoading: boolean;
   isFallback: boolean;
+  error: string | null;
 };
 
 function isCategoryWithCount(value: unknown): value is CategoryWithCount {
@@ -128,10 +129,18 @@ function normalizeCategories(payload: unknown): CategoryWithCount[] | null {
   });
 }
 
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  return "Failed to fetch categories.";
+}
+
 export function useCategories(): UseCategoriesResult {
   const [categories, setCategories] = useState<CategoryWithCount[]>(DEFAULT_CATEGORY_FALLBACK);
   const [isLoading, setIsLoading] = useState(true);
   const [isFallback, setIsFallback] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -151,12 +160,14 @@ export function useCategories(): UseCategoriesResult {
 
         setCategories(parsed);
         setIsFallback(false);
-      } catch {
+        setError(null);
+      } catch (error) {
         if (controller.signal.aborted) {
           return;
         }
         setCategories(DEFAULT_CATEGORY_FALLBACK);
         setIsFallback(true);
+        setError(toErrorMessage(error));
       } finally {
         if (!controller.signal.aborted) {
           setIsLoading(false);
@@ -171,5 +182,5 @@ export function useCategories(): UseCategoriesResult {
     };
   }, []);
 
-  return { categories, isLoading, isFallback };
+  return { categories, isLoading, isFallback, error };
 }

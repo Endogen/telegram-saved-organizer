@@ -5,11 +5,13 @@ import { ConnectPage } from "@/pages/connect-page";
 import { DashboardPage } from "@/pages/dashboard-page";
 import { MessagesPage } from "@/pages/messages-page";
 import { NotFoundPage } from "@/pages/not-found-page";
+import { RouteErrorPage } from "@/pages/route-error-page";
 
 export const router = createBrowserRouter([
   {
     path: "/",
     element: <AppLayout />,
+    errorElement: <RouteErrorPage />,
     children: [
       { index: true, element: <DashboardPage /> },
       { path: "messages", element: <MessagesPage /> },

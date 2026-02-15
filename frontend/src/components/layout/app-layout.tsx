@@ -37,7 +37,8 @@ export function AppLayout() {
   const isSidebarOpen = useUiStore((state) => state.isSidebarOpen);
   const toggleSidebar = useUiStore((state) => state.toggleSidebar);
   const setSidebarOpen = useUiStore((state) => state.setSidebarOpen);
-  const { categories, isLoading: isCategoriesLoading } = useCategories();
+  const { categories, isLoading: isCategoriesLoading, isFallback: isCategoriesFallback, error: categoriesError } =
+    useCategories();
 
   useEffect(() => {
     setSidebarOpen(false);
@@ -57,6 +58,8 @@ export function AppLayout() {
             items={navigation}
             categories={categories}
             isCategoriesLoading={isCategoriesLoading}
+            isCategoriesFallback={isCategoriesFallback}
+            categoriesError={categoriesError}
             isOpen={isSidebarOpen}
             onClose={() => setSidebarOpen(false)}
           />

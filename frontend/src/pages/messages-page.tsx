@@ -14,8 +14,11 @@ import { MoveDialog } from "@/components/categories/move-dialog";
 import { BulkActions } from "@/components/messages/bulk-actions";
 import { MessageDetail } from "@/components/messages/message-detail";
 import { MessageGrid } from "@/components/messages/message-grid";
+import { MessageGridSkeleton } from "@/components/messages/message-grid-skeleton";
 import { TagInputDialog } from "@/components/tags/tag-input";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { StatePanel } from "@/components/ui/state-panel";
 import { useCategories } from "@/hooks/use-categories";
 import { MESSAGE_DROP_TO_CATEGORY_EVENT, readMessageDropToCategoryEvent } from "@/lib/message-drag-events";
 import type { CategoryWithCount } from "@/types/category";
@@ -309,8 +312,9 @@ function localRemoveTag(messages: MessageListItem[], messageId: number, tagId: n
 
 export function MessagesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [messages, setMessages] = useState<MessageListItem[]>(sampleMessages);
-  const [knownTags, setKnownTags] = useState<MessageTag[]>(deriveTagsFromMessages(sampleMessages));
+  const [messages, setMessages] = useState<MessageListItem[]>([]);
+  const [knownTags, setKnownTags] = useState<MessageTag[]>([]);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isApiBackedData, setIsApiBackedData] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -338,6 +342,8 @@ export function MessagesPage() {
     let isCanceled = false;
 
     async function hydrateFromApi() {
+      setIsInitialLoading(true);
+
       try {
         const messageResponse = await listMessages({ page: 1, per_page: 200, sort: "date_desc" });
         if (isCanceled) {
@@ -367,6 +373,10 @@ export function MessagesPage() {
         setKnownTags(deriveTagsFromMessages(sampleMessages));
         setIsApiBackedData(false);
         setStatusMessage("API unavailable. Showing local sample messages with local-only actions.");
+      } finally {
+        if (!isCanceled) {
+          setIsInitialLoading(false);
+        }
       }
     }
 
@@ -528,6 +538,8 @@ export function MessagesPage() {
     categoryFilter.length > 0 ||
     selectedTagFilters.length > 0 ||
     sortOption !== "date_desc";
+  const hasAnyMessages = messages.length > 0;
+  const hasResults = filteredAndSorted.length > 0;
 
   const moveSingleMessageToCategory = useCallback(
     async (messageId: number, categoryId: number) => {
@@ -863,14 +875,10 @@ export function MessagesPage() {
           {categoryFilter.length > 0 ? ` Active category: ${formatCategoryFilter(categoryFilter)}.` : ""}
         </p>
         {statusMessage ? (
-          <p className="mt-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.6)] px-3 py-2 text-xs text-[hsl(var(--muted-foreground))]">
-            {statusMessage}
-          </p>
+          <StatePanel tone="warning" title="Running with local fallback data." description={statusMessage} className="mt-2 text-xs" />
         ) : null}
         {pageError ? (
-          <p className="mt-2 rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-200">
-            {pageError}
-          </p>
+          <StatePanel tone="error" title="Message action failed." description={pageError} className="mt-2 text-xs" />
         ) : null}
       </div>
 
@@ -883,6 +891,7 @@ export function MessagesPage() {
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder="Search by text, URL, sender, or tag..."
+              disabled={isInitialLoading}
               className="h-10 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] pl-9 pr-3 text-sm text-[hsl(var(--foreground))] outline-none ring-[hsl(var(--ring))] transition focus:ring-2"
             />
           </label>
@@ -894,6 +903,7 @@ export function MessagesPage() {
             <select
               value={categoryFilter}
               onChange={(event) => setCategoryParam(event.target.value.trim().toLowerCase())}
+              disabled={isInitialLoading}
               className="h-10 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 text-sm text-[hsl(var(--foreground))] outline-none ring-[hsl(var(--ring))] transition focus:ring-2"
             >
               <option value="">All categories</option>
@@ -912,6 +922,7 @@ export function MessagesPage() {
             <select
               value={sortOption}
               onChange={(event) => setSortOption(event.target.value as SortOption)}
+              disabled={isInitialLoading}
               className="h-10 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 text-sm text-[hsl(var(--foreground))] outline-none ring-[hsl(var(--ring))] transition focus:ring-2"
             >
               {sortOptions.map((option) => (
@@ -923,7 +934,13 @@ export function MessagesPage() {
           </label>
 
           {hasActiveFilters ? (
-            <Button variant="outline" size="sm" className="h-10 gap-1.5 lg:self-end" onClick={clearFilters}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-10 gap-1.5 lg:self-end"
+              onClick={clearFilters}
+              disabled={isInitialLoading}
+            >
               <X className="size-3.5" />
               Clear filters
             </Button>
@@ -942,7 +959,14 @@ export function MessagesPage() {
             </span>
           </div>
 
-          {availableTags.length > 0 ? (
+          {isInitialLoading ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Skeleton className="h-6 w-20 rounded-full" />
+              <Skeleton className="h-6 w-24 rounded-full" />
+              <Skeleton className="h-6 w-20 rounded-full" />
+              <Skeleton className="h-6 w-16 rounded-full" />
+            </div>
+          ) : availableTags.length > 0 ? (
             <div className="mt-2 flex flex-wrap gap-2">
               {availableTags.map((tag) => {
                 const isActive = selectedTagFilters.includes(tag.key);
@@ -974,7 +998,7 @@ export function MessagesPage() {
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-[hsl(var(--muted-foreground))]">
-          Showing {filteredAndSorted.length} of {messages.length} messages.
+          {isInitialLoading ? "Loading messages..." : `Showing ${filteredAndSorted.length} of ${messages.length} messages.`}
         </p>
 
         {!isBulkSelectionMode ? (
@@ -983,7 +1007,7 @@ export function MessagesPage() {
             size="sm"
             className="gap-1.5"
             onClick={activateBulkSelectionMode}
-            disabled={filteredAndSorted.length === 0}
+            disabled={isInitialLoading || filteredAndSorted.length === 0}
           >
             <CheckSquare2 className="size-3.5" />
             Bulk select
@@ -991,7 +1015,7 @@ export function MessagesPage() {
         ) : null}
       </div>
 
-      {isBulkSelectionMode ? (
+      {isBulkSelectionMode && !isInitialLoading ? (
         <BulkActions
           selectedCount={selectedMessageIds.length}
           filteredCount={filteredAndSorted.length}
@@ -1013,32 +1037,50 @@ export function MessagesPage() {
         />
       ) : null}
 
-      <MessageGrid
-        messages={filteredAndSorted}
-        pendingDeleteMessageId={pendingDeleteMessageId}
-        isSelectionMode={isBulkSelectionMode}
-        selectedMessageIds={selectedMessageIds}
-        onOpenDetailRequest={(message) => {
-          setDetailDialogMessageId(message.id);
-        }}
-        onMoveRequest={(message) => {
-          setMoveDialogError(null);
-          setMoveDialogMessageId(message.id);
-        }}
-        onTagRequest={(message) => {
-          setTagDialogError(null);
-          setTagDialogMessageId(message.id);
-        }}
-        onDeleteRequest={(message) => {
-          void handleDeleteMessage(message);
-        }}
-        onSelectionChange={handleMessageSelectionChange}
-      />
+      {isInitialLoading ? (
+        <MessageGridSkeleton />
+      ) : (
+        <MessageGrid
+          messages={filteredAndSorted}
+          pendingDeleteMessageId={pendingDeleteMessageId}
+          isSelectionMode={isBulkSelectionMode}
+          selectedMessageIds={selectedMessageIds}
+          onOpenDetailRequest={(message) => {
+            setDetailDialogMessageId(message.id);
+          }}
+          onMoveRequest={(message) => {
+            setMoveDialogError(null);
+            setMoveDialogMessageId(message.id);
+          }}
+          onTagRequest={(message) => {
+            setTagDialogError(null);
+            setTagDialogMessageId(message.id);
+          }}
+          onDeleteRequest={(message) => {
+            void handleDeleteMessage(message);
+          }}
+          onSelectionChange={handleMessageSelectionChange}
+        />
+      )}
 
-      {filteredAndSorted.length === 0 ? (
-        <p className="mt-5 rounded-xl border border-dashed border-[hsl(var(--border))] bg-[hsl(var(--card)/0.7)] p-4 text-sm text-[hsl(var(--muted-foreground))]">
-          No messages match the current search and filter controls.
-        </p>
+      {!isInitialLoading && !hasResults ? (
+        <StatePanel
+          className="mt-5"
+          title={hasAnyMessages ? "No messages match these filters." : "No messages yet."}
+          description={
+            hasAnyMessages
+              ? "Adjust search or filter controls to broaden results."
+              : "Connect Telegram and run a scan to import Saved Messages."
+          }
+          action={
+            hasAnyMessages && hasActiveFilters ? (
+              <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={clearFilters}>
+                <X className="size-3.5" />
+                Clear filters
+              </Button>
+            ) : null
+          }
+        />
       ) : null}
 
       <MessageDetail

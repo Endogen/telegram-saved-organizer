@@ -24,6 +24,8 @@ import {
   type MessageDragStartDetail,
 } from "@/lib/message-drag-events";
 import { cn } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
+import { StatePanel } from "@/components/ui/state-panel";
 import type { CategoryWithCount } from "@/types/category";
 
 export type SidebarPrimaryItem = {
@@ -37,6 +39,8 @@ type SidebarProps = {
   items: SidebarPrimaryItem[];
   categories: CategoryWithCount[];
   isCategoriesLoading: boolean;
+  isCategoriesFallback: boolean;
+  categoriesError: string | null;
   isOpen: boolean;
   onClose: () => void;
 };
@@ -65,7 +69,15 @@ function navItemClassName(isActive: boolean): string {
   );
 }
 
-export function Sidebar({ items, categories, isCategoriesLoading, isOpen, onClose }: SidebarProps) {
+export function Sidebar({
+  items,
+  categories,
+  isCategoriesLoading,
+  isCategoriesFallback,
+  categoriesError,
+  isOpen,
+  onClose,
+}: SidebarProps) {
   const location = useLocation();
   const activeCategory =
     location.pathname.startsWith("/messages") ? new URLSearchParams(location.search).get("category") ?? "all" : null;
@@ -198,47 +210,75 @@ export function Sidebar({ items, categories, isCategoriesLoading, isOpen, onClos
             </div>
 
             <div className="mt-2 space-y-1">
-              <Link to="/messages" className={navItemClassName(activeCategory === "all")} onClick={onClose}>
-                <span className="flex min-w-0 items-center gap-2">
-                  <FolderKanban className="size-4 shrink-0" />
-                  <span className="truncate">All Messages</span>
-                </span>
-                <span className="ml-auto rounded-full bg-[hsl(var(--background)/0.8)] px-2 py-0.5 text-xs font-semibold text-[hsl(var(--muted-foreground))]">
-                  {totalMessageCount}
-                </span>
-              </Link>
-
-              {categories.map((category) => {
-                const Icon = resolveCategoryIcon(category.icon);
-                const isActive = activeCategory === category.slug;
-                const isDropTarget = dropCategoryId === category.id;
-                const isDropBlocked = isDropTarget && activeDrag?.categoryId === category.id;
-
-                return (
-                  <Link
-                    key={category.id}
-                    to={`/messages?category=${encodeURIComponent(category.slug)}`}
-                    className={cn(
-                      navItemClassName(isActive),
-                      isDropTarget && !isDropBlocked && "ring-2 ring-[hsl(var(--primary)/0.5)] ring-offset-1",
-                      isDropTarget && isDropBlocked && "ring-2 ring-red-500/45 ring-offset-1",
-                    )}
-                    onClick={onClose}
-                    onDragOver={(event) => handleCategoryDragOver(event, category.id)}
-                    onDragLeave={(event) => handleCategoryDragLeave(event, category.id)}
-                    onDrop={(event) => handleCategoryDrop(event, category)}
-                  >
+              {isCategoriesLoading ? (
+                <div className="space-y-2 rounded-lg border border-[hsl(var(--border)/0.75)] bg-[hsl(var(--background)/0.55)] p-2">
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-10/12" />
+                </div>
+              ) : (
+                <>
+                  <Link to="/messages" className={navItemClassName(activeCategory === "all")} onClick={onClose}>
                     <span className="flex min-w-0 items-center gap-2">
-                      <Icon className="size-4 shrink-0" style={{ color: category.color }} />
-                      <span className="truncate">{category.name}</span>
+                      <FolderKanban className="size-4 shrink-0" />
+                      <span className="truncate">All Messages</span>
                     </span>
                     <span className="ml-auto rounded-full bg-[hsl(var(--background)/0.8)] px-2 py-0.5 text-xs font-semibold text-[hsl(var(--muted-foreground))]">
-                      {category.message_count}
+                      {totalMessageCount}
                     </span>
                   </Link>
-                );
-              })}
+
+                  {categories.length > 0 ? (
+                    categories.map((category) => {
+                      const Icon = resolveCategoryIcon(category.icon);
+                      const isActive = activeCategory === category.slug;
+                      const isDropTarget = dropCategoryId === category.id;
+                      const isDropBlocked = isDropTarget && activeDrag?.categoryId === category.id;
+
+                      return (
+                        <Link
+                          key={category.id}
+                          to={`/messages?category=${encodeURIComponent(category.slug)}`}
+                          className={cn(
+                            navItemClassName(isActive),
+                            isDropTarget && !isDropBlocked && "ring-2 ring-[hsl(var(--primary)/0.5)] ring-offset-1",
+                            isDropTarget && isDropBlocked && "ring-2 ring-red-500/45 ring-offset-1",
+                          )}
+                          onClick={onClose}
+                          onDragOver={(event) => handleCategoryDragOver(event, category.id)}
+                          onDragLeave={(event) => handleCategoryDragLeave(event, category.id)}
+                          onDrop={(event) => handleCategoryDrop(event, category)}
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            <Icon className="size-4 shrink-0" style={{ color: category.color }} />
+                            <span className="truncate">{category.name}</span>
+                          </span>
+                          <span className="ml-auto rounded-full bg-[hsl(var(--background)/0.8)] px-2 py-0.5 text-xs font-semibold text-[hsl(var(--muted-foreground))]">
+                            {category.message_count}
+                          </span>
+                        </Link>
+                      );
+                    })
+                  ) : (
+                    <StatePanel
+                      title="No categories available."
+                      description="Run a scan to seed categories and message counts."
+                      className="text-xs"
+                    />
+                  )}
+                </>
+              )}
             </div>
+
+            {!isCategoriesLoading && isCategoriesFallback && categoriesError ? (
+              <StatePanel
+                tone="warning"
+                title="Using fallback categories."
+                description={categoriesError}
+                className="mt-2 text-xs"
+              />
+            ) : null}
 
             {activeDrag !== null ? (
               <p className="mt-2 rounded-md border border-[hsl(var(--primary)/0.25)] bg-[hsl(var(--primary)/0.1)] px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[hsl(var(--primary))]">
