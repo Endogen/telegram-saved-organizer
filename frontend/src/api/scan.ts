@@ -40,3 +40,54 @@ export async function startScan(pageSize = 100): Promise<ScanStatus> {
 export async function stopScan(): Promise<ScanStatus> {
   return requestScanStatus("/stop", { method: "POST" });
 }
+
+type ScanStatusSubscriptionOptions = {
+  onStatus: (status: ScanStatus) => void;
+  onOpen?: () => void;
+  onError?: (message: string) => void;
+};
+
+type ScanStatusSubscription = {
+  close: () => void;
+};
+
+function parseScanStatus(payload: string): ScanStatus {
+  return JSON.parse(payload) as ScanStatus;
+}
+
+export function subscribeToScanStatus(options: ScanStatusSubscriptionOptions): ScanStatusSubscription {
+  if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
+    options.onError?.("Live scan updates are not available in this environment.");
+    return { close: () => undefined };
+  }
+
+  const source = new window.EventSource(`${SCAN_BASE_PATH}/stream`);
+
+  const handleOpen = () => {
+    options.onOpen?.();
+  };
+  const handleStatus = (event: Event) => {
+    try {
+      const messageEvent = event as MessageEvent<string>;
+      options.onStatus(parseScanStatus(messageEvent.data));
+    } catch {
+      options.onError?.("Received an invalid live scan status payload.");
+    }
+  };
+  const handleError = () => {
+    options.onError?.("Live scan updates disconnected. Falling back to polling.");
+  };
+
+  source.addEventListener("open", handleOpen);
+  source.addEventListener("status", handleStatus);
+  source.addEventListener("error", handleError);
+
+  return {
+    close: () => {
+      source.removeEventListener("open", handleOpen);
+      source.removeEventListener("status", handleStatus);
+      source.removeEventListener("error", handleError);
+      source.close();
+    },
+  };
+}

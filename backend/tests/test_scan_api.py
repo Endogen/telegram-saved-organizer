@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -16,6 +17,7 @@ class _FakeScanService:
         self.start_calls: list[int] = []
         self.stop_calls = 0
         self.status_calls = 0
+        self.status_sequence: list[ScanProgress] = []
         self.start_error: Exception | None = None
         self.start_progress = ScanProgress(is_running=True, page_size=100)
         self.status_progress = ScanProgress(
@@ -45,6 +47,8 @@ class _FakeScanService:
 
     async def status(self) -> ScanProgress:
         self.status_calls += 1
+        if self.status_sequence:
+            self.status_progress = self.status_sequence.pop(0)
         return self.status_progress
 
     async def stop(self) -> ScanProgress:
@@ -166,3 +170,70 @@ async def test_stop_scan_endpoint_requests_graceful_stop(
         "error": None,
     }
     assert service.stop_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_scan_stream_endpoint_emits_status_updates(
+    scan_context: tuple[Any, _FakeScanService],
+) -> None:
+    app, service = scan_context
+    service.status_sequence = [
+        ScanProgress(
+            is_running=True,
+            is_complete=False,
+            stop_requested=False,
+            messages_scanned=4,
+            pages_scanned=1,
+            page_size=50,
+            last_message_id=999,
+        ),
+        ScanProgress(
+            is_running=False,
+            is_complete=True,
+            stop_requested=False,
+            messages_scanned=9,
+            pages_scanned=2,
+            page_size=50,
+            last_message_id=850,
+        ),
+    ]
+
+    transport = ASGITransport(app=app)
+    events: list[dict[str, Any]] = []
+    async with AsyncClient(transport=transport, base_url="http://testserver", timeout=5.0) as client:
+        response = await client.get("/api/scan/stream?max_events=2")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    for line in response.text.splitlines():
+        if not line.startswith("data: "):
+            continue
+        events.append(json.loads(line[6:]))
+
+    assert events == [
+        {
+            "is_running": True,
+            "is_complete": False,
+            "stop_requested": False,
+            "messages_scanned": 4,
+            "pages_scanned": 1,
+            "page_size": 50,
+            "last_message_id": 999,
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+        },
+        {
+            "is_running": False,
+            "is_complete": True,
+            "stop_requested": False,
+            "messages_scanned": 9,
+            "pages_scanned": 2,
+            "page_size": 50,
+            "last_message_id": 850,
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+        },
+    ]
+    assert service.status_calls >= 2

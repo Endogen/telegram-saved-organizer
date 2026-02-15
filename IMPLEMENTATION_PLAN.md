@@ -48,7 +48,7 @@ STATUS: IN PROGRESS
 - [x] 6.1: Implement drag-to-move (drag message card to sidebar category)
 - [x] 6.2: Build message detail modal/drawer with full content view
 - [x] 6.3: Add empty states, loading skeletons, and error handling throughout
-- [ ] 6.4: Implement real-time scan progress updates
+- [x] 6.4: Implement real-time scan progress updates
 
 ## Phase 7: Testing & Polish
 

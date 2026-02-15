@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle2, CircleAlert, LoaderCircle, Play, RefreshCw, Square } from "lucide-react";
 
-import { fetchScanStatus, startScan, stopScan } from "@/api/scan";
+import { fetchScanStatus, startScan, stopScan, subscribeToScanStatus } from "@/api/scan";
 import { Button } from "@/components/ui/button";
 import type { ScanStatus } from "@/types/scan";
 
 const POLL_INTERVAL_ACTIVE_MS = 1500;
 const POLL_INTERVAL_IDLE_MS = 8000;
+const POLL_INTERVAL_STREAM_BACKSTOP_MS = 12000;
 
 const INITIAL_SCAN_STATUS: ScanStatus = {
   is_running: false,
@@ -23,6 +24,7 @@ const INITIAL_SCAN_STATUS: ScanStatus = {
 };
 
 type RefreshMode = "initial" | "manual" | "poll";
+type StreamConnectionState = "unsupported" | "connecting" | "connected" | "fallback";
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -88,6 +90,12 @@ export function ScanProgress() {
   const [isStopping, setIsStopping] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [streamConnectionState, setStreamConnectionState] = useState<StreamConnectionState>(() => {
+    if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
+      return "unsupported";
+    }
+    return "connecting";
+  });
   const inFlightRef = useRef(false);
 
   const refreshStatus = useCallback(async (mode: RefreshMode) => {
@@ -129,6 +137,34 @@ export function ScanProgress() {
   }, [refreshStatus]);
 
   useEffect(() => {
+    const subscription = subscribeToScanStatus({
+      onOpen: () => {
+        setStreamConnectionState("connected");
+      },
+      onStatus: (nextStatus) => {
+        setStatus(nextStatus);
+        setNow(Date.now());
+        setPageSizeInput(String(nextStatus.page_size));
+        setRequestError(null);
+        setIsInitialLoading(false);
+        setStreamConnectionState("connected");
+      },
+      onError: () => {
+        setStreamConnectionState((current) => {
+          if (current === "unsupported") {
+            return current;
+          }
+          return "fallback";
+        });
+      },
+    });
+
+    return () => {
+      subscription.close();
+    };
+  }, []);
+
+  useEffect(() => {
     let isCancelled = false;
     let timeoutId: number | undefined;
 
@@ -137,7 +173,12 @@ export function ScanProgress() {
         return;
       }
 
-      const delay = status.is_running ? POLL_INTERVAL_ACTIVE_MS : POLL_INTERVAL_IDLE_MS;
+      const delay =
+        streamConnectionState === "connected"
+          ? POLL_INTERVAL_STREAM_BACKSTOP_MS
+          : status.is_running
+            ? POLL_INTERVAL_ACTIVE_MS
+            : POLL_INTERVAL_IDLE_MS;
       timeoutId = window.setTimeout(async () => {
         await refreshStatus("poll");
         scheduleNext();
@@ -152,7 +193,7 @@ export function ScanProgress() {
         window.clearTimeout(timeoutId);
       }
     };
-  }, [refreshStatus, status.is_running]);
+  }, [refreshStatus, status.is_running, streamConnectionState]);
 
   useEffect(() => {
     if (!status.is_running) {
@@ -236,6 +277,29 @@ export function ScanProgress() {
     return "Ready to scan";
   }, [status.error, status.is_complete, status.is_running, status.stop_requested]);
 
+  const streamStatusLabel = useMemo(() => {
+    if (streamConnectionState === "connected") {
+      return "Live updates connected";
+    }
+    if (streamConnectionState === "connecting") {
+      return "Connecting live updates";
+    }
+    if (streamConnectionState === "unsupported") {
+      return "Polling mode";
+    }
+    return "Live stream fallback";
+  }, [streamConnectionState]);
+
+  const streamStatusTone = useMemo(() => {
+    if (streamConnectionState === "connected") {
+      return "border-emerald-300/80 bg-emerald-50/80 text-emerald-700";
+    }
+    if (streamConnectionState === "connecting") {
+      return "border-sky-300/80 bg-sky-50/80 text-sky-700";
+    }
+    return "border-[hsl(var(--border))] bg-[hsl(var(--background)/0.72)] text-[hsl(var(--muted-foreground))]";
+  }, [streamConnectionState]);
+
   const duration = formatDuration(status.started_at, status.finished_at, now);
   const isBusy = isInitialLoading || isStarting || isStopping;
   const canStart = !isBusy && !status.is_running;
@@ -250,7 +314,12 @@ export function ScanProgress() {
           </p>
           <h3 className="mt-1 text-lg font-semibold text-[hsl(var(--foreground))]">Saved Messages Scan Progress</h3>
           <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
-            Real-time status from Telegram scanner endpoints with automatic polling.
+            Live status stream with automatic polling fallback from Telegram scanner endpoints.
+          </p>
+          <p
+            className={`mt-2 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${streamStatusTone}`}
+          >
+            {streamStatusLabel}
           </p>
         </div>
 
