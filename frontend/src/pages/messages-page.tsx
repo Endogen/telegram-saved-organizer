@@ -1,8 +1,7 @@
-import { AnimatePresence, motion } from "framer-motion";
 import { Search } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
-import { MessageCard } from "@/components/messages/message-card";
+import { MessageGrid } from "@/components/messages/message-grid";
 import { useUiStore } from "@/stores/ui-store";
 import type { MessageListItem } from "@/types/message";
 
@@ -168,13 +167,7 @@ export function MessagesPage() {
         </label>
       </div>
 
-      <motion.div layout className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        <AnimatePresence>
-          {filtered.map((message) => (
-            <MessageCard key={message.id} message={message} />
-          ))}
-        </AnimatePresence>
-      </motion.div>
+      <MessageGrid messages={filtered} />
 
       {filtered.length === 0 ? (
         <p className="mt-5 rounded-xl border border-dashed border-[hsl(var(--border))] bg-[hsl(var(--card)/0.7)] p-4 text-sm text-[hsl(var(--muted-foreground))]">
