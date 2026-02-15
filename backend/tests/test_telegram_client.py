@@ -116,3 +116,34 @@ async def test_connect_failure_does_not_cache_failed_client(tmp_path: Path) -> N
     assert len(factory.calls) == 2
     assert factory.created_clients[0].disconnect_calls == 1
     assert factory.created_clients[1].disconnect_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_get_connected_client_returns_none_when_disconnected(tmp_path: Path) -> None:
+    manager = TelegramClientManager(session_path=tmp_path / "telegram", client_factory=_FakeClientFactory())
+
+    assert manager.get_connected_client() is None
+
+    connected_client = await manager.connect(api_id=1001, api_hash="hash")
+    assert manager.get_connected_client() is connected_client
+    connected_client.connected = False
+
+    assert manager.get_connected_client() is None
+
+
+@pytest.mark.asyncio
+async def test_reset_session_supports_explicit_session_suffix_path(tmp_path: Path) -> None:
+    session_path = tmp_path / "telegram.session"
+    session_journal = tmp_path / "telegram.session-journal"
+    session_path.write_text("session", encoding="utf-8")
+    session_journal.write_text("journal", encoding="utf-8")
+
+    manager = TelegramClientManager(session_path=session_path, client_factory=_FakeClientFactory())
+
+    assert manager.has_session() is True
+
+    await manager.reset_session()
+
+    assert manager.has_session() is False
+    assert not session_path.exists()
+    assert not session_journal.exists()

@@ -52,7 +52,7 @@ STATUS: IN PROGRESS
 
 ## Phase 7: Testing & Polish
 
-- [ ] 7.1: Write backend tests for auth and telegram modules (mock Telethon)
+- [x] 7.1: Write backend tests for auth and telegram modules (mock Telethon)
 - [ ] 7.2: Write backend tests for message, category, tag services and endpoints
 - [ ] 7.3: Write backend tests for scanner and categorizer
 - [ ] 7.4: Write frontend tests for message card, grid, and sidebar components

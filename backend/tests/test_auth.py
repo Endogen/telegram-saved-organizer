@@ -5,28 +5,35 @@ from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
 from telethon.errors import PhoneCodeInvalidError, SessionPasswordNeededError
 
+from app.auth.schemas import VerifyRequest
 from app.auth.router import get_auth_service
-from app.auth.service import TelegramAuthService
+from app.auth.service import TelegramAuthService, VerificationCodeRequiredError
 from app.main import create_app
 from app.telegram.client import TelegramClientCredentialsMismatchError
 
 
 @dataclass(slots=True)
 class _SentCode:
-    phone_code_hash: str
+    phone_code_hash: str | None
 
 
 class _FakeTelethonClient:
     def __init__(self) -> None:
         self.authorized = False
-        self.code_hash = "hash-123"
+        self.code_hash: str | None = "hash-123"
         self.send_code_calls: list[str] = []
         self.sign_in_calls: list[dict[str, Any]] = []
+        self.send_code_error: Exception | None = None
         self.require_password_on_code = False
+        self.authorize_on_code = True
+        self.authorize_on_password = True
 
     async def send_code_request(self, phone: str) -> _SentCode:
+        if self.send_code_error is not None:
+            raise self.send_code_error
         self.send_code_calls.append(phone)
         return _SentCode(phone_code_hash=self.code_hash)
 
@@ -47,13 +54,15 @@ class _FakeTelethonClient:
             }
         )
         if password:
-            self.authorized = True
+            if self.authorize_on_password:
+                self.authorized = True
             return
         if self.require_password_on_code:
             raise SessionPasswordNeededError(request=None)
         if code == "00000":
             raise PhoneCodeInvalidError(request=None)
-        self.authorized = True
+        if self.authorize_on_code:
+            self.authorized = True
 
     async def is_user_authorized(self) -> bool:
         return self.authorized
@@ -128,6 +137,49 @@ async def test_connect_endpoint_starts_verification_flow(
 
 
 @pytest.mark.asyncio
+async def test_connect_endpoint_returns_authorized_if_user_already_signed_in(
+    auth_context: tuple[Any, _FakeTelegramManager],
+) -> None:
+    app, manager = auth_context
+    manager.client.authorized = True
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/auth/connect",
+            json={"api_id": 12345, "api_hash": "abc123", "phone": "+15550001111"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "connected": True,
+        "authorized": True,
+        "has_session": True,
+        "verification_required": False,
+        "password_required": False,
+    }
+    assert manager.client.send_code_calls == []
+
+
+@pytest.mark.asyncio
+async def test_connect_endpoint_returns_bad_request_for_rpc_error(
+    auth_context: tuple[Any, _FakeTelegramManager],
+) -> None:
+    app, manager = auth_context
+    manager.client.send_code_error = PhoneCodeInvalidError(request=None)
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/auth/connect",
+            json={"api_id": 12345, "api_hash": "abc123", "phone": "+15550001111"},
+        )
+
+    assert response.status_code == 400
+    assert "phone code" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
 async def test_verify_endpoint_completes_authorization(
     auth_context: tuple[Any, _FakeTelegramManager],
 ) -> None:
@@ -152,6 +204,24 @@ async def test_verify_endpoint_completes_authorization(
             "password": None,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_verify_endpoint_returns_bad_request_for_rpc_error(
+    auth_context: tuple[Any, _FakeTelegramManager],
+) -> None:
+    app, _ = auth_context
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        await client.post(
+            "/api/auth/connect",
+            json={"api_id": 12345, "api_hash": "abc123", "phone": "+15550001111"},
+        )
+        response = await client.post("/api/auth/verify", json={"code": "00000"})
+
+    assert response.status_code == 400
+    assert "phone code" in response.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
@@ -194,6 +264,19 @@ async def test_verify_endpoint_handles_password_required_flow(
 
 
 @pytest.mark.asyncio
+async def test_verify_endpoint_maps_validation_error_for_empty_payload(
+    auth_context: tuple[Any, _FakeTelegramManager],
+) -> None:
+    app, _ = auth_context
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/auth/verify", json={})
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_connect_endpoint_returns_conflict_for_credential_mismatch(
     auth_context: tuple[Any, _FakeTelegramManager],
 ) -> None:
@@ -232,3 +315,43 @@ async def test_disconnect_endpoint_clears_session_state(
         "password_required": False,
     }
     assert manager.reset_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_start_connection_raises_when_phone_code_hash_missing() -> None:
+    manager = _FakeTelegramManager()
+    manager.client.code_hash = None
+    service = TelegramAuthService(manager=manager)
+
+    with pytest.raises(RuntimeError, match="phone_code_hash"):
+        await service.start_connection(api_id=12345, api_hash="abc123", phone="+15550001111")
+
+
+@pytest.mark.asyncio
+async def test_verify_requires_code_or_password_when_pending() -> None:
+    manager = _FakeTelegramManager()
+    service = TelegramAuthService(manager=manager)
+
+    await service.start_connection(api_id=12345, api_hash="abc123", phone="+15550001111")
+
+    with pytest.raises(VerificationCodeRequiredError, match="Verification code is required."):
+        await service.verify()
+
+
+@pytest.mark.asyncio
+async def test_verify_returns_not_authorized_when_telegram_rejects_sign_in() -> None:
+    manager = _FakeTelegramManager()
+    manager.client.authorize_on_code = False
+    service = TelegramAuthService(manager=manager)
+
+    await service.start_connection(api_id=12345, api_hash="abc123", phone="+15550001111")
+    status = await service.verify(code="12345")
+
+    assert status.authorized is False
+    assert status.verification_required is True
+    assert status.password_required is False
+
+
+def test_verify_request_model_rejects_blank_code_and_password() -> None:
+    with pytest.raises(ValidationError, match="Either code or password must be provided."):
+        VerifyRequest(code=" ", password=" ")
