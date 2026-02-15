@@ -8,7 +8,7 @@ STATUS: IN PROGRESS
 - [x] 1.2: Create database models (Message, Category, Tag, MessageTag) with async SQLite
 - [x] 1.3: Create default categories with seed data
 - [x] 1.4: Initialize frontend project (React 19, Vite 7, TypeScript, Tailwind CSS 4)
-- [ ] 1.5: Set up frontend tooling (shadcn/ui, Framer Motion, Zustand, React Router)
+- [x] 1.5: Set up frontend tooling (shadcn/ui, Framer Motion, Zustand, React Router)
 
 ## Phase 2: Telegram Integration
 
