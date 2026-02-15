@@ -31,7 +31,7 @@ STATUS: IN PROGRESS
 
 - [x] 4.1: Create app layout with responsive sidebar and top bar
 - [x] 4.2: Build category sidebar navigation with message counts and icons
-- [ ] 4.3: Create Telegram connection flow (connect form → verify code → status)
+- [x] 4.3: Create Telegram connection flow (connect form → verify code → status)
 - [ ] 4.4: Build scan progress component with real-time updates
 
 ## Phase 5: Message UI
