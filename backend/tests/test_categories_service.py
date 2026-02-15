@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.categories.service import (
     CategoryConflictError,
@@ -43,6 +44,7 @@ class _FakeSession:
         self.delete_calls: list[Any] = []
         self.commit_calls = 0
         self.rollback_calls = 0
+        self.commit_error: Exception | None = None
 
     async def execute(self, statement: Any) -> _FakeExecuteResult:
         self.execute_calls.append(statement)
@@ -70,6 +72,8 @@ class _FakeSession:
         self.delete_calls.append(item)
 
     async def commit(self) -> None:
+        if self.commit_error is not None:
+            raise self.commit_error
         self.commit_calls += 1
 
     async def rollback(self) -> None:
@@ -206,6 +210,35 @@ async def test_update_category_raises_when_not_found() -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_category_rejects_empty_payload() -> None:
+    session = _FakeSession()
+    service = CategoryService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="At least one update field must be provided."):
+        await service.update_category(category_id=3, updates={})
+
+
+@pytest.mark.asyncio
+async def test_update_category_rejects_unknown_update_fields() -> None:
+    session = _FakeSession()
+    category = _build_category(category_id=3, name="Links", slug="links", position=3)
+    session.get_values[(Category, 3)] = category
+    service = CategoryService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="Unsupported update field\\(s\\): is_default."):
+        await service.update_category(category_id=3, updates={"is_default": True})
+
+
+@pytest.mark.asyncio
+async def test_delete_category_raises_when_category_missing() -> None:
+    session = _FakeSession()
+    service = CategoryService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(CategoryNotFoundError, match="Category 404 was not found."):
+        await service.delete_category(category_id=404)
+
+
+@pytest.mark.asyncio
 async def test_delete_category_moves_messages_to_other_and_deletes() -> None:
     session = _FakeSession()
     source = _build_category(category_id=2, name="Links", slug="links", position=2)
@@ -252,3 +285,91 @@ async def test_delete_category_raises_when_fallback_is_missing() -> None:
         await service.delete_category(category_id=4)
 
     assert session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_create_category_raises_conflict_when_slug_exists() -> None:
+    session = _FakeSession()
+    existing = _build_category(category_id=9, name="Read-Later", slug="read-later")
+    session.scalar_values = [7, None, existing]
+    service = CategoryService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(CategoryConflictError, match="Category slug 'read-later' already exists."):
+        await service.create_category(
+            name="Read Later",
+            icon="bookmark",
+            color="#22C55E",
+            position=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_category_rolls_back_and_raises_conflict_on_integrity_error() -> None:
+    session = _FakeSession()
+    session.scalar_values = [7, None, None]
+    session.commit_error = IntegrityError("insert", {}, Exception("duplicate"))
+    service = CategoryService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(CategoryConflictError, match="Category name or slug already exists."):
+        await service.create_category(
+            name="Read Later",
+            icon="bookmark",
+            color="#22C55E",
+            position=None,
+        )
+
+    assert session.rollback_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_create_category_rejects_non_string_name() -> None:
+    session = _FakeSession()
+    service = CategoryService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="name must be a string."):
+        await service.create_category(name=123, icon="bookmark", color="#22C55E")  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_create_category_rejects_blank_icon() -> None:
+    session = _FakeSession()
+    service = CategoryService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="icon must not be empty."):
+        await service.create_category(name="Notes", icon="   ", color="#22C55E")
+
+
+@pytest.mark.asyncio
+async def test_create_category_rejects_non_string_color() -> None:
+    session = _FakeSession()
+    service = CategoryService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="color must be a string."):
+        await service.create_category(name="Notes", icon="note", color=123)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_create_category_rejects_invalid_color_pattern() -> None:
+    session = _FakeSession()
+    service = CategoryService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="color must be a valid hex value like #22C55E."):
+        await service.create_category(name="Notes", icon="note", color="#GGGGGG")
+
+
+@pytest.mark.asyncio
+async def test_create_category_rejects_negative_position() -> None:
+    session = _FakeSession()
+    service = CategoryService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="position must be a non-negative integer."):
+        await service.create_category(name="Notes", icon="note", color="#22C55E", position=-1)
+
+
+@pytest.mark.asyncio
+async def test_create_category_rejects_name_without_alphanumeric_characters() -> None:
+    session = _FakeSession()
+    service = CategoryService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="name must include at least one alphanumeric character."):
+        await service.create_category(name="!!!", icon="note", color="#22C55E")

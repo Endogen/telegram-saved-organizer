@@ -12,6 +12,7 @@ from app.categories.service import (
     CategoryDeleteResult,
     CategoryNotFoundError,
     CategoryProtectedError,
+    CategoryService,
     CategoryWithCount,
 )
 from app.main import create_app
@@ -193,6 +194,23 @@ async def test_create_category_endpoint_returns_conflict(
 
 
 @pytest.mark.asyncio
+async def test_create_category_endpoint_returns_bad_request_on_validation_error(
+    category_context: tuple[Any, _FakeCategoryService],
+) -> None:
+    app, service = category_context
+    service.create_error = ValueError("color must be a valid hex value like #22C55E.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/categories",
+            json={"name": "Links", "icon": "link", "color": "#22C55E"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "color must be a valid hex value like #22C55E."
+
+
+@pytest.mark.asyncio
 async def test_update_category_endpoint_returns_updated_category(
     category_context: tuple[Any, _FakeCategoryService],
 ) -> None:
@@ -228,6 +246,34 @@ async def test_update_category_endpoint_returns_not_found(
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Category 404 was not found."
+
+
+@pytest.mark.asyncio
+async def test_update_category_endpoint_returns_conflict(
+    category_context: tuple[Any, _FakeCategoryService],
+) -> None:
+    app, service = category_context
+    service.update_error = CategoryConflictError("Category slug 'links' already exists.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.patch("/api/categories/3", json={"name": "Links"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Category slug 'links' already exists."
+
+
+@pytest.mark.asyncio
+async def test_update_category_endpoint_returns_bad_request_on_validation_error(
+    category_context: tuple[Any, _FakeCategoryService],
+) -> None:
+    app, service = category_context
+    service.update_error = ValueError("position must be a non-negative integer.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.patch("/api/categories/3", json={"position": 1})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "position must be a non-negative integer."
 
 
 @pytest.mark.asyncio
@@ -274,3 +320,27 @@ async def test_delete_category_endpoint_rejects_protected_category(
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Category 'other' cannot be deleted."
+
+
+@pytest.mark.asyncio
+async def test_delete_category_endpoint_returns_not_found(
+    category_context: tuple[Any, _FakeCategoryService],
+) -> None:
+    app, service = category_context
+    service.delete_error = CategoryNotFoundError("Category 404 was not found.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.delete("/api/categories/404")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Category 404 was not found."
+
+
+@pytest.mark.asyncio
+async def test_get_category_service_dependency_returns_category_service() -> None:
+    session = object()
+
+    service = await get_category_service(session=session)  # type: ignore[arg-type]
+
+    assert isinstance(service, CategoryService)
+    assert service.session is session

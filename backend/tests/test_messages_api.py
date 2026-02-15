@@ -13,6 +13,7 @@ from app.messages.service import (
     CategoryNotFoundError,
     MessageListResult,
     MessageNotFoundError,
+    MessageService,
     MessageSort,
     TelegramClientNotConnectedError,
     TelegramMessageDeleteError,
@@ -221,6 +222,20 @@ async def test_list_messages_endpoint_forwards_search_and_filter_params(
 
 
 @pytest.mark.asyncio
+async def test_list_messages_endpoint_returns_bad_request_on_service_validation_error(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.list_error = ValueError("per_page must be greater than zero.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/api/messages")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "per_page must be greater than zero."
+
+
+@pytest.mark.asyncio
 async def test_bulk_delete_endpoint_returns_deleted_count(
     message_context: tuple[Any, _FakeMessageService],
 ) -> None:
@@ -283,6 +298,20 @@ async def test_bulk_delete_endpoint_returns_bad_gateway_when_telegram_delete_fai
 
 
 @pytest.mark.asyncio
+async def test_bulk_delete_endpoint_returns_bad_request_on_validation_error(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.bulk_delete_error = ValueError("message_ids must contain only positive integers.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/messages/bulk-delete", json={"message_ids": [12]})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "message_ids must contain only positive integers."
+
+
+@pytest.mark.asyncio
 async def test_bulk_move_endpoint_returns_moved_count(
     message_context: tuple[Any, _FakeMessageService],
 ) -> None:
@@ -315,6 +344,40 @@ async def test_bulk_move_endpoint_returns_not_found_for_missing_category(
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Category 99 was not found."
+
+
+@pytest.mark.asyncio
+async def test_bulk_move_endpoint_returns_not_found_for_missing_message(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.bulk_move_error = MessageNotFoundError("Message 99 was not found.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/messages/bulk-move",
+            json={"message_ids": [99], "category_id": 1},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Message 99 was not found."
+
+
+@pytest.mark.asyncio
+async def test_bulk_move_endpoint_returns_bad_request_on_service_validation_error(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.bulk_move_error = ValueError("category_id must be a positive integer.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/messages/bulk-move",
+            json={"message_ids": [12], "category_id": 1},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "category_id must be a positive integer."
 
 
 @pytest.mark.asyncio
@@ -393,6 +456,34 @@ async def test_update_message_endpoint_returns_not_found_for_missing_category(
 
 
 @pytest.mark.asyncio
+async def test_update_message_endpoint_returns_not_found_for_missing_message(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.update_error = MessageNotFoundError("Message 404 was not found.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.patch("/api/messages/404", json={"content": "updated"})
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Message 404 was not found."
+
+
+@pytest.mark.asyncio
+async def test_update_message_endpoint_returns_bad_request_on_validation_error(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.update_error = ValueError("content must be a string or null.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.patch("/api/messages/12", json={"content": "updated"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "content must be a string or null."
+
+
+@pytest.mark.asyncio
 async def test_update_message_endpoint_rejects_empty_payload(
     message_context: tuple[Any, _FakeMessageService],
 ) -> None:
@@ -464,3 +555,13 @@ async def test_delete_message_endpoint_returns_bad_gateway_when_telegram_delete_
 
     assert response.status_code == 502
     assert response.json()["detail"] == "Telegram rejected message deletion request."
+
+
+@pytest.mark.asyncio
+async def test_get_message_service_dependency_returns_message_service() -> None:
+    session = object()
+
+    service = await get_message_service(session=session)  # type: ignore[arg-type]
+
+    assert isinstance(service, MessageService)
+    assert service.session is session

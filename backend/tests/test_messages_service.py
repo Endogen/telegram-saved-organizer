@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from telethon.errors import RPCError
 
 from app.messages.service import (
     CategoryNotFoundError,
@@ -384,3 +385,103 @@ async def test_update_message_rejects_empty_update_payload() -> None:
 
     with pytest.raises(ValueError, match="At least one update field must be provided."):
         await service.update_message(message_id=1, updates={})
+
+
+@pytest.mark.asyncio
+async def test_list_messages_rejects_non_positive_pagination_values() -> None:
+    session = _FakeSession()
+    service = MessageService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="page must be greater than zero."):
+        await service.list_messages(page=0)
+
+    with pytest.raises(ValueError, match="per_page must be greater than zero."):
+        await service.list_messages(per_page=0)
+
+
+@pytest.mark.asyncio
+async def test_update_message_rejects_unknown_update_fields() -> None:
+    session = _FakeSession()
+    message = _build_message()
+    session.scalar_values = [message]
+    service = MessageService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="Unsupported update field\\(s\\): sender_name."):
+        await service.update_message(message_id=message.id, updates={"sender_name": "Alice"})
+
+    assert session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_update_message_rejects_invalid_category_id_type() -> None:
+    session = _FakeSession()
+    message = _build_message()
+    session.scalar_values = [message]
+    service = MessageService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="category_id must be a positive integer."):
+        await service.update_message(message_id=message.id, updates={"category_id": 0})
+
+    assert session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_update_message_rejects_invalid_content_type() -> None:
+    session = _FakeSession()
+    message = _build_message()
+    session.scalar_values = [message]
+    service = MessageService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="content must be a string or null."):
+        await service.update_message(message_id=message.id, updates={"content": 123})
+
+    assert session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_message_raises_when_telegram_rejects_delete_request() -> None:
+    session = _FakeSession()
+    message = _build_message()
+    session.scalar_values = [message]
+    telegram_client = _FakeTelegramClient()
+    telegram_client.delete_error = RPCError(None, "forbidden", 400)
+    service = MessageService(
+        session=session,  # type: ignore[arg-type]
+        manager=_FakeTelegramManager(telegram_client),
+    )
+
+    with pytest.raises(TelegramMessageDeleteError, match="Telegram rejected message deletion request."):
+        await service.delete_message(message_id=message.id)
+
+    assert session.delete_calls == []
+    assert session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_messages_rejects_non_positive_ids() -> None:
+    session = _FakeSession()
+    service = MessageService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="message_ids must contain only positive integers."):
+        await service.bulk_delete_messages(message_ids=[1, True])
+
+
+@pytest.mark.asyncio
+async def test_bulk_move_messages_reports_multiple_missing_ids() -> None:
+    session = _FakeSession()
+    first = _build_message(message_id=1, telegram_id=1001, category_id=1)
+    destination = Category(
+        id=2,
+        name="Category 2",
+        slug="cat-2",
+        icon="archive",
+        color="#14B8A6",
+        position=2,
+        is_default=False,
+    )
+    session.get_values[(Category, 2)] = destination
+    session.scalars_values = [[first]]
+    service = MessageService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(MessageNotFoundError, match="Messages 9, 10 were not found."):
+        await service.bulk_move_messages(message_ids=[1, 9, 10], category_id=2)

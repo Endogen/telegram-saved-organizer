@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.models import Message, Tag
 from app.tags.service import (
@@ -34,6 +35,7 @@ class _FakeSession:
         self.delete_calls: list[Any] = []
         self.commit_calls = 0
         self.rollback_calls = 0
+        self.commit_error: Exception | None = None
 
     async def scalar(self, statement: Any) -> Any:
         self.scalar_calls.append(statement)
@@ -56,6 +58,8 @@ class _FakeSession:
         self.delete_calls.append(item)
 
     async def commit(self) -> None:
+        if self.commit_error is not None:
+            raise self.commit_error
         self.commit_calls += 1
 
     async def rollback(self) -> None:
@@ -240,3 +244,104 @@ async def test_add_tags_to_message_rejects_invalid_tag_ids() -> None:
     with pytest.raises(ValueError, match="tag_ids must be a positive integer."):
         await service.add_tags_to_message(message_id=1, tag_ids=[0])
 
+
+@pytest.mark.asyncio
+async def test_remove_tag_from_message_raises_when_message_missing() -> None:
+    session = _FakeSession()
+    session.scalar_values = [None]
+    service = TagService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(MessageNotFoundError, match="Message 12 was not found."):
+        await service.remove_tag_from_message(message_id=12, tag_id=2)
+
+
+@pytest.mark.asyncio
+async def test_remove_tag_from_message_raises_when_tag_missing() -> None:
+    session = _FakeSession()
+    session.scalar_values = [_build_message(message_id=8, tag_ids=(2,))]
+    service = TagService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(TagNotFoundError, match="Tag 77 was not found."):
+        await service.remove_tag_from_message(message_id=8, tag_id=77)
+
+
+@pytest.mark.asyncio
+async def test_add_tags_to_message_reports_multiple_missing_tags() -> None:
+    session = _FakeSession()
+    session.scalar_values = [_build_message(message_id=4, tag_ids=())]
+    session.scalars_values = [[_build_tag(tag_id=3, name="x")]]
+    service = TagService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(TagNotFoundError, match="Tags 8, 9 were not found."):
+        await service.add_tags_to_message(message_id=4, tag_ids=[3, 8, 9])
+
+
+@pytest.mark.asyncio
+async def test_create_tag_rolls_back_and_raises_conflict_on_integrity_error() -> None:
+    session = _FakeSession()
+    session.scalar_values = [None]
+    session.commit_error = IntegrityError("insert", {}, Exception("duplicate"))
+    service = TagService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(TagConflictError, match="Tag name already exists."):
+        await service.create_tag(name="Archive", color="#22C55E")
+
+    assert session.rollback_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_create_tag_rejects_non_string_name() -> None:
+    session = _FakeSession()
+    service = TagService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="name must be a string."):
+        await service.create_tag(name=123)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_create_tag_rejects_blank_name() -> None:
+    session = _FakeSession()
+    service = TagService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="name must not be empty."):
+        await service.create_tag(name="   ")
+
+
+@pytest.mark.asyncio
+async def test_create_tag_accepts_none_color() -> None:
+    session = _FakeSession()
+    session.scalar_values = [None]
+    service = TagService(session=session)  # type: ignore[arg-type]
+
+    tag = await service.create_tag(name="Archive")
+
+    assert tag.color is None
+
+
+@pytest.mark.asyncio
+async def test_create_tag_rejects_non_string_color() -> None:
+    session = _FakeSession()
+    service = TagService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="color must be a string or null."):
+        await service.create_tag(name="Archive", color=123)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_create_tag_rejects_invalid_color_pattern() -> None:
+    session = _FakeSession()
+    service = TagService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="color must be a valid hex value like #22C55E."):
+        await service.create_tag(name="Archive", color="#GGGGGG")
+
+
+@pytest.mark.asyncio
+async def test_ensure_name_available_excludes_specific_tag_id() -> None:
+    session = _FakeSession()
+    session.scalar_values = [None]
+    service = TagService(session=session)  # type: ignore[arg-type]
+
+    await service._ensure_name_available(name="Archive", exclude_tag_id=9)
+
+    assert "tags.id !=" in str(session.scalar_calls[0])

@@ -13,6 +13,7 @@ from app.tags.service import (
     TagAssignmentNotFoundError,
     TagConflictError,
     TagNotFoundError,
+    TagService,
 )
 
 
@@ -129,6 +130,20 @@ async def test_create_tag_endpoint_returns_conflict(tag_context: tuple[Any, _Fak
 
 
 @pytest.mark.asyncio
+async def test_create_tag_endpoint_returns_bad_request_on_validation_error(
+    tag_context: tuple[Any, _FakeTagService],
+) -> None:
+    app, service = tag_context
+    service.create_error = ValueError("color must be a valid hex value like #22C55E.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/tags", json={"name": "archive", "color": "#14B8A6"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "color must be a valid hex value like #22C55E."
+
+
+@pytest.mark.asyncio
 async def test_delete_tag_endpoint_returns_confirmation(tag_context: tuple[Any, _FakeTagService]) -> None:
     app, service = tag_context
     transport = ASGITransport(app=app)
@@ -150,6 +165,20 @@ async def test_delete_tag_endpoint_returns_not_found(tag_context: tuple[Any, _Fa
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Tag 404 was not found."
+
+
+@pytest.mark.asyncio
+async def test_delete_tag_endpoint_returns_bad_request_on_validation_error(
+    tag_context: tuple[Any, _FakeTagService],
+) -> None:
+    app, service = tag_context
+    service.delete_error = ValueError("tag_id must be a positive integer.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.delete("/api/tags/3")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "tag_id must be a positive integer."
 
 
 @pytest.mark.asyncio
@@ -188,6 +217,34 @@ async def test_add_tags_to_message_endpoint_returns_not_found_for_message(
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Message 999 was not found."
+
+
+@pytest.mark.asyncio
+async def test_add_tags_to_message_endpoint_returns_not_found_for_tag(
+    tag_context: tuple[Any, _FakeTagService],
+) -> None:
+    app, service = tag_context
+    service.add_error = TagNotFoundError("Tag 6 was not found.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/messages/12/tags", json={"tag_ids": [6]})
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Tag 6 was not found."
+
+
+@pytest.mark.asyncio
+async def test_add_tags_to_message_endpoint_returns_bad_request_on_validation_error(
+    tag_context: tuple[Any, _FakeTagService],
+) -> None:
+    app, service = tag_context
+    service.add_error = ValueError("tag_ids must contain only positive integers.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/messages/12/tags", json={"tag_ids": [1]})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "tag_ids must contain only positive integers."
 
 
 @pytest.mark.asyncio
@@ -234,3 +291,54 @@ async def test_remove_tag_from_message_endpoint_returns_not_found_for_assignment
     assert response.status_code == 404
     assert response.json()["detail"] == "Tag 4 is not assigned to message 12."
 
+
+@pytest.mark.asyncio
+async def test_remove_tag_from_message_endpoint_returns_not_found_for_message(
+    tag_context: tuple[Any, _FakeTagService],
+) -> None:
+    app, service = tag_context
+    service.remove_error = MessageNotFoundError("Message 12 was not found.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.delete("/api/messages/12/tags/4")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Message 12 was not found."
+
+
+@pytest.mark.asyncio
+async def test_remove_tag_from_message_endpoint_returns_not_found_for_tag(
+    tag_context: tuple[Any, _FakeTagService],
+) -> None:
+    app, service = tag_context
+    service.remove_error = TagNotFoundError("Tag 4 was not found.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.delete("/api/messages/12/tags/4")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Tag 4 was not found."
+
+
+@pytest.mark.asyncio
+async def test_remove_tag_from_message_endpoint_returns_bad_request_on_validation_error(
+    tag_context: tuple[Any, _FakeTagService],
+) -> None:
+    app, service = tag_context
+    service.remove_error = ValueError("tag_id must be a positive integer.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.delete("/api/messages/12/tags/4")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "tag_id must be a positive integer."
+
+
+@pytest.mark.asyncio
+async def test_get_tag_service_dependency_returns_tag_service() -> None:
+    session = object()
+
+    service = await get_tag_service(session=session)  # type: ignore[arg-type]
+
+    assert isinstance(service, TagService)
+    assert service.session is session
