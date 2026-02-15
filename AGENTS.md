@@ -50,3 +50,4 @@ Run after each implementation:
 - 2026-02-15: FastAPI sync dependencies can hang in this sandbox's threadpool path; prefer `async def` dependency providers (and async test overrides) for API tests.
 - 2026-02-15: Saved Messages scanner pagination can be tested deterministically with fake `iter_messages(entity, limit, offset_id)` pages keyed by `offset_id`, avoiding live Telegram calls.
 - 2026-02-15: Backend backpressure checks (`ruff` + `pytest`) run successfully against the existing `backend/.venv` in this sandbox.
+- 2026-02-15: Message CRUD service behavior can be tested with a fake async session object (`scalar`/`scalars`/`get`/`commit`/`delete`) to avoid live async SQLite I/O in this sandbox.

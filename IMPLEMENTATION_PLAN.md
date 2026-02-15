@@ -20,7 +20,7 @@ STATUS: IN PROGRESS
 
 ## Phase 3: Backend API
 
-- [ ] 3.1: Implement message CRUD service and endpoints (list, get, update, delete)
+- [x] 3.1: Implement message CRUD service and endpoints (list, get, update, delete)
 - [ ] 3.2: Implement search and filtering (full-text search, category filter, tag filter, pagination)
 - [ ] 3.3: Implement bulk operations (bulk delete, bulk move)
 - [ ] 3.4: Implement category endpoints (list with counts, create, update, delete)
