@@ -53,3 +53,4 @@ Run after each implementation:
 - 2026-02-15: Message CRUD service behavior can be tested with a fake async session object (`scalar`/`scalars`/`get`/`commit`/`delete`) to avoid live async SQLite I/O in this sandbox.
 - 2026-02-15: Message bulk operations can be tested reliably with fake async session objects and API dependency overrides (`httpx.ASGITransport`) without touching live SQLite.
 - 2026-02-15: Category service/API behavior can be tested with fake async sessions (`execute`/`scalar`/`scalars`/`get`) and async dependency overrides, avoiding sandbox threadpool/SQLite hangs.
+- 2026-02-15: Tag service/API behavior can be tested with fake async sessions (`scalar`/`scalars`/`get`) plus async dependency overrides (`httpx.ASGITransport`), avoiding live SQLite and threadpool hangs in this sandbox.

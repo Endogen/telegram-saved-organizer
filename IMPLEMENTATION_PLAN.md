@@ -24,7 +24,7 @@ STATUS: IN PROGRESS
 - [x] 3.2: Implement search and filtering (full-text search, category filter, tag filter, pagination)
 - [x] 3.3: Implement bulk operations (bulk delete, bulk move)
 - [x] 3.4: Implement category endpoints (list with counts, create, update, delete)
-- [ ] 3.5: Implement tag endpoints (list, create, delete, add/remove from messages)
+- [x] 3.5: Implement tag endpoints (list, create, delete, add/remove from messages)
 - [ ] 3.6: Implement Telegram message deletion (delete locally + on Telegram)
 
 ## Phase 4: Frontend Layout & Navigation
