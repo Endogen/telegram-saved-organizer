@@ -13,6 +13,7 @@ from app.telegram.scanner import (
     ScannedMessage,
     SavedMessagesScanner,
 )
+from app.telegram.service import TelegramClientNotConnectedError, TelegramScanService
 
 __all__ = [
     "TelegramClientCredentialsMismatchError",
@@ -23,5 +24,7 @@ __all__ = [
     "ScanProgress",
     "ScannedMessage",
     "SavedMessagesScanner",
+    "TelegramClientNotConnectedError",
+    "TelegramScanService",
     "telegram_client_manager",
 ]

@@ -16,7 +16,7 @@ STATUS: IN PROGRESS
 - [x] 2.2: Create auth endpoints (connect, verify code, status, disconnect)
 - [x] 2.3: Implement Saved Messages scanner with pagination and progress tracking
 - [x] 2.4: Implement auto-categorization logic for scanned messages
-- [ ] 2.5: Create scan endpoints (start, status, stop)
+- [x] 2.5: Create scan endpoints (start, status, stop)
 
 ## Phase 3: Backend API
 

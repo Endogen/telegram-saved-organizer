@@ -104,6 +104,14 @@ class TelegramClientManager:
 
         return any(path.exists() for path in self._session_artifacts())
 
+    def get_connected_client(self) -> TelethonClientProtocol | None:
+        """Return the cached connected client if available."""
+
+        client = self._client
+        if client is None or not client.is_connected():
+            return None
+        return client
+
     def _ensure_credentials_compatible(self, *, api_id: int, api_hash: str) -> None:
         if self._client is None:
             return
