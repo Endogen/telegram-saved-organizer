@@ -1,4 +1,4 @@
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import {
   Archive,
   Code2,
@@ -131,6 +131,7 @@ type MessageCardProps = {
 };
 
 export function MessageCard({ message }: MessageCardProps) {
+  const shouldReduceMotion = useReducedMotion();
   const CategoryIcon = resolveCategoryIcon(message.category.icon);
   const urlDomain = parseUrlDomain(message.url);
   const hasUrl = message.url !== null && message.url.trim().length > 0;
@@ -140,15 +141,32 @@ export function MessageCard({ message }: MessageCardProps) {
     message.content !== null && message.content.trim().length > 0
       ? message.content.trim()
       : "No text preview available for this message.";
+  const cardEnterAnimation = shouldReduceMotion ? false : { opacity: 0, y: 20, scale: 0.98 };
+  const cardExitAnimation = shouldReduceMotion
+    ? { opacity: 0, transition: { duration: 0.12 } }
+    : { opacity: 0, scale: 0.95, y: 6, transition: { duration: 0.2, ease: [0.4, 0, 1, 1] } };
+  const hoverAnimation = shouldReduceMotion
+    ? undefined
+    : {
+        y: -6,
+        boxShadow: "0 24px 44px -28px rgba(15, 23, 42, 0.55)",
+        transition: { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] },
+      };
 
   return (
     <motion.article
       layout
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.95 }}
-      whileHover={{ y: -4, transition: { duration: 0.15 } }}
-      className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.96)] p-4 shadow-sm transition-shadow hover:shadow-md"
+      initial={cardEnterAnimation}
+      animate={{
+        opacity: 1,
+        y: 0,
+        scale: 1,
+        boxShadow: "0 1px 2px rgba(15, 23, 42, 0.08)",
+        transition: shouldReduceMotion ? { duration: 0 } : { duration: 0.28, ease: [0.22, 1, 0.36, 1] },
+      }}
+      exit={cardExitAnimation}
+      whileHover={hoverAnimation}
+      className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.96)] p-4 shadow-sm"
     >
       <div className="flex items-start justify-between gap-3">
         <span
