@@ -112,6 +112,44 @@ async def test_list_messages_returns_paginated_items() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_messages_applies_category_tag_and_search_filters() -> None:
+    session = _FakeSession()
+    message = _build_message()
+    session.scalar_values = [1]
+    session.scalars_values = [[message]]
+
+    service = MessageService(session=session)  # type: ignore[arg-type]
+    await service.list_messages(
+        category_slug=" links ",
+        tag_names=["read-later", "read-later", " urgent "],
+        search=" alice ",
+    )
+
+    list_statement = str(session.scalars_calls[0])
+    total_statement = str(session.scalar_calls[0])
+
+    assert "WHERE" in list_statement
+    assert "categories.slug" in list_statement
+    assert "tags.name IN" in list_statement
+    assert "LIKE" in list_statement
+    assert "categories.slug" in total_statement
+
+
+@pytest.mark.asyncio
+async def test_list_messages_ignores_blank_filters() -> None:
+    session = _FakeSession()
+    session.scalar_values = [0]
+    service = MessageService(session=session)  # type: ignore[arg-type]
+
+    await service.list_messages(category_slug="   ", tag_names=["", "   "], search="   ")
+
+    list_statement = str(session.scalars_calls[0])
+
+    assert "WHERE" not in list_statement
+    assert "EXISTS" not in list_statement
+
+
+@pytest.mark.asyncio
 async def test_get_message_raises_when_not_found() -> None:
     session = _FakeSession()
     session.scalar_values = [None]

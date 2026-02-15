@@ -55,7 +55,9 @@ class _FakeMessage:
 
 class _FakeMessageService:
     def __init__(self) -> None:
-        self.list_calls: list[tuple[int, int, MessageSort]] = []
+        self.list_calls: list[
+            tuple[int, int, MessageSort, str | None, tuple[str, ...] | None, str | None]
+        ] = []
         self.get_calls: list[int] = []
         self.update_calls: list[tuple[int, dict[str, Any]]] = []
         self.delete_calls: list[int] = []
@@ -74,8 +76,20 @@ class _FakeMessageService:
         page: int = 1,
         per_page: int = 50,
         sort: MessageSort = MessageSort.DATE_DESC,
+        category_slug: str | None = None,
+        tag_names: list[str] | None = None,
+        search: str | None = None,
     ) -> MessageListResult:
-        self.list_calls.append((page, per_page, sort))
+        self.list_calls.append(
+            (
+                page,
+                per_page,
+                sort,
+                category_slug,
+                tuple(tag_names) if tag_names is not None else None,
+                search,
+            )
+        )
         if self.list_error is not None:
             raise self.list_error
         return self.list_result
@@ -159,7 +173,31 @@ async def test_list_messages_endpoint_returns_paginated_response(
     assert body["items"][0]["id"] == 12
     assert body["items"][0]["category"]["slug"] == "links"
     assert body["items"][0]["tags"] == [{"id": 2, "name": "read-later", "color": "#22C55E"}]
-    assert service.list_calls == [(2, 10, MessageSort.DATE_ASC)]
+    assert service.list_calls == [(2, 10, MessageSort.DATE_ASC, None, None, None)]
+
+
+@pytest.mark.asyncio
+async def test_list_messages_endpoint_forwards_search_and_filter_params(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/api/messages?"
+            "category=links&"
+            "tag=read-later&"
+            "tag=urgent&"
+            "search=telegram&"
+            "page=1&"
+            "per_page=25&"
+            "sort=date_desc"
+        )
+
+    assert response.status_code == 200
+    assert service.list_calls == [
+        (1, 25, MessageSort.DATE_DESC, "links", ("read-later", "urgent"), "telegram")
+    ]
 
 
 @pytest.mark.asyncio

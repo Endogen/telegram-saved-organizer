@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import Category, Message
+from app.models import Category, Message, Tag
 
 
 class MessageNotFoundError(RuntimeError):
@@ -50,6 +50,9 @@ class MessageService:
         page: int = 1,
         per_page: int = 50,
         sort: MessageSort = MessageSort.DATE_DESC,
+        category_slug: str | None = None,
+        tag_names: Sequence[str] | None = None,
+        search: str | None = None,
     ) -> MessageListResult:
         """List messages with pagination and sorting."""
 
@@ -58,14 +61,45 @@ class MessageService:
         if per_page <= 0:
             raise ValueError("per_page must be greater than zero.")
 
+        normalized_category_slug = category_slug.strip() if category_slug is not None else None
+        if normalized_category_slug == "":
+            normalized_category_slug = None
+
+        normalized_search = search.strip() if search is not None else None
+        if normalized_search == "":
+            normalized_search = None
+
+        normalized_tag_names = tuple(
+            dict.fromkeys(tag_name.strip() for tag_name in (tag_names or ()) if tag_name.strip())
+        )
+
         order_by = Message.date.desc() if sort == MessageSort.DATE_DESC else Message.date.asc()
         offset = (page - 1) * per_page
 
-        total_statement = select(func.count()).select_from(Message)
+        filtered_statement = select(Message)
+        if normalized_category_slug is not None:
+            filtered_statement = filtered_statement.where(
+                Message.category.has(Category.slug == normalized_category_slug)
+            )
+        if normalized_tag_names:
+            filtered_statement = filtered_statement.where(
+                Message.tags.any(Tag.name.in_(normalized_tag_names))
+            )
+        if normalized_search is not None:
+            search_pattern = f"%{normalized_search}%"
+            filtered_statement = filtered_statement.where(
+                or_(
+                    Message.content.ilike(search_pattern),
+                    Message.url.ilike(search_pattern),
+                    Message.sender_name.ilike(search_pattern),
+                )
+            )
+
+        total_statement = select(func.count()).select_from(filtered_statement.order_by(None).subquery())
         total = await self.session.scalar(total_statement)
 
         messages_statement = (
-            select(Message)
+            filtered_statement
             .options(selectinload(Message.category), selectinload(Message.tags))
             .order_by(order_by)
             .offset(offset)

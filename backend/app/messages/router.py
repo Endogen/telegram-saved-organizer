@@ -33,10 +33,20 @@ async def list_messages(
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=50, ge=1, le=200),
     sort: MessageSort = Query(default=MessageSort.DATE_DESC),
+    category: str | None = Query(default=None, min_length=1),
+    tag: list[str] | None = Query(default=None),
+    search: str | None = Query(default=None),
     service: MessageService = Depends(get_message_service),
 ) -> MessageListResponse:
     try:
-        result = await service.list_messages(page=page, per_page=per_page, sort=sort)
+        result = await service.list_messages(
+            page=page,
+            per_page=per_page,
+            sort=sort,
+            category_slug=category,
+            tag_names=tag,
+            search=search,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return MessageListResponse.from_result(result)
