@@ -15,6 +15,15 @@ type MessageListQuery = {
   tag?: string[];
 };
 
+type BulkDeleteResponse = {
+  deleted_count: number;
+};
+
+type BulkMoveResponse = {
+  moved_count: number;
+  category_id: number;
+};
+
 function toErrorMessage(payload: unknown): string | null {
   if (typeof payload !== "object" || payload === null) {
     return null;
@@ -106,4 +115,20 @@ export async function moveMessageToCategory(messageId: number, categoryId: numbe
 
 export async function deleteMessage(messageId: number): Promise<void> {
   await requestJson<{ deleted: boolean }>(`/${messageId}`, { method: "DELETE" });
+}
+
+export async function bulkDeleteMessages(messageIds: number[]): Promise<BulkDeleteResponse> {
+  return requestJson<BulkDeleteResponse>("/bulk-delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message_ids: messageIds }),
+  });
+}
+
+export async function bulkMoveMessages(messageIds: number[], categoryId: number): Promise<BulkMoveResponse> {
+  return requestJson<BulkMoveResponse>("/bulk-move", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message_ids: messageIds, category_id: categoryId }),
+  });
 }

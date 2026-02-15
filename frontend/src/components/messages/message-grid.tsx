@@ -6,19 +6,26 @@ import type { MessageListItem } from "@/types/message";
 type MessageGridProps = {
   messages: MessageListItem[];
   pendingDeleteMessageId: number | null;
+  isSelectionMode: boolean;
+  selectedMessageIds: number[];
   onMoveRequest: (message: MessageListItem) => void;
   onTagRequest: (message: MessageListItem) => void;
   onDeleteRequest: (message: MessageListItem) => void;
+  onSelectionChange: (message: MessageListItem, isSelected: boolean) => void;
 };
 
 export function MessageGrid({
   messages,
   pendingDeleteMessageId,
+  isSelectionMode,
+  selectedMessageIds,
   onMoveRequest,
   onTagRequest,
   onDeleteRequest,
+  onSelectionChange,
 }: MessageGridProps) {
   const shouldReduceMotion = useReducedMotion();
+  const selectedIdSet = new Set(selectedMessageIds);
 
   return (
     <motion.div
@@ -32,9 +39,12 @@ export function MessageGrid({
             key={message.id}
             message={message}
             isDeletePending={pendingDeleteMessageId === message.id}
+            isSelectionMode={isSelectionMode}
+            isSelected={selectedIdSet.has(message.id)}
             onMoveRequest={onMoveRequest}
             onTagRequest={onTagRequest}
             onDeleteRequest={onDeleteRequest}
+            onSelectionChange={onSelectionChange}
           />
         ))}
       </AnimatePresence>

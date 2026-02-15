@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
-import { Search, X } from "lucide-react";
+import { CheckSquare2, Search, X } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
-import { deleteMessage, listMessages, moveMessageToCategory } from "@/api/messages";
+import {
+  bulkDeleteMessages,
+  bulkMoveMessages,
+  deleteMessage,
+  listMessages,
+  moveMessageToCategory,
+} from "@/api/messages";
 import { addTagsToMessage, createTag, listTags, removeTagFromMessage } from "@/api/tags";
 import { MoveDialog } from "@/components/categories/move-dialog";
+import { BulkActions } from "@/components/messages/bulk-actions";
 import { MessageGrid } from "@/components/messages/message-grid";
 import { TagInputDialog } from "@/components/tags/tag-input";
 import { Button } from "@/components/ui/button";
@@ -239,6 +246,34 @@ function localMoveMessage(
   });
 }
 
+function localMoveMessages(
+  messages: MessageListItem[],
+  messageIds: number[],
+  targetCategory: CategoryWithCount,
+): MessageListItem[] {
+  const targetIds = new Set(messageIds);
+  const now = new Date().toISOString();
+
+  return messages.map((message) => {
+    if (!targetIds.has(message.id)) {
+      return message;
+    }
+
+    return {
+      ...message,
+      category_id: targetCategory.id,
+      category: {
+        id: targetCategory.id,
+        name: targetCategory.name,
+        slug: targetCategory.slug,
+        icon: targetCategory.icon,
+        color: targetCategory.color,
+      },
+      updated_at: now,
+    };
+  });
+}
+
 function localAddTag(messages: MessageListItem[], messageId: number, tag: MessageTag): MessageListItem[] {
   const now = new Date().toISOString();
 
@@ -285,8 +320,13 @@ export function MessagesPage() {
   const [pendingDeleteMessageId, setPendingDeleteMessageId] = useState<number | null>(null);
   const [isMoveSubmitting, setIsMoveSubmitting] = useState(false);
   const [isTagSubmitting, setIsTagSubmitting] = useState(false);
+  const [isBulkSelectionMode, setIsBulkSelectionMode] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<number[]>([]);
+  const [bulkMoveCategoryId, setBulkMoveCategoryId] = useState<number | null>(null);
+  const [bulkActionPending, setBulkActionPending] = useState<"move" | "delete" | null>(null);
   const [moveDialogError, setMoveDialogError] = useState<string | null>(null);
   const [tagDialogError, setTagDialogError] = useState<string | null>(null);
+  const [bulkActionError, setBulkActionError] = useState<string | null>(null);
   const { categories: fetchedCategories } = useCategories();
   const categoryFilter = searchParams.get("category")?.trim().toLowerCase() ?? "";
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
@@ -338,6 +378,21 @@ export function MessagesPage() {
     () => (fetchedCategories.length > 0 ? fetchedCategories : deriveCategoriesFromMessages(messages)),
     [fetchedCategories, messages],
   );
+
+  useEffect(() => {
+    if (actionCategories.length === 0) {
+      setBulkMoveCategoryId(null);
+      return;
+    }
+
+    setBulkMoveCategoryId((currentCategoryId) => {
+      if (currentCategoryId !== null && actionCategories.some((category) => category.id === currentCategoryId)) {
+        return currentCategoryId;
+      }
+
+      return actionCategories[0].id;
+    });
+  }, [actionCategories]);
 
   const availableCategories = useMemo(
     () =>
@@ -413,6 +468,27 @@ export function MessagesPage() {
     });
   }, [categoryFilter, messages, normalizedSearchQuery, selectedTagFilters, sortOption]);
 
+  useEffect(() => {
+    if (!isBulkSelectionMode) {
+      return;
+    }
+
+    const visibleIds = new Set(filteredAndSorted.map((message) => message.id));
+    setSelectedMessageIds((currentIds) => {
+      const nextIds = currentIds.filter((messageId) => visibleIds.has(messageId));
+      return nextIds.length === currentIds.length ? currentIds : nextIds;
+    });
+  }, [filteredAndSorted, isBulkSelectionMode]);
+
+  useEffect(() => {
+    if (isBulkSelectionMode) {
+      return;
+    }
+
+    setSelectedMessageIds([]);
+    setBulkActionError(null);
+  }, [isBulkSelectionMode]);
+
   const activeMoveMessage = useMemo(
     () => messages.find((message) => message.id === moveDialogMessageId) ?? null,
     [messages, moveDialogMessageId],
@@ -465,6 +541,45 @@ export function MessagesPage() {
     setSelectedTagFilters([]);
     setSortOption("date_desc");
     setCategoryParam("");
+  }
+
+  function activateBulkSelectionMode() {
+    setBulkActionError(null);
+    setIsBulkSelectionMode(true);
+  }
+
+  function exitBulkSelectionMode() {
+    setIsBulkSelectionMode(false);
+  }
+
+  function handleMessageSelectionChange(message: MessageListItem, isSelected: boolean) {
+    setBulkActionError(null);
+
+    if (isSelected) {
+      setIsBulkSelectionMode(true);
+    }
+
+    setSelectedMessageIds((currentIds) => {
+      if (isSelected) {
+        if (currentIds.includes(message.id)) {
+          return currentIds;
+        }
+        return [...currentIds, message.id];
+      }
+
+      return currentIds.filter((messageId) => messageId !== message.id);
+    });
+  }
+
+  function handleSelectAllFiltered() {
+    setBulkActionError(null);
+    setIsBulkSelectionMode(true);
+    setSelectedMessageIds(filteredAndSorted.map((message) => message.id));
+  }
+
+  function clearSelectedMessages() {
+    setBulkActionError(null);
+    setSelectedMessageIds([]);
   }
 
   async function handleMoveMessage(messageId: number, categoryId: number) {
@@ -590,6 +705,9 @@ export function MessagesPage() {
       setMessages((currentMessages) =>
         currentMessages.filter((message) => message.id !== targetMessage.id),
       );
+      setSelectedMessageIds((currentIds) =>
+        currentIds.filter((messageId) => messageId !== targetMessage.id),
+      );
       if (moveDialogMessageId === targetMessage.id) {
         setMoveDialogMessageId(null);
       }
@@ -600,6 +718,83 @@ export function MessagesPage() {
       setPageError(toErrorMessage(error, "Unable to delete this message right now."));
     } finally {
       setPendingDeleteMessageId(null);
+    }
+  }
+
+  async function handleBulkMove() {
+    if (selectedMessageIds.length === 0) {
+      return;
+    }
+    if (bulkMoveCategoryId === null) {
+      setBulkActionError("Select a category before moving messages.");
+      return;
+    }
+
+    const targetCategory = actionCategories.find((category) => category.id === bulkMoveCategoryId);
+    if (!targetCategory) {
+      setBulkActionError("Selected category was not found.");
+      return;
+    }
+
+    const targetMessageIds = [...selectedMessageIds];
+    setPageError(null);
+    setBulkActionError(null);
+    setBulkActionPending("move");
+
+    try {
+      if (isApiBackedData) {
+        await bulkMoveMessages(targetMessageIds, bulkMoveCategoryId);
+      }
+
+      setMessages((currentMessages) =>
+        localMoveMessages(currentMessages, targetMessageIds, targetCategory),
+      );
+      setSelectedMessageIds([]);
+    } catch (error) {
+      setBulkActionError(toErrorMessage(error, "Unable to move selected messages right now."));
+    } finally {
+      setBulkActionPending(null);
+    }
+  }
+
+  async function handleBulkDelete() {
+    if (selectedMessageIds.length === 0) {
+      return;
+    }
+
+    const hasConfirmed = window.confirm(
+      `Delete ${selectedMessageIds.length} selected message${selectedMessageIds.length === 1 ? "" : "s"}? This cannot be undone.`,
+    );
+    if (!hasConfirmed) {
+      return;
+    }
+
+    const targetMessageIds = [...selectedMessageIds];
+    const targetIdSet = new Set(targetMessageIds);
+    setPageError(null);
+    setBulkActionError(null);
+    setBulkActionPending("delete");
+
+    try {
+      if (isApiBackedData) {
+        await bulkDeleteMessages(targetMessageIds);
+      }
+
+      setMessages((currentMessages) =>
+        currentMessages.filter((message) => !targetIdSet.has(message.id)),
+      );
+      setSelectedMessageIds([]);
+
+      if (moveDialogMessageId !== null && targetIdSet.has(moveDialogMessageId)) {
+        setMoveDialogMessageId(null);
+      }
+      if (tagDialogMessageId !== null && targetIdSet.has(tagDialogMessageId)) {
+        setTagDialogMessageId(null);
+      }
+    } catch (error) {
+      setBulkActionError(toErrorMessage(error, "Unable to delete selected messages right now."));
+    } finally {
+      setBulkActionPending(null);
     }
   }
 
@@ -721,13 +916,52 @@ export function MessagesPage() {
         </div>
       </div>
 
-      <p className="mt-4 text-sm text-[hsl(var(--muted-foreground))]">
-        Showing {filteredAndSorted.length} of {messages.length} messages.
-      </p>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-[hsl(var(--muted-foreground))]">
+          Showing {filteredAndSorted.length} of {messages.length} messages.
+        </p>
+
+        {!isBulkSelectionMode ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={activateBulkSelectionMode}
+            disabled={filteredAndSorted.length === 0}
+          >
+            <CheckSquare2 className="size-3.5" />
+            Bulk select
+          </Button>
+        ) : null}
+      </div>
+
+      {isBulkSelectionMode ? (
+        <BulkActions
+          selectedCount={selectedMessageIds.length}
+          filteredCount={filteredAndSorted.length}
+          categories={actionCategories}
+          selectedCategoryId={bulkMoveCategoryId}
+          isMoveSubmitting={bulkActionPending === "move"}
+          isDeleteSubmitting={bulkActionPending === "delete"}
+          errorMessage={bulkActionError}
+          onSelectAllFiltered={handleSelectAllFiltered}
+          onClearSelection={clearSelectedMessages}
+          onSelectedCategoryChange={setBulkMoveCategoryId}
+          onBulkMove={() => {
+            void handleBulkMove();
+          }}
+          onBulkDelete={() => {
+            void handleBulkDelete();
+          }}
+          onExit={exitBulkSelectionMode}
+        />
+      ) : null}
 
       <MessageGrid
         messages={filteredAndSorted}
         pendingDeleteMessageId={pendingDeleteMessageId}
+        isSelectionMode={isBulkSelectionMode}
+        selectedMessageIds={selectedMessageIds}
         onMoveRequest={(message) => {
           setMoveDialogError(null);
           setMoveDialogMessageId(message.id);
@@ -739,6 +973,7 @@ export function MessagesPage() {
         onDeleteRequest={(message) => {
           void handleDeleteMessage(message);
         }}
+        onSelectionChange={handleMessageSelectionChange}
       />
 
       {filteredAndSorted.length === 0 ? (

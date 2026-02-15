@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import {
   Archive,
+  Check,
   Code2,
   FileText,
   FolderInput,
@@ -133,17 +134,23 @@ function withAlpha(color: string | null, alphaHex: string): string | null {
 type MessageCardProps = {
   message: MessageListItem;
   isDeletePending?: boolean;
+  isSelectionMode?: boolean;
+  isSelected?: boolean;
   onMoveRequest: (message: MessageListItem) => void;
   onTagRequest: (message: MessageListItem) => void;
   onDeleteRequest: (message: MessageListItem) => void;
+  onSelectionChange?: (message: MessageListItem, isSelected: boolean) => void;
 };
 
 export function MessageCard({
   message,
   isDeletePending = false,
+  isSelectionMode = false,
+  isSelected = false,
   onMoveRequest,
   onTagRequest,
   onDeleteRequest,
+  onSelectionChange,
 }: MessageCardProps) {
   const shouldReduceMotion = useReducedMotion();
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -211,20 +218,40 @@ export function MessageCard({
       }}
       exit={cardExitAnimation}
       whileHover={hoverAnimation}
-      className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.96)] p-4 shadow-sm"
+      className="group rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.96)] p-4 shadow-sm"
     >
       <div className="flex items-start justify-between gap-3">
-        <span
-          className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold"
-          style={{
-            color: message.category.color,
-            borderColor: withAlpha(message.category.color, "66") ?? "hsl(var(--border))",
-            backgroundColor: withAlpha(message.category.color, "1A") ?? "hsl(var(--muted))",
-          }}
-        >
-          <CategoryIcon className="size-3.5" />
-          {message.category.name}
-        </span>
+        <div className="flex items-start gap-2">
+          <label
+            className={[
+              "mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded border text-[hsl(var(--foreground))] transition-opacity",
+              isSelectionMode
+                ? "border-[hsl(var(--primary)/0.55)] bg-[hsl(var(--primary)/0.16)] opacity-100"
+                : "border-[hsl(var(--border))] bg-[hsl(var(--background))] opacity-0 group-hover:opacity-100 focus-within:opacity-100",
+            ].join(" ")}
+          >
+            <span className="sr-only">Select message</span>
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={(event) => onSelectionChange?.(message, event.target.checked)}
+              className="peer sr-only"
+            />
+            <Check className="size-3.5 opacity-0 transition-opacity peer-checked:opacity-100" />
+          </label>
+
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold"
+            style={{
+              color: message.category.color,
+              borderColor: withAlpha(message.category.color, "66") ?? "hsl(var(--border))",
+              backgroundColor: withAlpha(message.category.color, "1A") ?? "hsl(var(--muted))",
+            }}
+          >
+            <CategoryIcon className="size-3.5" />
+            {message.category.name}
+          </span>
+        </div>
 
         <div className="relative flex items-center gap-1.5" ref={menuRef}>
           <time
