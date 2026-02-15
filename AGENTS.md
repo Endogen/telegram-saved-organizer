@@ -71,3 +71,4 @@ Run after each implementation:
 - 2026-02-15: Message/category/tag service+API branch coverage can be completed with fake async sessions and async dependency overrides (`httpx.ASGITransport`), including router `ValueError` mappings and service `IntegrityError`/`RPCError` paths, while keeping tests fully offline and deterministic.
 - 2026-02-15: Scanner/categorizer branch coverage can be completed with pure fake message/client objects (including malformed IDs, dates, and URLs), reaching deterministic 100% module coverage with no Telegram/network or SQLite I/O.
 - 2026-02-15: Vitest startup in this sandbox fails DNS lookup for `localhost`; setting Vite `server.host` and frontend proxy target to `127.0.0.1` keeps frontend test execution reliable.
+- 2026-02-15: Framer Motion exit animations can keep filtered cards briefly in the DOM during tests; use `waitFor` for post-filter removal assertions to avoid flaky false negatives.
