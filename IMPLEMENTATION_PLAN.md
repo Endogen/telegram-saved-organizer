@@ -15,7 +15,7 @@ STATUS: IN PROGRESS
 - [x] 2.1: Implement Telethon client wrapper with session management
 - [x] 2.2: Create auth endpoints (connect, verify code, status, disconnect)
 - [x] 2.3: Implement Saved Messages scanner with pagination and progress tracking
-- [ ] 2.4: Implement auto-categorization logic for scanned messages
+- [x] 2.4: Implement auto-categorization logic for scanned messages
 - [ ] 2.5: Create scan endpoints (start, status, stop)
 
 ## Phase 3: Backend API

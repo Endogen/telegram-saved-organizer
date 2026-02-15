@@ -5,6 +5,7 @@ from app.telegram.client import (
     TelegramClientManager,
     telegram_client_manager,
 )
+from app.telegram.categorizer import categorize_scanned_message
 from app.telegram.scanner import (
     ScanAlreadyRunningError,
     ScanPage,
@@ -16,6 +17,7 @@ from app.telegram.scanner import (
 __all__ = [
     "TelegramClientCredentialsMismatchError",
     "TelegramClientManager",
+    "categorize_scanned_message",
     "ScanAlreadyRunningError",
     "ScanPage",
     "ScanProgress",

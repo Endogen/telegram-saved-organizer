@@ -49,3 +49,4 @@ Run after each implementation:
 - 2026-02-15: Telethon wrapper behavior can be tested with an injected fake `client_factory` so tests fully avoid real Telegram API/network usage.
 - 2026-02-15: FastAPI sync dependencies can hang in this sandbox's threadpool path; prefer `async def` dependency providers (and async test overrides) for API tests.
 - 2026-02-15: Saved Messages scanner pagination can be tested deterministically with fake `iter_messages(entity, limit, offset_id)` pages keyed by `offset_id`, avoiding live Telegram calls.
+- 2026-02-15: Backend backpressure checks (`ruff` + `pytest`) run successfully against the existing `backend/.venv` in this sandbox.
