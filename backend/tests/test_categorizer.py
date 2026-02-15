@@ -60,8 +60,28 @@ def test_categorize_scanned_message_supports_repository_reference_without_scheme
     assert categorized == "repositories"
 
 
+def test_categorize_scanned_message_detects_repository_url_from_parsed_links() -> None:
+    categorized = categorize_scanned_message(_message(content="Check https://github.com?tab=stars"))
+    assert categorized == "repositories"
+
+
 def test_categorize_scanned_message_classifies_generic_urls_as_links() -> None:
     categorized = categorize_scanned_message(_message(content="Read https://example.com/article"))
+    assert categorized == "links"
+
+
+def test_categorize_scanned_message_classifies_non_repository_extracted_url_as_link() -> None:
+    categorized = categorize_scanned_message(_message(content=None, url="  https://example.com/docs  "))
+    assert categorized == "links"
+
+
+def test_categorize_scanned_message_handles_invalid_repository_host_in_url() -> None:
+    categorized = categorize_scanned_message(_message(content=None, url="mailto:dev@example.com"))
+    assert categorized == "links"
+
+
+def test_categorize_scanned_message_handles_empty_url_host_for_repository_check() -> None:
+    categorized = categorize_scanned_message(_message(content=None, url="https:///missing-host"))
     assert categorized == "links"
 
 

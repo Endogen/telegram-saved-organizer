@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -17,9 +18,9 @@ class _FakeDocumentAttribute:
 
 @dataclass(slots=True)
 class _FakeDocument:
-    mime_type: str
-    size: int
-    attributes: list[_FakeDocumentAttribute]
+    mime_type: str | None
+    size: int | str | bool | None
+    attributes: list[_FakeDocumentAttribute] | None
 
 
 @dataclass(slots=True)
@@ -28,18 +29,30 @@ class _FakeFwdFrom:
 
 
 @dataclass(slots=True)
+class _FakeSender:
+    first_name: str | None = None
+    last_name: str | None = None
+    username: str | None = None
+
+
+@dataclass(slots=True)
 class _FakeMessage:
-    id: int
-    date: datetime
+    id: int | str | None
+    date: datetime | str | None
     message: str | None = None
+    text: str | None = None
     photo: bool = False
     video: bool = False
     audio: bool = False
     voice: bool = False
     document: _FakeDocument | None = None
     fwd_from: _FakeFwdFrom | None = None
+    sender: _FakeSender | None = None
+    to_dict_payload: Any | None = None
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> Any:
+        if self.to_dict_payload is not None:
+            return self.to_dict_payload
         return {"id": self.id, "message": self.message}
 
 
@@ -167,3 +180,124 @@ async def test_scanner_rejects_parallel_runs() -> None:
 
     unblock.set()
     await first_scan_task
+
+
+@pytest.mark.asyncio
+async def test_scanner_rejects_non_positive_page_size() -> None:
+    scanner = SavedMessagesScanner()
+    client = _FakeTelegramClient(pages_by_offset={})
+
+    with pytest.raises(ValueError, match="page_size must be a positive integer."):
+        await scanner.scan(client=client, page_size=0)
+
+
+@pytest.mark.asyncio
+async def test_scanner_records_failure_when_page_callback_raises() -> None:
+    scanner = SavedMessagesScanner()
+    now = datetime.now(tz=UTC)
+    client = _FakeTelegramClient(pages_by_offset={0: [_FakeMessage(id=1, date=now)]})
+
+    async def on_page(_: ScanPage) -> None:
+        raise RuntimeError("callback failed")
+
+    with pytest.raises(RuntimeError, match="callback failed"):
+        await scanner.scan(client=client, page_size=1, on_page=on_page)
+
+    progress = await scanner.get_progress()
+    assert progress.is_running is False
+    assert progress.is_complete is False
+    assert progress.messages_scanned == 0
+    assert progress.pages_scanned == 0
+    assert progress.error == "callback failed"
+    assert progress.started_at is not None
+    assert progress.finished_at is not None
+    assert progress.finished_at >= progress.started_at
+
+
+@pytest.mark.asyncio
+async def test_scanner_stops_when_offset_id_does_not_advance() -> None:
+    scanner = SavedMessagesScanner()
+    now = datetime.now(tz=UTC)
+    client = _FakeTelegramClient(
+        pages_by_offset={
+            0: [_FakeMessage(id=1, date=now), _FakeMessage(id=0, date=now)],
+        }
+    )
+
+    progress = await scanner.scan(client=client, page_size=2)
+
+    assert progress.is_complete is True
+    assert progress.messages_scanned == 2
+    assert progress.pages_scanned == 1
+    assert progress.last_message_id == 0
+    assert client.calls == [("me", 2, 0)]
+
+
+def test_scanner_normalizes_voice_messages_with_text_sender_and_raw_data_fallback() -> None:
+    scanner = SavedMessagesScanner()
+    naive_date = datetime(2026, 1, 1, 12, 0, 0)
+    normalized = scanner._normalize_message(
+        _FakeMessage(
+            id="42",
+            date=naive_date,
+            text="  use text field  ",
+            voice=True,
+            sender=_FakeSender(first_name=" ", username="  bot_name  "),
+            to_dict_payload=["not-a-dict"],
+        )
+    )
+
+    assert normalized.telegram_id == 42
+    assert normalized.content == "use text field"
+    assert normalized.media_type == "voice"
+    assert normalized.sender_name == "bot_name"
+    assert normalized.url is None
+    assert normalized.date.tzinfo == UTC
+    assert normalized.raw_data == {"id": 42, "message": "use text field"}
+
+
+def test_scanner_normalizes_document_sender_name_and_date_fallbacks() -> None:
+    scanner = SavedMessagesScanner()
+    normalized = scanner._normalize_message(
+        _FakeMessage(
+            id=7,
+            date="not-a-datetime",
+            text="  ",
+            document=_FakeDocument(
+                mime_type=None,
+                size=True,
+                attributes=[_FakeDocumentAttribute(file_name=""), _FakeDocumentAttribute(file_name="")],
+            ),
+            sender=_FakeSender(first_name="Jane", last_name="Doe", username="jane"),
+        )
+    )
+
+    assert normalized.media_type == "document"
+    assert normalized.content is None
+    assert normalized.file_name is None
+    assert normalized.file_size is None
+    assert normalized.mime_type is None
+    assert normalized.sender_name == "Jane Doe"
+    assert normalized.date.tzinfo == UTC
+
+
+def test_scanner_extract_file_name_returns_none_without_attributes() -> None:
+    scanner = SavedMessagesScanner()
+
+    assert scanner._extract_file_name(SimpleNamespace(attributes=[])) is None
+    assert scanner._extract_file_name(SimpleNamespace(attributes=None)) is None
+
+
+def test_scanner_minimum_message_id_ignores_invalid_values() -> None:
+    scanner = SavedMessagesScanner()
+    raw_page = [SimpleNamespace(id=True), SimpleNamespace(id=None), SimpleNamespace(id="not-an-int")]
+
+    assert scanner._minimum_message_id(raw_page) is None
+
+
+def test_scanner_rejects_messages_without_valid_ids() -> None:
+    scanner = SavedMessagesScanner()
+    raw_message = SimpleNamespace(id=None, message="content", date=datetime.now(tz=UTC))
+
+    with pytest.raises(ValueError, match="without an id"):
+        scanner._normalize_message(raw_message)
