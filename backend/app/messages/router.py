@@ -7,6 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
 from app.messages.schemas import (
+    MessageBulkDeleteRequest,
+    MessageBulkDeleteResponse,
+    MessageBulkMoveRequest,
+    MessageBulkMoveResponse,
     MessageDeleteResponse,
     MessageListResponse,
     MessageResponse,
@@ -50,6 +54,39 @@ async def list_messages(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return MessageListResponse.from_result(result)
+
+
+@router.post("/bulk-delete", response_model=MessageBulkDeleteResponse)
+async def bulk_delete_messages(
+    payload: MessageBulkDeleteRequest,
+    service: MessageService = Depends(get_message_service),
+) -> MessageBulkDeleteResponse:
+    try:
+        deleted_count = await service.bulk_delete_messages(message_ids=payload.message_ids)
+    except MessageNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return MessageBulkDeleteResponse(deleted_count=deleted_count)
+
+
+@router.post("/bulk-move", response_model=MessageBulkMoveResponse)
+async def bulk_move_messages(
+    payload: MessageBulkMoveRequest,
+    service: MessageService = Depends(get_message_service),
+) -> MessageBulkMoveResponse:
+    try:
+        moved_count = await service.bulk_move_messages(
+            message_ids=payload.message_ids,
+            category_id=payload.category_id,
+        )
+    except MessageNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except CategoryNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return MessageBulkMoveResponse(moved_count=moved_count, category_id=payload.category_id)
 
 
 @router.get("/{message_id}", response_model=MessageResponse)

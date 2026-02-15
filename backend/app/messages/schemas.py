@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -84,6 +84,35 @@ class MessageUpdateRequest(BaseModel):
         if not self.model_fields_set:
             raise ValueError("At least one field must be provided.")
         return self
+
+
+PositiveIdentifier = Annotated[int, Field(gt=0, strict=True)]
+
+
+class MessageBulkDeleteRequest(BaseModel):
+    """Message id list for bulk delete operations."""
+
+    message_ids: list[PositiveIdentifier] = Field(min_length=1)
+
+
+class MessageBulkDeleteResponse(BaseModel):
+    """Bulk delete summary payload."""
+
+    deleted_count: int = Field(ge=0)
+
+
+class MessageBulkMoveRequest(BaseModel):
+    """Bulk category move request payload."""
+
+    message_ids: list[PositiveIdentifier] = Field(min_length=1)
+    category_id: PositiveIdentifier
+
+
+class MessageBulkMoveResponse(BaseModel):
+    """Bulk category move summary payload."""
+
+    moved_count: int = Field(ge=0)
+    category_id: PositiveIdentifier
 
 
 class MessageDeleteResponse(BaseModel):

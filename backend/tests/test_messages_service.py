@@ -214,6 +214,96 @@ async def test_delete_message_removes_item_and_commits() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bulk_delete_messages_removes_items_and_commits() -> None:
+    session = _FakeSession()
+    first = _build_message(message_id=1, telegram_id=1001)
+    second = _build_message(message_id=2, telegram_id=1002)
+    session.scalars_values = [[first, second]]
+    service = MessageService(session=session)  # type: ignore[arg-type]
+
+    deleted_count = await service.bulk_delete_messages(message_ids=[1, 2, 2])
+
+    assert deleted_count == 2
+    assert session.delete_calls == [first, second]
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_messages_raises_when_any_message_missing() -> None:
+    session = _FakeSession()
+    first = _build_message(message_id=1, telegram_id=1001)
+    session.scalars_values = [[first]]
+    service = MessageService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(MessageNotFoundError, match="Message 2 was not found."):
+        await service.bulk_delete_messages(message_ids=[1, 2])
+
+    assert session.delete_calls == []
+    assert session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_bulk_move_messages_updates_category_and_commits() -> None:
+    session = _FakeSession()
+    first = _build_message(message_id=1, telegram_id=1001, category_id=1)
+    second = _build_message(message_id=2, telegram_id=1002, category_id=2)
+    destination = Category(
+        id=3,
+        name="Category 3",
+        slug="cat-3",
+        icon="archive",
+        color="#14B8A6",
+        position=3,
+        is_default=False,
+    )
+    session.get_values[(Category, 3)] = destination
+    session.scalars_values = [[first, second]]
+    service = MessageService(session=session)  # type: ignore[arg-type]
+
+    moved_count = await service.bulk_move_messages(message_ids=[1, 2], category_id=3)
+
+    assert moved_count == 2
+    assert first.category_id == 3
+    assert second.category_id == 3
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_bulk_move_messages_raises_when_any_message_missing() -> None:
+    session = _FakeSession()
+    first = _build_message(message_id=1, telegram_id=1001, category_id=1)
+    destination = Category(
+        id=2,
+        name="Category 2",
+        slug="cat-2",
+        icon="archive",
+        color="#14B8A6",
+        position=2,
+        is_default=False,
+    )
+    session.get_values[(Category, 2)] = destination
+    session.scalars_values = [[first]]
+    service = MessageService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(MessageNotFoundError, match="Message 999 was not found."):
+        await service.bulk_move_messages(message_ids=[1, 999], category_id=2)
+
+    assert session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_bulk_operations_reject_invalid_payloads() -> None:
+    session = _FakeSession()
+    service = MessageService(session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="message_ids must contain at least one id."):
+        await service.bulk_delete_messages(message_ids=[])
+
+    with pytest.raises(ValueError, match="category_id must be a positive integer."):
+        await service.bulk_move_messages(message_ids=[1], category_id=0)
+
+
+@pytest.mark.asyncio
 async def test_update_message_rejects_empty_update_payload() -> None:
     session = _FakeSession()
     service = MessageService(session=session)  # type: ignore[arg-type]

@@ -61,14 +61,20 @@ class _FakeMessageService:
         self.get_calls: list[int] = []
         self.update_calls: list[tuple[int, dict[str, Any]]] = []
         self.delete_calls: list[int] = []
+        self.bulk_delete_calls: list[tuple[int, ...]] = []
+        self.bulk_move_calls: list[tuple[tuple[int, ...], int]] = []
         self.list_error: Exception | None = None
         self.get_error: Exception | None = None
         self.update_error: Exception | None = None
         self.delete_error: Exception | None = None
+        self.bulk_delete_error: Exception | None = None
+        self.bulk_move_error: Exception | None = None
         self.message = _build_message()
         self.list_result = MessageListResult(items=[self.message], total=1, page=1, per_page=50)
         self.get_result = self.message
         self.update_result = self.message
+        self.bulk_delete_result = 0
+        self.bulk_move_result = 0
 
     async def list_messages(
         self,
@@ -110,6 +116,18 @@ class _FakeMessageService:
         self.delete_calls.append(message_id)
         if self.delete_error is not None:
             raise self.delete_error
+
+    async def bulk_delete_messages(self, *, message_ids: list[int]) -> int:
+        self.bulk_delete_calls.append(tuple(message_ids))
+        if self.bulk_delete_error is not None:
+            raise self.bulk_delete_error
+        return self.bulk_delete_result
+
+    async def bulk_move_messages(self, *, message_ids: list[int], category_id: int) -> int:
+        self.bulk_move_calls.append((tuple(message_ids), category_id))
+        if self.bulk_move_error is not None:
+            raise self.bulk_move_error
+        return self.bulk_move_result
 
 
 def _build_message() -> _FakeMessage:
@@ -198,6 +216,86 @@ async def test_list_messages_endpoint_forwards_search_and_filter_params(
     assert service.list_calls == [
         (1, 25, MessageSort.DATE_DESC, "links", ("read-later", "urgent"), "telegram")
     ]
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_endpoint_returns_deleted_count(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.bulk_delete_result = 2
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/messages/bulk-delete", json={"message_ids": [12, 13]})
+
+    assert response.status_code == 200
+    assert response.json() == {"deleted_count": 2}
+    assert service.bulk_delete_calls == [(12, 13)]
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_endpoint_returns_not_found(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.bulk_delete_error = MessageNotFoundError("Message 404 was not found.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/api/messages/bulk-delete", json={"message_ids": [404]})
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Message 404 was not found."
+
+
+@pytest.mark.asyncio
+async def test_bulk_move_endpoint_returns_moved_count(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.bulk_move_result = 3
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/messages/bulk-move",
+            json={"message_ids": [12, 13, 14], "category_id": 5},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"moved_count": 3, "category_id": 5}
+    assert service.bulk_move_calls == [((12, 13, 14), 5)]
+
+
+@pytest.mark.asyncio
+async def test_bulk_move_endpoint_returns_not_found_for_missing_category(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.bulk_move_error = CategoryNotFoundError("Category 99 was not found.")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/messages/bulk-move",
+            json={"message_ids": [12], "category_id": 99},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Category 99 was not found."
+
+
+@pytest.mark.asyncio
+async def test_bulk_move_endpoint_rejects_invalid_payload(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/messages/bulk-move",
+            json={"message_ids": [], "category_id": 0},
+        )
+
+    assert response.status_code == 422
+    assert service.bulk_move_calls == []
 
 
 @pytest.mark.asyncio

@@ -158,6 +158,34 @@ class MessageService:
         await self.session.delete(message)
         await self.session.commit()
 
+    async def bulk_delete_messages(self, *, message_ids: Sequence[int]) -> int:
+        """Delete multiple messages from local storage."""
+
+        normalized_message_ids = self._normalize_message_ids(message_ids=message_ids)
+        messages = await self._load_messages_by_ids(message_ids=normalized_message_ids)
+
+        for message in messages:
+            await self.session.delete(message)
+
+        await self.session.commit()
+        return len(messages)
+
+    async def bulk_move_messages(self, *, message_ids: Sequence[int], category_id: int) -> int:
+        """Move multiple messages to a category."""
+
+        if not isinstance(category_id, int) or isinstance(category_id, bool) or category_id <= 0:
+            raise ValueError("category_id must be a positive integer.")
+
+        normalized_message_ids = self._normalize_message_ids(message_ids=message_ids)
+        await self._ensure_category_exists(category_id=category_id)
+        messages = await self._load_messages_by_ids(message_ids=normalized_message_ids)
+
+        for message in messages:
+            message.category_id = category_id
+
+        await self.session.commit()
+        return len(messages)
+
     async def _load_message(self, *, message_id: int) -> Message | None:
         statement = (
             select(Message)
@@ -166,7 +194,46 @@ class MessageService:
         )
         return await self.session.scalar(statement)
 
+    async def _load_messages_by_ids(self, *, message_ids: Sequence[int]) -> list[Message]:
+        statement = (
+            select(Message)
+            .options(selectinload(Message.category), selectinload(Message.tags))
+            .where(Message.id.in_(message_ids))
+        )
+        message_rows = await self.session.scalars(statement)
+        message_by_id = {message.id: message for message in message_rows}
+
+        missing_ids = [message_id for message_id in message_ids if message_id not in message_by_id]
+        if missing_ids:
+            raise MessageNotFoundError(self._format_missing_message_error(missing_ids=missing_ids))
+
+        return [message_by_id[message_id] for message_id in message_ids]
+
     async def _ensure_category_exists(self, *, category_id: int) -> None:
         category = await self.session.get(Category, category_id)
         if category is None:
             raise CategoryNotFoundError(f"Category {category_id} was not found.")
+
+    def _normalize_message_ids(self, *, message_ids: Sequence[int]) -> tuple[int, ...]:
+        if not message_ids:
+            raise ValueError("message_ids must contain at least one id.")
+
+        normalized_ids: list[int] = []
+        seen_ids: set[int] = set()
+        for message_id in message_ids:
+            if not isinstance(message_id, int) or isinstance(message_id, bool) or message_id <= 0:
+                raise ValueError("message_ids must contain only positive integers.")
+            if message_id in seen_ids:
+                continue
+            seen_ids.add(message_id)
+            normalized_ids.append(message_id)
+
+        return tuple(normalized_ids)
+
+    @staticmethod
+    def _format_missing_message_error(*, missing_ids: Sequence[int]) -> str:
+        if len(missing_ids) == 1:
+            return f"Message {missing_ids[0]} was not found."
+
+        missing_list = ", ".join(str(message_id) for message_id in missing_ids)
+        return f"Messages {missing_list} were not found."
