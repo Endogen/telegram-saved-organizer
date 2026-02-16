@@ -17,8 +17,8 @@ type StatePanelProps = {
 
 const toneClasses: Record<StateTone, string> = {
   default: "border-[hsl(var(--border))] bg-[hsl(var(--background)/0.74)] text-[hsl(var(--muted-foreground))]",
-  warning: "border-amber-300/80 bg-amber-50/80 text-amber-800",
-  error: "border-red-300/70 bg-red-50/80 text-red-800",
+  warning: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  error: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300",
 };
 
 const toneIcons: Record<StateTone, LucideIcon> = {

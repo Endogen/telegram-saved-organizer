@@ -1,6 +1,6 @@
 # Implementation Plan
 
-STATUS: IN PROGRESS
+STATUS: COMPLETE
 
 ## Phase 1: Project Setup & Database
 
@@ -58,8 +58,8 @@ STATUS: IN PROGRESS
 - [x] 7.4: Write frontend tests for message card, grid, and sidebar components
 - [x] 7.5: Write frontend tests for search, filter, and API client
 - [x] 7.6: Achieve ≥80% backend code coverage (add missing tests)
-- [ ] 7.7: Achieve ≥80% frontend code coverage (add missing tests)
-- [ ] 7.8: Final UI polish — consistent spacing, dark mode, mobile refinements
+- [x] 7.7: Achieve ≥80% frontend code coverage (add missing tests)
+- [x] 7.8: Final UI polish — consistent spacing, dark mode, mobile refinements
 
 ## Blockers
 

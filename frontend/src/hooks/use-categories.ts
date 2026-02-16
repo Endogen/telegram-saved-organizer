@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 
 import type { CategoryWithCount } from "@/types/category";
 
@@ -141,46 +142,46 @@ export function useCategories(): UseCategoriesResult {
   const [isLoading, setIsLoading] = useState(true);
   const [isFallback, setIsFallback] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const location = useLocation();
 
-  useEffect(() => {
-    const controller = new AbortController();
+  const fetchCategories = useCallback(async (signal: AbortSignal) => {
+    try {
+      const response = await fetch(CATEGORIES_ENDPOINT, { signal });
+      if (!response.ok) {
+        throw new Error("Failed to fetch categories.");
+      }
 
-    async function fetchCategories() {
-      try {
-        const response = await fetch(CATEGORIES_ENDPOINT, { signal: controller.signal });
-        if (!response.ok) {
-          throw new Error("Failed to fetch categories.");
-        }
+      const payload: unknown = await response.json();
+      const parsed = normalizeCategories(payload);
+      if (parsed === null) {
+        throw new Error("Unexpected category payload.");
+      }
 
-        const payload: unknown = await response.json();
-        const parsed = normalizeCategories(payload);
-        if (parsed === null) {
-          throw new Error("Unexpected category payload.");
-        }
-
-        setCategories(parsed);
-        setIsFallback(false);
-        setError(null);
-      } catch (error) {
-        if (controller.signal.aborted) {
-          return;
-        }
-        setCategories(DEFAULT_CATEGORY_FALLBACK);
-        setIsFallback(true);
-        setError(toErrorMessage(error));
-      } finally {
-        if (!controller.signal.aborted) {
-          setIsLoading(false);
-        }
+      setCategories(parsed);
+      setIsFallback(false);
+      setError(null);
+    } catch (fetchError) {
+      if (signal.aborted) {
+        return;
+      }
+      setCategories(DEFAULT_CATEGORY_FALLBACK);
+      setIsFallback(true);
+      setError(toErrorMessage(fetchError));
+    } finally {
+      if (!signal.aborted) {
+        setIsLoading(false);
       }
     }
+  }, []);
 
-    void fetchCategories();
-
+  // Refetch when route changes (e.g. after scan completes and user navigates to Messages)
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchCategories(controller.signal);
     return () => {
       controller.abort();
     };
-  }, []);
+  }, [fetchCategories, location.pathname]);
 
   return { categories, isLoading, isFallback, error };
 }

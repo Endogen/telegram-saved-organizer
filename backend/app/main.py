@@ -8,8 +8,9 @@ from fastapi import APIRouter, FastAPI
 
 from app.auth.router import router as auth_router
 from app.categories.router import router as categories_router
+from app.auth.service import auto_reconnect
 from app.config import settings
-from app.database import dispose_engine
+from app.database import create_database, dispose_engine
 from app.messages.router import router as messages_router
 from app.tags.router import router as tags_router
 from app.telegram.client import telegram_client_manager
@@ -30,6 +31,8 @@ async def health() -> dict[str, str]:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    await create_database()
+    await auto_reconnect()
     try:
         yield
     finally:

@@ -119,3 +119,9 @@ class MessageDeleteResponse(BaseModel):
     """Confirmation payload for message deletion."""
 
     deleted: bool = True
+
+
+class MessageClearResponse(BaseModel):
+    """Confirmation payload for clearing all messages."""
+
+    cleared_count: int = Field(ge=0)

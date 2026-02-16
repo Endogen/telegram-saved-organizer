@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Mapping, Protocol, Sequence
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from telethon.errors import RPCError
@@ -174,28 +174,39 @@ class MessageService:
         await self.session.commit()
         return await self.get_message(message_id=message_id)
 
-    async def delete_message(self, *, message_id: int) -> None:
-        """Delete a message from Telegram and local storage."""
+    async def delete_message(self, *, message_id: int, local_only: bool = False) -> None:
+        """Delete a message from local storage and optionally from Telegram."""
 
         message = await self.get_message(message_id=message_id)
-        await self._delete_telegram_messages(telegram_message_ids=(message.telegram_id,))
+        if not local_only:
+            await self._delete_telegram_messages(telegram_message_ids=(message.telegram_id,))
         await self.session.delete(message)
         await self.session.commit()
 
-    async def bulk_delete_messages(self, *, message_ids: Sequence[int]) -> int:
-        """Delete multiple messages from Telegram and local storage."""
+    async def bulk_delete_messages(self, *, message_ids: Sequence[int], local_only: bool = False) -> int:
+        """Delete multiple messages from local storage and optionally from Telegram."""
 
         normalized_message_ids = self._normalize_message_ids(message_ids=message_ids)
         messages = await self._load_messages_by_ids(message_ids=normalized_message_ids)
-        await self._delete_telegram_messages(
-            telegram_message_ids=tuple(message.telegram_id for message in messages),
-        )
+        if not local_only:
+            await self._delete_telegram_messages(
+                telegram_message_ids=tuple(message.telegram_id for message in messages),
+            )
 
         for message in messages:
             await self.session.delete(message)
 
         await self.session.commit()
         return len(messages)
+
+    async def clear_all_messages(self) -> int:
+        """Delete all messages from local storage only (does not touch Telegram)."""
+
+        count_statement = select(func.count()).select_from(Message)
+        total = await self.session.scalar(count_statement)
+        await self.session.execute(delete(Message))
+        await self.session.commit()
+        return int(total or 0)
 
     async def bulk_move_messages(self, *, message_ids: Sequence[int], category_id: int) -> int:
         """Move multiple messages to a category."""

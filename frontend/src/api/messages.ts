@@ -85,11 +85,21 @@ function buildQueryString(query: MessageListQuery): string {
   return serialized.length > 0 ? `?${serialized}` : "";
 }
 
+export class TelegramNotConnectedError extends Error {
+  constructor() {
+    super("Telegram is not connected. Delete locally only?");
+    this.name = "TelegramNotConnectedError";
+  }
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${MESSAGES_BASE_PATH}${path}`, init);
   const payload: unknown = await response.json();
 
   if (!response.ok) {
+    if (response.status === 409 && toErrorMessage(payload) === "telegram_not_connected") {
+      throw new TelegramNotConnectedError();
+    }
     throw new Error(toErrorMessage(payload) ?? "Message request failed.");
   }
 
@@ -113,16 +123,22 @@ export async function moveMessageToCategory(messageId: number, categoryId: numbe
   });
 }
 
-export async function deleteMessage(messageId: number): Promise<void> {
-  await requestJson<{ deleted: boolean }>(`/${messageId}`, { method: "DELETE" });
+export async function deleteMessage(messageId: number, localOnly = false): Promise<void> {
+  const query = localOnly ? "?local_only=true" : "";
+  await requestJson<{ deleted: boolean }>(`/${messageId}${query}`, { method: "DELETE" });
 }
 
-export async function bulkDeleteMessages(messageIds: number[]): Promise<BulkDeleteResponse> {
-  return requestJson<BulkDeleteResponse>("/bulk-delete", {
+export async function bulkDeleteMessages(messageIds: number[], localOnly = false): Promise<BulkDeleteResponse> {
+  const query = localOnly ? "?local_only=true" : "";
+  return requestJson<BulkDeleteResponse>(`/bulk-delete${query}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message_ids: messageIds }),
   });
+}
+
+export async function clearAllMessages(): Promise<{ cleared_count: number }> {
+  return requestJson<{ cleared_count: number }>("/clear", { method: "POST" });
 }
 
 export async function bulkMoveMessages(messageIds: number[], categoryId: number): Promise<BulkMoveResponse> {

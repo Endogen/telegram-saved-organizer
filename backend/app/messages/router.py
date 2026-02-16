@@ -11,6 +11,7 @@ from app.messages.schemas import (
     MessageBulkDeleteResponse,
     MessageBulkMoveRequest,
     MessageBulkMoveResponse,
+    MessageClearResponse,
     MessageDeleteResponse,
     MessageListResponse,
     MessageResponse,
@@ -37,7 +38,7 @@ async def get_message_service(session: AsyncSession = Depends(get_session)) -> M
 @router.get("", response_model=MessageListResponse)
 async def list_messages(
     page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=50, ge=1, le=200),
+    per_page: int = Query(default=50, ge=1, le=10000),
     sort: MessageSort = Query(default=MessageSort.DATE_DESC),
     category: str | None = Query(default=None, min_length=1),
     tag: list[str] | None = Query(default=None),
@@ -61,14 +62,17 @@ async def list_messages(
 @router.post("/bulk-delete", response_model=MessageBulkDeleteResponse)
 async def bulk_delete_messages(
     payload: MessageBulkDeleteRequest,
+    local_only: bool = Query(default=False),
     service: MessageService = Depends(get_message_service),
 ) -> MessageBulkDeleteResponse:
     try:
-        deleted_count = await service.bulk_delete_messages(message_ids=payload.message_ids)
+        deleted_count = await service.bulk_delete_messages(
+            message_ids=payload.message_ids, local_only=local_only,
+        )
     except MessageNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except TelegramClientNotConnectedError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="telegram_not_connected") from exc
     except TelegramMessageDeleteError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except ValueError as exc:
@@ -93,6 +97,14 @@ async def bulk_move_messages(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return MessageBulkMoveResponse(moved_count=moved_count, category_id=payload.category_id)
+
+
+@router.post("/clear", response_model=MessageClearResponse)
+async def clear_all_messages(
+    service: MessageService = Depends(get_message_service),
+) -> MessageClearResponse:
+    cleared_count = await service.clear_all_messages()
+    return MessageClearResponse(cleared_count=cleared_count)
 
 
 @router.get("/{message_id}", response_model=MessageResponse)
@@ -130,14 +142,15 @@ async def update_message(
 @router.delete("/{message_id}", response_model=MessageDeleteResponse)
 async def delete_message(
     message_id: int,
+    local_only: bool = Query(default=False),
     service: MessageService = Depends(get_message_service),
 ) -> MessageDeleteResponse:
     try:
-        await service.delete_message(message_id=message_id)
+        await service.delete_message(message_id=message_id, local_only=local_only)
     except MessageNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except TelegramClientNotConnectedError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="telegram_not_connected") from exc
     except TelegramMessageDeleteError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     return MessageDeleteResponse()

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckCircle2, CircleAlert, LoaderCircle, Play, RefreshCw, Square } from "lucide-react";
+import { CheckCircle2, CircleAlert, LoaderCircle, Play, RefreshCw, RotateCcw, Square } from "lucide-react";
 
+import { clearAllMessages } from "@/api/messages";
 import { fetchScanStatus, startScan, stopScan, subscribeToScanStatus } from "@/api/scan";
 import { Button } from "@/components/ui/button";
 import type { ScanStatus } from "@/types/scan";
@@ -113,10 +114,14 @@ export function ScanProgress() {
 
     try {
       const nextStatus = await fetchScanStatus();
-      setStatus(nextStatus);
+      setStatus((prev) => {
+        if (nextStatus.is_running || mode === "initial" || mode === "manual") {
+          setPageSizeInput(String(nextStatus.page_size));
+        }
+        return nextStatus;
+      });
       setNow(Date.now());
       setRequestError(null);
-      setPageSizeInput(String(nextStatus.page_size));
     } catch (error) {
       if (mode !== "poll") {
         setRequestError(toErrorMessage(error));
@@ -142,9 +147,15 @@ export function ScanProgress() {
         setStreamConnectionState("connected");
       },
       onStatus: (nextStatus) => {
-        setStatus(nextStatus);
+        setStatus((prev) => {
+          // Only sync page size from server when scan is active (input is disabled anyway)
+          // or on the very first status update — avoid overwriting user input while idle.
+          if (nextStatus.is_running || prev === INITIAL_SCAN_STATUS) {
+            setPageSizeInput(String(nextStatus.page_size));
+          }
+          return nextStatus;
+        });
         setNow(Date.now());
-        setPageSizeInput(String(nextStatus.page_size));
         setRequestError(null);
         setIsInitialLoading(false);
         setStreamConnectionState("connected");
@@ -248,15 +259,47 @@ export function ScanProgress() {
     }
   }, []);
 
+  const [isClearing, setIsClearing] = useState(false);
+
+  const handleClearAndRescan = useCallback(async () => {
+    const confirmed = window.confirm(
+      "This will delete all imported messages from the organizer and start a fresh scan. Messages in Telegram are not affected. Continue?",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setRequestError(null);
+    setIsClearing(true);
+
+    try {
+      await clearAllMessages();
+
+      const normalizedPageSize = clampPageSize(Number.parseInt(pageSizeInput, 10));
+      setPageSizeInput(String(normalizedPageSize));
+
+      const nextStatus = await startScan(normalizedPageSize);
+      setStatus((prev) => {
+        setPageSizeInput(String(nextStatus.page_size));
+        return nextStatus;
+      });
+      setNow(Date.now());
+    } catch (error) {
+      setRequestError(toErrorMessage(error));
+    } finally {
+      setIsClearing(false);
+    }
+  }, [pageSizeInput]);
+
   const statusTone = useMemo(() => {
     if (status.error) {
-      return "border-amber-300/80 bg-amber-50/75 text-amber-800";
+      return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
     }
     if (status.is_running) {
-      return "border-sky-300/80 bg-sky-50/80 text-sky-800";
+      return "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300";
     }
     if (status.is_complete) {
-      return "border-emerald-300/80 bg-emerald-50/80 text-emerald-800";
+      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
     }
     return "border-[hsl(var(--border))] bg-[hsl(var(--background)/0.75)] text-[hsl(var(--muted-foreground))]";
   }, [status.error, status.is_complete, status.is_running]);
@@ -292,10 +335,10 @@ export function ScanProgress() {
 
   const streamStatusTone = useMemo(() => {
     if (streamConnectionState === "connected") {
-      return "border-emerald-300/80 bg-emerald-50/80 text-emerald-700";
+      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
     }
     if (streamConnectionState === "connecting") {
-      return "border-sky-300/80 bg-sky-50/80 text-sky-700";
+      return "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300";
     }
     return "border-[hsl(var(--border))] bg-[hsl(var(--background)/0.72)] text-[hsl(var(--muted-foreground))]";
   }, [streamConnectionState]);
@@ -334,7 +377,7 @@ export function ScanProgress() {
               onChange={(event) => setPageSizeInput(event.target.value)}
               onBlur={() => setPageSizeInput((current) => String(clampPageSize(Number.parseInt(current, 10))))}
               disabled={status.is_running || isStarting}
-              className="h-7 w-20 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 text-sm text-[hsl(var(--foreground))] outline-none ring-[hsl(var(--ring))] transition focus:ring-2"
+              className="h-7 w-24 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 text-sm text-[hsl(var(--foreground))] outline-none ring-[hsl(var(--ring))] transition focus:ring-2"
             />
           </label>
 
@@ -354,9 +397,20 @@ export function ScanProgress() {
             {isStarting ? "Starting..." : "Start"}
           </Button>
 
-          <Button variant="ghost" size="sm" onClick={() => void handleStopScan()} disabled={!canStop} className="gap-1.5">
+          <Button variant="outline" size="sm" onClick={() => void handleStopScan()} disabled={!canStop} className="gap-1.5">
             {isStopping ? <LoaderCircle className="size-4 animate-spin" /> : <Square className="size-4" />}
             {isStopping ? "Stopping..." : "Stop"}
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void handleClearAndRescan()}
+            disabled={status.is_running || isStarting || isStopping || isClearing}
+            className="gap-1.5"
+          >
+            {isClearing ? <LoaderCircle className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
+            {isClearing ? "Clearing..." : "Clear & Rescan"}
           </Button>
         </div>
       </div>
@@ -381,7 +435,7 @@ export function ScanProgress() {
             ) : status.error ? (
               <motion.div initial={{ width: 0 }} animate={{ width: "100%" }} className="h-full bg-amber-400" />
             ) : status.is_complete ? (
-              <motion.div initial={{ width: 0 }} animate={{ width: "100%" }} className="h-full bg-emerald-500" />
+              <div className="h-full w-full bg-emerald-500" />
             ) : (
               <div className="h-full w-0" />
             )}
@@ -433,7 +487,7 @@ export function ScanProgress() {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
-            className="mt-4 rounded-lg border border-amber-300/80 bg-amber-50/80 px-3 py-2 text-sm text-amber-800"
+            className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300"
           >
             <p className="flex items-center gap-2 font-medium">
               <CircleAlert className="size-4" />
@@ -445,7 +499,7 @@ export function ScanProgress() {
       </AnimatePresence>
 
       {!status.error && !requestError && status.is_complete ? (
-        <div className="mt-4 inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+        <div className="mt-4 inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
           <CheckCircle2 className="size-3.5" />
           Scan finished successfully
         </div>

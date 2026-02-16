@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckSquare2, Search, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CheckSquare2, ChevronLeft, ChevronRight, Search, X } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 import {
@@ -8,6 +8,7 @@ import {
   deleteMessage,
   listMessages,
   moveMessageToCategory,
+  TelegramNotConnectedError,
 } from "@/api/messages";
 import { addTagsToMessage, createTag, listTags, removeTagFromMessage } from "@/api/tags";
 import { MoveDialog } from "@/components/categories/move-dialog";
@@ -334,6 +335,9 @@ export function MessagesPage() {
   const [moveDialogError, setMoveDialogError] = useState<string | null>(null);
   const [tagDialogError, setTagDialogError] = useState<string | null>(null);
   const [bulkActionError, setBulkActionError] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(60);
+  const gridTopRef = useRef<HTMLDivElement | null>(null);
   const { categories: fetchedCategories } = useCategories();
   const categoryFilter = searchParams.get("category")?.trim().toLowerCase() ?? "";
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
@@ -345,7 +349,7 @@ export function MessagesPage() {
       setIsInitialLoading(true);
 
       try {
-        const messageResponse = await listMessages({ page: 1, per_page: 200, sort: "date_desc" });
+        const messageResponse = await listMessages({ page: 1, per_page: 10000, sort: "date_desc" });
         if (isCanceled) {
           return;
         }
@@ -480,6 +484,24 @@ export function MessagesPage() {
       return compareByDate(first, second);
     });
   }, [categoryFilter, messages, normalizedSearchQuery, selectedTagFilters, sortOption]);
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [categoryFilter, normalizedSearchQuery, selectedTagFilters, sortOption]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredAndSorted.length / itemsPerPage));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedMessages = useMemo(() => {
+    const startIndex = (safePage - 1) * itemsPerPage;
+    return filteredAndSorted.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredAndSorted, safePage, itemsPerPage]);
+
+  function goToPage(page: number) {
+    const clamped = Math.max(1, Math.min(page, totalPages));
+    setCurrentPage(clamped);
+    gridTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   useEffect(() => {
     if (!isBulkSelectionMode) {
@@ -750,10 +772,12 @@ export function MessagesPage() {
     }
   }
 
-  async function handleDeleteMessage(targetMessage: MessageListItem) {
-    const hasConfirmed = window.confirm("Delete this message from the organizer? This cannot be undone.");
-    if (!hasConfirmed) {
-      return;
+  async function handleDeleteMessage(targetMessage: MessageListItem, localOnly = false) {
+    if (!localOnly) {
+      const hasConfirmed = window.confirm("Delete this message from the organizer and Telegram? This cannot be undone.");
+      if (!hasConfirmed) {
+        return;
+      }
     }
 
     setPageError(null);
@@ -761,7 +785,7 @@ export function MessagesPage() {
 
     try {
       if (isApiBackedData) {
-        await deleteMessage(targetMessage.id);
+        await deleteMessage(targetMessage.id, localOnly);
       }
 
       setMessages((currentMessages) =>
@@ -780,7 +804,17 @@ export function MessagesPage() {
         setDetailDialogMessageId(null);
       }
     } catch (error) {
-      setPageError(toErrorMessage(error, "Unable to delete this message right now."));
+      if (error instanceof TelegramNotConnectedError) {
+        const deleteLocally = window.confirm(
+          "Telegram is not connected. Delete this message locally only? It will remain in your Telegram Saved Messages.",
+        );
+        if (deleteLocally) {
+          await handleDeleteMessage(targetMessage, true);
+          return;
+        }
+      } else {
+        setPageError(toErrorMessage(error, "Unable to delete this message right now."));
+      }
     } finally {
       setPendingDeleteMessageId(null);
     }
@@ -822,16 +856,18 @@ export function MessagesPage() {
     }
   }
 
-  async function handleBulkDelete() {
+  async function handleBulkDelete(localOnly = false) {
     if (selectedMessageIds.length === 0) {
       return;
     }
 
-    const hasConfirmed = window.confirm(
-      `Delete ${selectedMessageIds.length} selected message${selectedMessageIds.length === 1 ? "" : "s"}? This cannot be undone.`,
-    );
-    if (!hasConfirmed) {
-      return;
+    if (!localOnly) {
+      const hasConfirmed = window.confirm(
+        `Delete ${selectedMessageIds.length} selected message${selectedMessageIds.length === 1 ? "" : "s"} from the organizer and Telegram? This cannot be undone.`,
+      );
+      if (!hasConfirmed) {
+        return;
+      }
     }
 
     const targetMessageIds = [...selectedMessageIds];
@@ -842,7 +878,7 @@ export function MessagesPage() {
 
     try {
       if (isApiBackedData) {
-        await bulkDeleteMessages(targetMessageIds);
+        await bulkDeleteMessages(targetMessageIds, localOnly);
       }
 
       setMessages((currentMessages) =>
@@ -860,7 +896,17 @@ export function MessagesPage() {
         setDetailDialogMessageId(null);
       }
     } catch (error) {
-      setBulkActionError(toErrorMessage(error, "Unable to delete selected messages right now."));
+      if (error instanceof TelegramNotConnectedError) {
+        const deleteLocally = window.confirm(
+          "Telegram is not connected. Delete selected messages locally only? They will remain in your Telegram Saved Messages.",
+        );
+        if (deleteLocally) {
+          await handleBulkDelete(true);
+          return;
+        }
+      } else {
+        setBulkActionError(toErrorMessage(error, "Unable to delete selected messages right now."));
+      }
     } finally {
       setBulkActionPending(null);
     }
@@ -996,23 +1042,49 @@ export function MessagesPage() {
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+      <div ref={gridTopRef} className="mt-4 flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-[hsl(var(--muted-foreground))]">
-          {isInitialLoading ? "Loading messages..." : `Showing ${filteredAndSorted.length} of ${messages.length} messages.`}
+          {isInitialLoading
+            ? "Loading messages..."
+            : filteredAndSorted.length === messages.length
+              ? `${filteredAndSorted.length} messages`
+              : `${filteredAndSorted.length} of ${messages.length} messages`}
+          {!isInitialLoading && filteredAndSorted.length > itemsPerPage
+            ? ` · Page ${safePage} of ${totalPages}`
+            : ""}
         </p>
 
-        {!isBulkSelectionMode ? (
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            onClick={activateBulkSelectionMode}
-            disabled={isInitialLoading || filteredAndSorted.length === 0}
-          >
-            <CheckSquare2 className="size-3.5" />
-            Bulk select
-          </Button>
-        ) : null}
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-[hsl(var(--muted-foreground))]">
+            Per page
+            <select
+              value={itemsPerPage}
+              onChange={(event) => {
+                setItemsPerPage(Number(event.target.value));
+                setCurrentPage(1);
+              }}
+              className="h-8 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 text-xs text-[hsl(var(--foreground))] outline-none ring-[hsl(var(--ring))] transition focus:ring-2"
+            >
+              <option value={30}>30</option>
+              <option value={60}>60</option>
+              <option value={120}>120</option>
+              <option value={200}>200</option>
+            </select>
+          </label>
+
+          {!isBulkSelectionMode ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={activateBulkSelectionMode}
+              disabled={isInitialLoading || filteredAndSorted.length === 0}
+            >
+              <CheckSquare2 className="size-3.5" />
+              Bulk select
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       {isBulkSelectionMode && !isInitialLoading ? (
@@ -1041,7 +1113,7 @@ export function MessagesPage() {
         <MessageGridSkeleton />
       ) : (
         <MessageGrid
-          messages={filteredAndSorted}
+          messages={paginatedMessages}
           pendingDeleteMessageId={pendingDeleteMessageId}
           isSelectionMode={isBulkSelectionMode}
           selectedMessageIds={selectedMessageIds}
@@ -1062,6 +1134,65 @@ export function MessagesPage() {
           onSelectionChange={handleMessageSelectionChange}
         />
       )}
+
+      {!isInitialLoading && totalPages > 1 ? (
+        <div className="mt-5 flex items-center justify-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1"
+            onClick={() => goToPage(safePage - 1)}
+            disabled={safePage <= 1}
+          >
+            <ChevronLeft className="size-4" />
+            Prev
+          </Button>
+
+          {Array.from({ length: totalPages }, (_, i) => i + 1)
+            .filter((page) => {
+              if (totalPages <= 7) return true;
+              if (page === 1 || page === totalPages) return true;
+              if (Math.abs(page - safePage) <= 1) return true;
+              return false;
+            })
+            .reduce<(number | "ellipsis")[]>((acc, page, idx, arr) => {
+              if (idx > 0) {
+                const prev = arr[idx - 1];
+                if (page - prev > 1) acc.push("ellipsis");
+              }
+              acc.push(page);
+              return acc;
+            }, [])
+            .map((item, idx) =>
+              item === "ellipsis" ? (
+                <span key={`ellipsis-${idx}`} className="px-1 text-sm text-[hsl(var(--muted-foreground))]">
+                  …
+                </span>
+              ) : (
+                <Button
+                  key={item}
+                  variant={item === safePage ? "default" : "outline"}
+                  size="sm"
+                  className="h-8 w-8 p-0 text-xs"
+                  onClick={() => goToPage(item)}
+                >
+                  {item}
+                </Button>
+              ),
+            )}
+
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1"
+            onClick={() => goToPage(safePage + 1)}
+            disabled={safePage >= totalPages}
+          >
+            Next
+            <ChevronRight className="size-4" />
+          </Button>
+        </div>
+      ) : null}
 
       {!isInitialLoading && !hasResults ? (
         <StatePanel

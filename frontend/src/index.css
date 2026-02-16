@@ -13,10 +13,28 @@
   --muted-foreground: 221 19% 36%;
   --border: 210 25% 84%;
   --ring: 176 83% 31%;
+  color-scheme: light dark;
   color: hsl(var(--foreground));
   font-family: "Space Grotesk", "IBM Plex Sans", "Segoe UI", sans-serif;
   line-height: 1.5;
   text-rendering: optimizeLegibility;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: 224 40% 8%;
+    --foreground: 210 30% 90%;
+    --card: 224 36% 12%;
+    --card-foreground: 210 30% 90%;
+    --primary: 176 72% 42%;
+    --primary-foreground: 224 40% 8%;
+    --secondary: 224 28% 18%;
+    --secondary-foreground: 210 25% 82%;
+    --muted: 224 28% 16%;
+    --muted-foreground: 215 18% 58%;
+    --border: 224 22% 22%;
+    --ring: 176 72% 42%;
+  }
 }
 
 *,
@@ -32,6 +50,15 @@ body {
     radial-gradient(120% 85% at 8% 0%, hsl(176 90% 85% / 0.34), transparent 55%),
     radial-gradient(140% 90% at 92% 100%, hsl(211 89% 82% / 0.36), transparent 58%),
     hsl(var(--background));
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background:
+      radial-gradient(120% 85% at 8% 0%, hsl(176 80% 20% / 0.25), transparent 55%),
+      radial-gradient(140% 90% at 92% 100%, hsl(211 70% 18% / 0.3), transparent 58%),
+      hsl(var(--background));
+  }
 }
 
 a {

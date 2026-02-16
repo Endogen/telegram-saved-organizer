@@ -31,9 +31,9 @@ export function MessageGrid({
 
   return (
     <motion.div
-      layout
+      layout="position"
       transition={shouldReduceMotion ? { duration: 0 } : { type: "spring", bounce: 0.18, duration: 0.34 }}
-      className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+      className="mt-5 grid grid-cols-1 gap-4 overflow-visible sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
     >
       <AnimatePresence initial={!shouldReduceMotion} mode="popLayout">
         {messages.map((message) => (

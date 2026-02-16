@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from unittest.mock import patch, AsyncMock
 
 import pytest
 
@@ -25,7 +26,7 @@ class _FakeScanner:
         self.started = asyncio.Event()
         self.unblock = asyncio.Event()
 
-    async def scan(self, *, client: object, page_size: int) -> ScanProgress:
+    async def scan(self, *, client: object, page_size: int, on_page=None) -> ScanProgress:
         self.scan_calls.append((client, page_size))
         self.progress = replace(
             self.progress,
@@ -60,18 +61,23 @@ async def test_start_launches_background_scan() -> None:
     client = object()
     service = TelegramScanService(manager=_FakeManager(client=client), scanner=scanner)
 
-    progress = await service.start(page_size=25)
+    with patch("app.telegram.service.SessionLocal") as mock_session:
+        mock_session.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_session.return_value.__aexit__ = AsyncMock(return_value=False)
+        progress = await service.start(page_size=25)
+
+    # Wait for the task to actually call scanner.scan()
+    await asyncio.wait_for(scanner.started.wait(), timeout=2.0)
 
     assert progress.is_running is True
     assert scanner.scan_calls == [(client, 25)]
 
     scanner.unblock.set()
-    await asyncio.wait_for(scanner.started.wait(), timeout=1.0)
-    for _ in range(20):
+    for _ in range(40):
         final_progress = await service.status()
         if final_progress.is_complete:
             break
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
 
     assert final_progress.is_running is False
     assert final_progress.is_complete is True

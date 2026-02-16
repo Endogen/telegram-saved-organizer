@@ -1,4 +1,4 @@
-import { Menu, Sparkles } from "lucide-react";
+import { Menu } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
@@ -32,10 +32,7 @@ export function TopBar({ title, subtitle, onMenuClick }: TopBarProps) {
           </div>
         </div>
 
-        <div className="hidden items-center gap-2 rounded-full bg-[hsl(var(--primary)/0.14)] px-3 py-1.5 text-xs font-semibold text-[hsl(var(--primary))] sm:inline-flex">
-          <Sparkles className="size-3.5" />
-          Responsive Layout
-        </div>
+        <img src="/telegram.png" alt="Telegram" className="hidden size-10 rounded-lg sm:block" />
       </div>
     </header>
   );

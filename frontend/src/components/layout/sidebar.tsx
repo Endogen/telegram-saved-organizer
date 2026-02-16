@@ -176,10 +176,15 @@ export function Sidebar({
         )}
       >
         <div className="border-b border-[hsl(var(--border)/0.75)] px-4 py-4 md:px-5">
-          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[hsl(var(--muted-foreground))]">
-            Workspace
-          </p>
-          <h2 className="mt-1 text-base font-semibold text-[hsl(var(--foreground))]">Saved Messages</h2>
+          <div className="flex items-center gap-2.5">
+            <img src="/telegram.png" alt="Telegram" className="size-8 rounded-lg" />
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[hsl(var(--muted-foreground))]">
+                Workspace
+              </p>
+              <h2 className="text-base font-semibold text-[hsl(var(--foreground))]">Saved Messages</h2>
+            </div>
+          </div>
         </div>
 
         <nav className="flex-1 overflow-y-auto p-3 md:p-4">

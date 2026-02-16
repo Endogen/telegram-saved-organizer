@@ -3,16 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from sqlalchemy import select
+
+from app.database import SessionLocal
+from app.models import Category, Message
+from app.telegram.categorizer import categorize_scanned_message
 from app.telegram.client import telegram_client_manager
 from app.telegram.scanner import (
     ScanAlreadyRunningError,
+    ScanPage,
     ScanProgress,
     SavedMessagesScanner,
     TelegramScannerClientProtocol,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class TelegramClientNotConnectedError(RuntimeError):
@@ -73,8 +82,50 @@ class TelegramScanService:
         client: TelegramScannerClientProtocol,
         page_size: int,
     ) -> None:
+        # Pre-load category slug → id mapping for persistence
+        category_map: dict[str, int] = {}
         try:
-            await self.scanner.scan(client=client, page_size=page_size)
+            async with SessionLocal() as session:
+                result = await session.execute(select(Category.slug, Category.id))
+                category_map = {row.slug: row.id for row in result}
+        except Exception:
+            logger.exception("Failed to load category map for scan")
+
+        async def persist_page(page: ScanPage) -> None:
+            if not category_map:
+                return
+            try:
+                async with SessionLocal() as session:
+                    for scanned in page.messages:
+                        # Skip duplicates by telegram_id
+                        existing = await session.execute(
+                            select(Message.id).where(Message.telegram_id == scanned.telegram_id)
+                        )
+                        if existing.scalar_one_or_none() is not None:
+                            continue
+
+                        slug = categorize_scanned_message(scanned)
+                        category_id = category_map.get(slug) or category_map.get("other", 1)
+
+                        session.add(Message(
+                            telegram_id=scanned.telegram_id,
+                            content=scanned.content,
+                            media_type=scanned.media_type,
+                            file_name=scanned.file_name,
+                            file_size=scanned.file_size,
+                            mime_type=scanned.mime_type,
+                            url=scanned.url,
+                            sender_name=scanned.sender_name,
+                            date=scanned.date,
+                            category_id=category_id,
+                            raw_data=scanned.raw_data,
+                        ))
+                    await session.commit()
+            except Exception:
+                logger.exception("Failed to persist scan page")
+
+        try:
+            await self.scanner.scan(client=client, page_size=page_size, on_page=persist_page)
         except Exception:
             # Scanner progress stores the latest error state for status polling.
             return

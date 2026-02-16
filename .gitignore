@@ -21,3 +21,4 @@ htmlcov/
 .ralph/last-notification.txt
 .ralph/inject.md
 data/
+frontend/coverage/

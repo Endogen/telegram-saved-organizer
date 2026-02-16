@@ -3,12 +3,46 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from telethon.errors import SessionPasswordNeededError
 
+from app.config import settings as app_settings
 from app.telegram.client import telegram_client_manager
+
+logger = logging.getLogger(__name__)
+
+CREDENTIALS_FILE = app_settings.data_dir / "credentials.json"
+
+
+def _save_credentials(api_id: int, api_hash: str, phone: str) -> None:
+    """Persist Telegram credentials to disk."""
+    CREDENTIALS_FILE.write_text(
+        json.dumps({"api_id": api_id, "api_hash": api_hash, "phone": phone}),
+        encoding="utf-8",
+    )
+
+
+def _load_credentials() -> dict[str, Any] | None:
+    """Load persisted credentials if available."""
+    if not CREDENTIALS_FILE.exists():
+        return None
+    try:
+        data = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
+        if data.get("api_id") and data.get("api_hash"):
+            return data
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
+def _clear_credentials() -> None:
+    """Remove persisted credentials."""
+    CREDENTIALS_FILE.unlink(missing_ok=True)
 
 
 class VerificationNotStartedError(RuntimeError):
@@ -74,6 +108,26 @@ class TelegramAuthManagerProtocol(Protocol):
     def has_session(self) -> bool: ...
 
 
+async def auto_reconnect() -> None:
+    """Reconnect using saved credentials on startup if a session file exists."""
+    creds = _load_credentials()
+    if creds is None:
+        return
+    if not telegram_client_manager.has_session():
+        return
+    try:
+        client = await telegram_client_manager.connect(
+            api_id=creds["api_id"],
+            api_hash=creds["api_hash"],
+        )
+        if await client.is_user_authorized():
+            logger.info("Auto-reconnected Telegram session")
+        else:
+            logger.warning("Telegram session exists but is not authorized")
+    except Exception:
+        logger.exception("Failed to auto-reconnect Telegram")
+
+
 class TelegramAuthService:
     """Coordinates connect/verify/disconnect behavior for Telegram auth."""
 
@@ -87,6 +141,7 @@ class TelegramAuthService:
 
         client = await self._manager.connect(api_id=api_id, api_hash=api_hash)
         if await client.is_user_authorized():
+            _save_credentials(api_id, api_hash, phone)
             async with self._lock:
                 self._pending = None
             return self._status(authorized_override=True)
@@ -140,6 +195,8 @@ class TelegramAuthService:
             return self._status(authorized_override=False)
 
         async with self._lock:
+            if self._pending is not None:
+                _save_credentials(self._pending.api_id, self._pending.api_hash, self._pending.phone)
             self._pending = None
 
         return self._status(authorized_override=True)
@@ -153,6 +210,7 @@ class TelegramAuthService:
         """Disconnect and remove local session data."""
 
         await self._manager.reset_session()
+        _clear_credentials()
         async with self._lock:
             self._pending = None
         return self._status(authorized_override=False)

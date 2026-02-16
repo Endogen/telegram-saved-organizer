@@ -45,7 +45,7 @@ function StatusChip({ label, active }: StatusChipProps) {
     <div
       className={
         active
-          ? "rounded-lg border border-emerald-300/70 bg-emerald-50/80 px-3 py-2 text-sm font-medium text-emerald-700"
+          ? "rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700 dark:text-emerald-300"
           : "rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background)/0.8)] px-3 py-2 text-sm text-[hsl(var(--muted-foreground))]"
       }
     >
@@ -154,7 +154,16 @@ export function ConnectPage() {
       <h2 className="text-2xl font-semibold text-[hsl(var(--foreground))]">Connect Telegram</h2>
       <p className="mt-2 text-sm text-[hsl(var(--muted-foreground))] md:text-base">
         Start with API credentials and phone number, then verify the code (or 2FA password) to authorize Saved
-        Messages access.
+        Messages access. Get your API ID and hash from{" "}
+        <a
+          href="https://my.telegram.org/apps"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium text-sky-600 underline decoration-sky-600/30 underline-offset-2 transition hover:text-sky-500 hover:decoration-sky-500/50 dark:text-sky-400 dark:decoration-sky-400/30 dark:hover:text-sky-300"
+        >
+          my.telegram.org/apps
+        </a>
+        .
       </p>
 
       <div className="mt-6 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.9)] p-4 md:p-5">
@@ -180,7 +189,7 @@ export function ConnectPage() {
               Refresh
             </Button>
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
               onClick={() => void handleDisconnect()}
               disabled={!canDisconnect || isDisconnecting}
@@ -203,7 +212,7 @@ export function ConnectPage() {
         </div>
 
         {statusError ? (
-          <p className="mt-4 rounded-lg border border-amber-300/80 bg-amber-50/80 px-3 py-2 text-sm text-amber-800">
+          <p className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
             {statusError}
           </p>
         ) : null}
@@ -244,15 +253,15 @@ export function ConnectPage() {
                 ) : null}
 
                 {flowStep === "authorized" ? (
-                  <div className="rounded-xl border border-emerald-300/70 bg-emerald-50/70 p-4">
-                    <div className="flex items-center gap-2 text-emerald-800">
+                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+                    <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300">
                       <ShieldCheck className="size-5" />
                       <p className="text-base font-semibold">Telegram session is authorized.</p>
                     </div>
-                    <p className="mt-2 text-sm text-emerald-700">
+                    <p className="mt-2 text-sm text-emerald-700 dark:text-emerald-300">
                       You can now run scans and manage Saved Messages from the dashboard.
                     </p>
-                    <div className="mt-3 inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                    <div className="mt-3 inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
                       <CheckCircle2 className="size-3.5" />
                       Ready to scan
                     </div>

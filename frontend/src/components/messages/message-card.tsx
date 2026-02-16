@@ -166,10 +166,11 @@ export function MessageCard({
   const hasUrl = message.url !== null && message.url.trim().length > 0;
   const MediaIcon = resolveMediaIcon(message.media_type, hasUrl);
   const mediaLabel = resolveMediaLabel(message.media_type, hasUrl);
-  const previewText =
+  const rawPreview =
     message.content !== null && message.content.trim().length > 0
       ? message.content.trim()
       : "No text preview available for this message.";
+  const previewText = rawPreview.length > 280 ? `${rawPreview.slice(0, 280)}…` : rawPreview;
   const cardEnterAnimation = shouldReduceMotion ? false : { opacity: 0, y: 20, scale: 0.98 };
   const cardExitAnimation = shouldReduceMotion
     ? { opacity: 0, transition: { duration: 0.12 } }
@@ -234,7 +235,7 @@ export function MessageCard({
 
   return (
     <motion.article
-      layout
+      layout="position"
       initial={cardEnterAnimation}
       animate={{
         opacity: 1,
@@ -249,7 +250,7 @@ export function MessageCard({
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       className={[
-        "group rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.96)] p-4 shadow-sm transition-colors",
+        "group overflow-visible rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.96)] p-4 shadow-sm transition-colors",
         isDeletePending ? "cursor-not-allowed opacity-80" : "cursor-grab active:cursor-grabbing",
         isDragging ? "border-[hsl(var(--primary)/0.55)] bg-[hsl(var(--card)/0.88)] shadow-lg" : "",
       ].join(" ")}
@@ -297,21 +298,24 @@ export function MessageCard({
           </time>
           <button
             type="button"
+            draggable="false"
             aria-label="Message actions"
             aria-expanded={isActionsOpen}
             aria-haspopup="menu"
             className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
-            onClick={() => setIsActionsOpen((previous) => !previous)}
+            onClick={(e) => { e.stopPropagation(); setIsActionsOpen((previous) => !previous); }}
           >
             <MoreHorizontal className="size-4" />
           </button>
 
           {isActionsOpen ? (
-            <div className="absolute right-0 top-8 z-20 w-44 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-1 shadow-xl" role="menu">
+            <div className="absolute right-0 top-8 z-50 w-44 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-1 shadow-xl" role="menu" draggable="false" onMouseDown={(e) => e.stopPropagation()}>
               <button
                 type="button"
+                draggable="false"
                 className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--muted))]"
-                onClick={() => {
+                onClick={(e) => {
+                  e.stopPropagation();
                   onOpenDetailRequest(message);
                   setIsActionsOpen(false);
                 }}
@@ -322,8 +326,10 @@ export function MessageCard({
               </button>
               <button
                 type="button"
+                draggable="false"
                 className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--muted))]"
-                onClick={() => {
+                onClick={(e) => {
+                  e.stopPropagation();
                   onMoveRequest(message);
                   setIsActionsOpen(false);
                 }}
@@ -334,8 +340,10 @@ export function MessageCard({
               </button>
               <button
                 type="button"
+                draggable="false"
                 className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--muted))]"
-                onClick={() => {
+                onClick={(e) => {
+                  e.stopPropagation();
                   onTagRequest(message);
                   setIsActionsOpen(false);
                 }}
@@ -346,8 +354,10 @@ export function MessageCard({
               </button>
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-red-200 transition-colors hover:bg-red-500/20"
-                onClick={() => {
+                draggable="false"
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-red-400 dark:text-red-300 transition-colors hover:bg-red-500/20"
+                onClick={(e) => {
+                  e.stopPropagation();
                   onDeleteRequest(message);
                   setIsActionsOpen(false);
                 }}
@@ -373,10 +383,11 @@ export function MessageCard({
         </span>
       </div>
 
-      <p className="mt-2 text-sm text-[hsl(var(--foreground))]">{previewText}</p>
+      <p className="mt-2 break-words text-sm text-[hsl(var(--foreground))]" style={{ overflowWrap: "anywhere" }}>{previewText}</p>
       <button
         type="button"
-        onClick={() => onOpenDetailRequest(message)}
+        draggable="false"
+        onClick={(e) => { e.stopPropagation(); onOpenDetailRequest(message); }}
         className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[hsl(var(--primary))] transition-opacity hover:opacity-80"
       >
         <Eye className="size-3.5" />

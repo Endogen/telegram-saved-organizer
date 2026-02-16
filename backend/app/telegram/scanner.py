@@ -61,7 +61,7 @@ class ScanProgress:
     stop_requested: bool = False
     messages_scanned: int = 0
     pages_scanned: int = 0
-    page_size: int = 0
+    page_size: int = 100
     last_message_id: int | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -276,8 +276,21 @@ class SavedMessagesScanner:
         if callable(raw_data_factory):
             raw_data = raw_data_factory()
             if isinstance(raw_data, dict):
-                return raw_data
+                return self._make_json_safe(raw_data)
         return {"id": telegram_id, "message": content}
+
+    @staticmethod
+    def _make_json_safe(obj: Any) -> Any:
+        """Recursively convert non-JSON-serializable types (datetime, bytes, etc.)."""
+        if isinstance(obj, dict):
+            return {k: SavedMessagesScanner._make_json_safe(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [SavedMessagesScanner._make_json_safe(v) for v in obj]
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, bytes):
+            return obj.hex()
+        return obj
 
     def _extract_url(self, content: str | None) -> str | None:
         if not content:

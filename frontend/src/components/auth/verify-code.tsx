@@ -78,7 +78,7 @@ export function VerifyCode({ passwordRequired, isSubmitting, error, onSubmit }: 
       </div>
 
       {displayError ? (
-        <p className="rounded-lg border border-rose-300/70 bg-rose-50/70 px-3 py-2 text-sm text-rose-700">
+        <p className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">
           {displayError}
         </p>
       ) : null}

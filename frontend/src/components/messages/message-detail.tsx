@@ -228,7 +228,7 @@ export function MessageDetail({
                 <Button
                   variant="outline"
                   size="sm"
-                  className="gap-1.5 text-red-200 hover:bg-red-500/20"
+                  className="gap-1.5 text-red-400 dark:text-red-300 hover:bg-red-500/20"
                   onClick={() => onDeleteRequest(message)}
                   disabled={isDeletePending}
                 >
