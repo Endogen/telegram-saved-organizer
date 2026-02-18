@@ -1,6 +1,0 @@
-{
-  "cli": "codex",
-  "flags": "--full-auto",
-  "max_iterations": 50,
-  "test_command": ""
-}
