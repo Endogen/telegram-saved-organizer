@@ -100,13 +100,19 @@ async def _security_headers(
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "same-origin")
-    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+    )
     response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
     if request.url.path.startswith("/api/"):
-        response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+        response.headers.setdefault(
+            "Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"
+        )
         response.headers.setdefault("Cache-Control", "no-store")
     if settings.production:
-        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
     return response
 
 
@@ -146,7 +152,9 @@ def _api_router() -> APIRouter:
     @router.get(
         "/ready",
         tags=["health"],
-        responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "Database unavailable"}},
+        responses={
+            status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "Database unavailable"}
+        },
     )
     async def readiness() -> Response:
         if not await database_is_ready():
@@ -175,8 +183,12 @@ def create_app(*, check_migrations: bool = True) -> FastAPI:
         docs_url=None if settings.production else "/docs",
         redoc_url=None,
     )
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
-    app.add_middleware(RequestBodyLimitMiddleware, max_body_bytes=MAX_REQUEST_BODY_BYTES)
+    app.add_middleware(
+        TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts)
+    )
+    app.add_middleware(
+        RequestBodyLimitMiddleware, max_body_bytes=MAX_REQUEST_BODY_BYTES
+    )
     app.middleware("http")(_security_headers)
     app.add_exception_handler(RequestValidationError, _sanitized_validation_error)
     app.include_router(_api_router())

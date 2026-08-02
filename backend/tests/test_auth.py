@@ -196,7 +196,9 @@ async def test_status_maps_persisted_pending_state_without_network(
     monkeypatch.setattr(
         service_module,
         "decrypt_secret",
-        lambda value, *, context: "123456" if context.endswith(":api_id") else API_HASH
+        lambda value, *, context: "123456"
+        if context.endswith(":api_id")
+        else API_HASH
         if context.endswith(":api_hash")
         else "session",
     )

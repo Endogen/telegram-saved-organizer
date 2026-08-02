@@ -98,7 +98,6 @@ def test_fresh_alembic_upgrade_creates_current_multi_user_schema(
     } <= scan_job_columns
 
 
-
 def test_per_user_credential_migration_erases_sessions_in_both_directions(
     tmp_path: Path,
 ) -> None:
@@ -208,7 +207,15 @@ def test_per_user_credential_migration_erases_sessions_in_both_directions(
         )
 
     downgrade = subprocess.run(
-        [sys.executable, "-m", "alembic", "-c", "alembic.ini", "downgrade", "f1a2b3c4d5e6"],
+        [
+            sys.executable,
+            "-m",
+            "alembic",
+            "-c",
+            "alembic.ini",
+            "downgrade",
+            "f1a2b3c4d5e6",
+        ],
         cwd=backend_root,
         env=environment,
         capture_output=True,
@@ -230,7 +237,10 @@ def test_per_user_credential_migration_erases_sessions_in_both_directions(
         message_marker = connection.execute(
             "SELECT last_seen_replacement_job_id FROM messages WHERE telegram_id = 501"
         ).fetchone()
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(telegram_connections)")}
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(telegram_connections)")
+        }
     assert telegram == ("disconnected", None, None, None, None, 0, 6)
     assert scan == ("cancelled", 1, None)
     assert message_marker == (None,)

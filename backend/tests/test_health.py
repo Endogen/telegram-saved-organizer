@@ -60,7 +60,10 @@ async def test_api_responses_include_defensive_security_headers() -> None:
     assert response.headers["x-frame-options"] == "DENY"
     assert response.headers["referrer-policy"] == "same-origin"
     assert response.headers["cross-origin-resource-policy"] == "same-origin"
-    assert response.headers["content-security-policy"] == "default-src 'none'; frame-ancestors 'none'"
+    assert (
+        response.headers["content-security-policy"]
+        == "default-src 'none'; frame-ancestors 'none'"
+    )
     assert response.headers["cache-control"] == "no-store"
 
 
