@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fastapi import Request
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event, func, select
 from sqlalchemy.dialects import postgresql
@@ -23,7 +24,7 @@ from app.abuse import (
     RateLimitRule,
     phone_subject,
 )
-from app.accounts.dependencies import get_current_user
+from app.accounts.dependencies import get_auth_context, get_current_user
 from app.auth.schemas import TelegramConnectionState
 from app.database import _configure_sqlite_connection, get_session
 from app.main import create_app
@@ -307,6 +308,111 @@ async def test_account_quotas_run_before_password_verification_and_hashing(
     assert second_registration.json() == {"detail": "too_many_requests"}
     assert int(second_registration.headers["Retry-After"]) > 0
     assert hash_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    (
+        (
+            "POST",
+            "/api/account/password",
+            {
+                "current_password": "incorrect password",
+                "new_password": "a different secure password",
+            },
+        ),
+        (
+            "DELETE",
+            "/api/account",
+            {"password": "incorrect password", "confirmation": "DELETE"},
+        ),
+    ),
+)
+async def test_sensitive_password_quotas_precede_verification_and_are_subject_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    path: str,
+    payload: dict[str, str],
+) -> None:
+    import app.accounts.router as account_router
+
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+    )
+    event.listen(engine.sync_engine, "connect", _configure_sqlite_connection)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    app = create_app(check_migrations=False)
+
+    async def override_session() -> AsyncIterator[AsyncSession]:
+        async with session_factory() as session:
+            yield session
+
+    async def override_auth_context(request: Request) -> SimpleNamespace:
+        user_id = request.headers["X-Test-User"]
+        return SimpleNamespace(
+            user=SimpleNamespace(id=user_id, password_hash="unused-test-hash")
+        )
+
+    verify_calls = 0
+
+    async def fake_verify_password(_: str | None, __: str) -> bool:
+        nonlocal verify_calls
+        verify_calls += 1
+        return False
+
+    monkeypatch.setattr(
+        account_router,
+        "SENSITIVE_PASSWORD_PER_IP",
+        RateLimitRule("test_sensitive_ip", 1, timedelta(minutes=5)),
+    )
+    monkeypatch.setattr(
+        account_router,
+        "SENSITIVE_PASSWORD_PER_USER",
+        RateLimitRule("test_sensitive_user", 1, timedelta(minutes=5)),
+    )
+    monkeypatch.setattr("app.accounts.service.verify_password", fake_verify_password)
+    app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[get_auth_context] = override_auth_context
+
+    async def make_request(*, user_id: str, ip_address: str):
+        async with AsyncClient(
+            transport=ASGITransport(app=app, client=(ip_address, 12345)),
+            base_url="http://testserver",
+        ) as client:
+            return await client.request(
+                method,
+                path,
+                json=payload,
+                headers={"X-Test-User": user_id},
+            )
+
+    try:
+        first_attempt = await make_request(user_id="user-a", ip_address="192.0.2.1")
+        blocked_user = await make_request(user_id="user-a", ip_address="192.0.2.2")
+        other_user = await make_request(user_id="user-b", ip_address="192.0.2.3")
+        blocked_ip = await make_request(user_id="user-c", ip_address="192.0.2.3")
+    finally:
+        app.dependency_overrides.clear()
+        await engine.dispose()
+
+    assert first_attempt.status_code == 403
+    assert first_attempt.json() == {"detail": "invalid_password"}
+
+    assert blocked_user.status_code == 429
+    assert blocked_user.json() == {"detail": "too_many_requests"}
+    assert int(blocked_user.headers["Retry-After"]) > 0
+
+    assert other_user.status_code == 403
+    assert other_user.json() == {"detail": "invalid_password"}
+
+    assert blocked_ip.status_code == 429
+    assert blocked_ip.json() == {"detail": "too_many_requests"}
+    assert int(blocked_ip.headers["Retry-After"]) > 0
+    assert verify_calls == 2
 
 
 @pytest.mark.asyncio

@@ -182,6 +182,74 @@ async def test_create_category_normalizes_fields_and_assigns_next_position() -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "expected_slug"),
+    [
+        ("稍后阅读", "稍后阅读"),
+        ("Прочитать позже", "прочитать-позже"),
+        ("Café Straße", "café-strasse"),
+        ("Cafe\u0301 Society", "café-society"),
+        ("  Read___Later...Now!  ", "read-later-now"),
+    ],
+)
+async def test_create_category_builds_unicode_aware_slugs(
+    name: str,
+    expected_slug: str,
+) -> None:
+    session = _FakeSession()
+    session.scalar_values = [None, None]
+    service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    category = await service.create_category(
+        name=name,
+        icon="bookmark",
+        color="#22C55E",
+        position=3,
+    )
+
+    assert category.slug == expected_slug
+
+
+@pytest.mark.asyncio
+async def test_create_category_limits_casefold_expansion_to_slug_column_length() -> None:
+    session = _FakeSession()
+    session.scalar_values = [None, None]
+    service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    category = await service.create_category(
+        name="ß" * 100,
+        icon="bookmark",
+        color="#22C55E",
+        position=3,
+    )
+
+    assert category.slug == "s" * 100
+    assert len(category.slug) == 100
+    assert not category.slug.endswith("-")
+    assert service._slugify(("ß" * 49) + "A_" + ("ß" * 49)) == ("s" * 98) + "a"
+
+
+@pytest.mark.asyncio
+async def test_create_category_detects_unicode_slug_collision() -> None:
+    session = _FakeSession()
+    existing = _build_category(
+        category_id=9,
+        name="稍后 阅读",
+        slug="稍后-阅读",
+    )
+    session.scalar_values = [None, existing]
+    service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    with pytest.raises(CategoryConflictError, match="Category slug '稍后-阅读' already exists."):
+        await service.create_category(
+            name="稍后___阅读",
+            icon="bookmark",
+            color="#22C55E",
+            position=3,
+        )
+
+
+@pytest.mark.asyncio
 async def test_create_category_raises_conflict_when_name_exists() -> None:
     session = _FakeSession()
     session.scalar_values = [_build_category(name="Read Later", slug="read-later")]

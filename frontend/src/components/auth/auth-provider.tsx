@@ -32,6 +32,7 @@ type AuthProviderProps = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const AUTH_CHANNEL_NAME = "tso:auth";
+type AuthChannelMessage = { type: "session-changed" } | { type: "signed-out" };
 
 function resetUiState() {
   useUiStore.getState().reset();
@@ -55,6 +56,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const statusRef = useRef<AuthStatus>("loading");
   const channelRef = useRef<BroadcastChannel | null>(null);
 
+  const broadcastAuthChange = useCallback((message: AuthChannelMessage) => {
+    channelRef.current?.postMessage(message);
+  }, []);
+
   const clearIdentity = useCallback(() => {
     const changed = statusRef.current !== "anonymous";
     statusRef.current = "anonymous";
@@ -67,7 +72,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return true;
   }, []);
 
-  const refreshSession = useCallback(async (signal?: AbortSignal) => {
+  const loadSession = useCallback(async (signal?: AbortSignal, broadcast = false) => {
     const version = ++requestVersion.current;
     const isBackgroundRefresh = statusRef.current === "authenticated";
     if (!isBackgroundRefresh) {
@@ -93,8 +98,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
         statusRef.current = "authenticated";
         setUser(session.user);
         setStatus("authenticated");
+        if (broadcast) {
+          broadcastAuthChange({ type: "session-changed" });
+        }
       } else {
-        clearIdentity();
+        const changed = clearIdentity();
+        if (broadcast && changed) {
+          broadcastAuthChange({ type: "signed-out" });
+        }
       }
     } catch {
       if (signal?.aborted || version !== requestVersion.current) {
@@ -107,28 +118,32 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setUser(null);
       setStatus("unavailable");
     }
-  }, [clearIdentity]);
+  }, [broadcastAuthChange, clearIdentity]);
+
+  const refreshSession = useCallback(async () => {
+    await loadSession(undefined, true);
+  }, [loadSession]);
 
   useEffect(() => {
     const controller = new AbortController();
-    void refreshSession(controller.signal);
+    void loadSession(controller.signal);
     return () => {
       controller.abort();
       requestVersion.current += 1;
     };
-  }, [refreshSession]);
+  }, [loadSession]);
 
   useEffect(() => {
     const handleUnauthorized = () => {
       requestVersion.current += 1;
       if (clearIdentity()) {
-        channelRef.current?.postMessage({ type: "signed-out" });
+        broadcastAuthChange({ type: "signed-out" });
       }
     };
 
     window.addEventListener(API_UNAUTHORIZED_EVENT, handleUnauthorized);
     return () => window.removeEventListener(API_UNAUTHORIZED_EVENT, handleUnauthorized);
-  }, [clearIdentity]);
+  }, [broadcastAuthChange, clearIdentity]);
 
   useEffect(() => {
     if (typeof window.BroadcastChannel === "undefined") {
@@ -137,14 +152,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     const channel = new window.BroadcastChannel(AUTH_CHANNEL_NAME);
     const handleMessage = (event: MessageEvent<unknown>) => {
-      if (
-        event.data
-        && typeof event.data === "object"
-        && "type" in event.data
-        && event.data.type === "signed-out"
-      ) {
+      if (!event.data || typeof event.data !== "object" || !("type" in event.data)) {
+        return;
+      }
+      if (event.data.type === "signed-out") {
         requestVersion.current += 1;
         clearIdentity();
+      } else if (event.data.type === "session-changed") {
+        void loadSession();
       }
     };
     channelRef.current = channel;
@@ -154,7 +169,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       channel.close();
       channelRef.current = null;
     };
-  }, [clearIdentity]);
+  }, [clearIdentity, loadSession]);
 
   const login = useCallback(async (payload: LoginPayload) => {
     const version = ++requestVersion.current;
@@ -166,9 +181,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       statusRef.current = "authenticated";
       setUser(session.user);
       setStatus("authenticated");
+      broadcastAuthChange({ type: "session-changed" });
     }
     return session.user;
-  }, []);
+  }, [broadcastAuthChange]);
 
   const register = useCallback(async (payload: RegistrationPayload) => {
     const version = ++requestVersion.current;
@@ -181,17 +197,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
       statusRef.current = "authenticated";
       setUser(session.user);
       setStatus("authenticated");
+      broadcastAuthChange({ type: "session-changed" });
     }
     return session.user;
-  }, []);
+  }, [broadcastAuthChange]);
 
   const logout = useCallback(async () => {
     requestVersion.current += 1;
     await deleteSession();
     if (clearIdentity()) {
-      channelRef.current?.postMessage({ type: "signed-out" });
+      broadcastAuthChange({ type: "signed-out" });
     }
-  }, [clearIdentity]);
+  }, [broadcastAuthChange, clearIdentity]);
 
   const value = useMemo<AuthContextValue>(() => ({
     status,

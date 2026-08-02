@@ -75,7 +75,25 @@ function errorDetail(payload: unknown): string | null {
   }
 
   const detail = (payload as ApiErrorPayload).detail;
-  return typeof detail === "string" && detail.length > 0 ? detail : null;
+  if (typeof detail === "string") {
+    return detail.length > 0 ? detail : null;
+  }
+  if (!Array.isArray(detail) || detail.length === 0) {
+    return null;
+  }
+
+  const firstError = detail[0];
+  if (typeof firstError !== "object" || firstError === null || !("msg" in firstError)) {
+    return null;
+  }
+
+  const message = firstError.msg;
+  if (typeof message !== "string") {
+    return null;
+  }
+
+  const normalizedMessage = message.trim().replace(/^Value error,\s*/, "");
+  return normalizedMessage.length > 0 ? normalizedMessage : null;
 }
 
 async function parseResponsePayload(response: Response): Promise<unknown> {

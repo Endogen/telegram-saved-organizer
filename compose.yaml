@@ -1,3 +1,9 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 x-backend: &backend
   build:
     context: .
@@ -9,6 +15,7 @@ x-backend: &backend
     TSO_PROCESS_SCANS_IN_API: "false"
   init: true
   restart: unless-stopped
+  logging: *default-logging
   security_opt:
     - no-new-privileges:true
   cap_drop:
@@ -29,6 +36,7 @@ services:
       timeout: 5s
       retries: 20
     restart: unless-stopped
+    logging: *default-logging
     security_opt:
       - no-new-privileges:true
 
@@ -58,7 +66,7 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python", "-c", "import os, urllib.parse, urllib.request; configured=os.environ.get('TSO_ALLOWED_HOSTS', '').split(',')[0].strip(); host=configured or urllib.parse.urlsplit(os.environ['TSO_PUBLIC_ORIGIN']).hostname; request=urllib.request.Request('http://127.0.0.1:8500/api/health', headers={'Host': host}); urllib.request.urlopen(request, timeout=2)"]
+      test: ["CMD", "python", "-c", "import os, urllib.parse, urllib.request; configured=os.environ.get('TSO_ALLOWED_HOSTS', '').split(',')[0].strip(); host=configured or urllib.parse.urlsplit(os.environ['TSO_PUBLIC_ORIGIN']).hostname; request=urllib.request.Request('http://127.0.0.1:8500/api/ready', headers={'Host': host}); urllib.request.urlopen(request, timeout=2)"]
       interval: 10s
       timeout: 3s
       retries: 10
@@ -80,6 +88,7 @@ services:
       api:
         condition: service_healthy
     restart: unless-stopped
+    logging: *default-logging
     security_opt:
       - no-new-privileges:true
 

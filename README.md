@@ -52,7 +52,8 @@ The included Compose topology runs PostgreSQL, a one-shot migration service, two
 2. Terminate TLS in a reverse proxy on the same host in front of the loopback-bound `TSO_HTTP_PORT`.
 3. Preserve the original `Host`, forward the HTTPS scheme, overwrite `X-Forwarded-For` with the client chain, and set `TSO_PUBLIC_ORIGIN` to the exact external HTTPS origin.
 4. Start the stack with `docker compose up --build -d`.
-5. Confirm `https://your-host/api/health` returns `{"status":"ok"}`.
+5. Confirm `https://your-host/api/ready` returns `{"status":"ready"}`. The separate
+   `/api/health` endpoint is a process-only liveness check.
 
 The production config requires HTTPS, secure cookies, an explicit public origin, and a master encryption key. Keep both the PostgreSQL volume and `TSO_MASTER_KEY` backed up: losing the key makes stored Telegram sessions intentionally unrecoverable. Rotate the Telegram API hash and master key only with a planned credential migration; existing AES-GCM ciphertext is bound to the current key and tenant context.
 

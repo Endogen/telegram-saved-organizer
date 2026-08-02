@@ -9,6 +9,8 @@ from pydantic import BaseModel
 
 from app.models import ScanJob
 
+SCAN_FAILURE_MESSAGE = "The scan could not be completed. Please try again."
+
 
 class ScanState(StrEnum):
     IDLE = "idle"
@@ -60,7 +62,7 @@ class ScanStatusResponse(BaseModel):
             last_message_id=job.last_message_id,
             started_at=job.started_at,
             finished_at=job.finished_at,
-            error=job.error,
+            error=SCAN_FAILURE_MESSAGE if job.state == ScanState.FAILED else None,
             completion_reason=(
                 ScanCompletionReason(job.completion_reason)
                 if job.completion_reason is not None

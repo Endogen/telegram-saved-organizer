@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { TagInputDialog } from "@/components/tags/tag-input";
@@ -144,9 +144,9 @@ describe("TagInputDialog", () => {
     expect(onAddTag).toHaveBeenCalledWith(1, 2);
   });
 
-  it("creates a new tag", () => {
+  it("clears the input after creating a new tag", async () => {
     const message = createMessage();
-    const onCreateTag = vi.fn();
+    const onCreateTag = vi.fn().mockResolvedValue(true);
 
     render(
       <TagInputDialog
@@ -166,6 +166,33 @@ describe("TagInputDialog", () => {
     fireEvent.change(input, { target: { value: "new-tag" } });
     fireEvent.click(screen.getByRole("button", { name: "Add tag" }));
     expect(onCreateTag).toHaveBeenCalledWith("new-tag");
+    await waitFor(() => expect(input).toHaveValue(""));
+  });
+
+  it("preserves the input when creating a tag fails", async () => {
+    const message = createMessage();
+    const onCreateTag = vi.fn().mockResolvedValue(false);
+
+    render(
+      <TagInputDialog
+        open
+        message={message}
+        availableTags={availableTags}
+        isSubmitting={false}
+        errorMessage="Create tag failed."
+        onClose={vi.fn()}
+        onAddTag={vi.fn()}
+        onRemoveTag={vi.fn()}
+        onCreateTag={onCreateTag}
+      />,
+    );
+
+    const input = screen.getByPlaceholderText("e.g. read-later");
+    fireEvent.change(input, { target: { value: "keep-this" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add tag" }));
+
+    await waitFor(() => expect(onCreateTag).toHaveBeenCalledWith("keep-this"));
+    expect(input).toHaveValue("keep-this");
   });
 
   it("disables create button when tag name is empty", () => {

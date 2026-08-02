@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { API_UNAUTHORIZED_EVENT } from "@/api/client";
 import { AuthProvider, useAuth } from "@/components/auth/auth-provider";
@@ -16,6 +16,34 @@ vi.mock("@/api/session", () => sessionMocks);
 vi.mock("@/api/account", () => accountMocks);
 
 const user = { id: "u1", email: "ada@example.com", display_name: "Ada", created_at: "2026-01-01" };
+
+class FakeBroadcastChannel {
+  static instances: FakeBroadcastChannel[] = [];
+
+  readonly name: string;
+  readonly postMessage = vi.fn<(message: unknown) => void>();
+  readonly close = vi.fn();
+  private readonly listeners = new Set<(event: MessageEvent<unknown>) => void>();
+
+  constructor(name: string) {
+    this.name = name;
+    FakeBroadcastChannel.instances.push(this);
+  }
+
+  addEventListener(_type: "message", listener: (event: MessageEvent<unknown>) => void) {
+    this.listeners.add(listener);
+  }
+
+  removeEventListener(_type: "message", listener: (event: MessageEvent<unknown>) => void) {
+    this.listeners.delete(listener);
+  }
+
+  emit(data: unknown) {
+    for (const listener of this.listeners) {
+      listener({ data } as MessageEvent<unknown>);
+    }
+  }
+}
 
 function Probe() {
   const auth = useAuth();
@@ -34,8 +62,14 @@ function Probe() {
 describe("AuthProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    FakeBroadcastChannel.instances = [];
+    vi.stubGlobal("BroadcastChannel", FakeBroadcastChannel);
     sessionMocks.deleteSession.mockResolvedValue(undefined);
     useUiStore.setState({ isSidebarOpen: false, searchQuery: "" });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("bootstraps an authenticated session", async () => {
@@ -43,6 +77,7 @@ describe("AuthProvider", () => {
     render(<AuthProvider><Probe /></AuthProvider>);
     expect(await screen.findByText("authenticated")).toBeInTheDocument();
     expect(screen.getByText("Ada")).toBeInTheDocument();
+    expect(FakeBroadcastChannel.instances[0]?.postMessage).not.toHaveBeenCalled();
   });
 
   it("distinguishes an anonymous session from an unavailable server", async () => {
@@ -70,6 +105,7 @@ describe("AuthProvider", () => {
     fireEvent.click(screen.getByRole("button", { name: "Log in" }));
     expect(await screen.findByText("Ada")).toBeInTheDocument();
     expect(sessionMocks.createSession).toHaveBeenCalledWith({ email: user.email, password: "  exact  " });
+    expect(FakeBroadcastChannel.instances[0]?.postMessage).toHaveBeenCalledWith({ type: "session-changed" });
   });
 
   it("creates a session after registering an account", async () => {
@@ -82,6 +118,50 @@ describe("AuthProvider", () => {
     expect(await screen.findByText("authenticated")).toBeInTheDocument();
     expect(accountMocks.registerAccount).toHaveBeenCalledWith({ email: user.email, display_name: user.display_name, password: "  exact  " });
     expect(sessionMocks.createSession).toHaveBeenCalledWith({ email: user.email, password: "  exact  " });
+    expect(FakeBroadcastChannel.instances[0]?.postMessage).toHaveBeenCalledWith({ type: "session-changed" });
+  });
+
+  it("broadcasts an explicit session refresh after receiving updated account data", async () => {
+    sessionMocks.fetchSession.mockResolvedValueOnce({ authenticated: true, user });
+    render(<AuthProvider><Probe /></AuthProvider>);
+    await screen.findByText("authenticated");
+    const channel = FakeBroadcastChannel.instances[0];
+    channel.postMessage.mockClear();
+
+    const renamedUser = { ...user, display_name: "Ada Lovelace" };
+    sessionMocks.fetchSession.mockResolvedValueOnce({ authenticated: true, user: renamedUser });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
+    expect(channel.postMessage).toHaveBeenCalledWith({ type: "session-changed" });
+  });
+
+  it("refreshes for a remote session change without broadcasting an echo", async () => {
+    sessionMocks.fetchSession.mockResolvedValueOnce({ authenticated: false, user: null });
+    render(<AuthProvider><Probe /></AuthProvider>);
+    await screen.findByText("anonymous");
+    const channel = FakeBroadcastChannel.instances[0];
+    channel.postMessage.mockClear();
+
+    sessionMocks.fetchSession.mockResolvedValueOnce({ authenticated: true, user });
+    act(() => channel.emit({ type: "session-changed" }));
+
+    expect(await screen.findByText("authenticated")).toBeInTheDocument();
+    expect(screen.getByText("Ada")).toBeInTheDocument();
+    expect(channel.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("clears identity for a remote sign-out without broadcasting an echo", async () => {
+    sessionMocks.fetchSession.mockResolvedValueOnce({ authenticated: true, user });
+    render(<AuthProvider><Probe /></AuthProvider>);
+    await screen.findByText("authenticated");
+    const channel = FakeBroadcastChannel.instances[0];
+    channel.postMessage.mockClear();
+
+    act(() => channel.emit({ type: "signed-out" }));
+
+    expect(await screen.findByText("anonymous")).toBeInTheDocument();
+    expect(channel.postMessage).not.toHaveBeenCalled();
   });
 
   it("keeps an authenticated view mounted when a background refresh fails", async () => {
@@ -112,6 +192,7 @@ describe("AuthProvider", () => {
     await waitFor(() => expect(sessionMocks.deleteSession).toHaveBeenCalled());
     expect(await screen.findByText("anonymous")).toBeInTheDocument();
     expect(useUiStore.getState().searchQuery).toBe("");
+    expect(FakeBroadcastChannel.instances[0]?.postMessage).toHaveBeenCalledWith({ type: "signed-out" });
   });
 
   it("keeps the authenticated view when logout cannot reach the server", async () => {

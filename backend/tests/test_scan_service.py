@@ -29,6 +29,7 @@ from app.telegram.scanner import (
     ScanProgress,
     ScannedMessage,
 )
+from app.telegram.schemas import SCAN_FAILURE_MESSAGE
 from app.telegram.service import (
     ScanLease,
     ScanLeaseLostError,
@@ -518,6 +519,42 @@ async def test_process_job_logs_lease_loss_when_success_cannot_be_terminalized(
     with caplog.at_level(logging.WARNING):
         assert await process_scan_job("job-a") is True
     assert "lost lease ownership" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_process_job_logs_failure_details_but_persists_safe_message(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    lease = _lease(owner="worker-a")
+    sentinel_secret = "telegram-session-secret-should-not-be-persisted"
+    captured: dict[str, object] = {}
+
+    async def claim(**_: object) -> ScanLease:
+        return lease
+
+    async def fail(**_: object) -> ScanProgress:
+        raise RuntimeError(sentinel_secret)
+
+    async def run(*, operation: object, **_: object) -> ScanProgress:
+        return await operation  # type: ignore[misc]
+
+    async def finalize(**kwargs: object) -> bool:
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(service_module, "_claim_scan_job", claim)
+    monkeypatch.setattr(service_module, "_execute_bounded_scan_slice", fail)
+    monkeypatch.setattr(service_module, "_run_with_lease_heartbeat", run)
+    monkeypatch.setattr(service_module, "_finalize_scan_job", finalize)
+
+    with caplog.at_level(logging.ERROR):
+        assert await process_scan_job("job-a") is True
+
+    assert sentinel_secret in caplog.text
+    assert captured["state"] == "failed"
+    assert captured["error"] == SCAN_FAILURE_MESSAGE
+    assert sentinel_secret not in str(captured["error"])
 
 
 @pytest.mark.asyncio

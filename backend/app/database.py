@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,7 @@ from typing import Any
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import event, inspect
+from sqlalchemy import event, inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import PRIVATE_FILE_MODE, settings
@@ -46,10 +47,26 @@ def build_engine(database_url: str) -> AsyncEngine:
 engine = build_engine(settings.database_url)
 SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
+DATABASE_READINESS_TIMEOUT_SECONDS = 2.0
+
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with SessionLocal() as session:
         yield session
+
+
+async def database_is_ready(
+    *, timeout_seconds: float = DATABASE_READINESS_TIMEOUT_SECONDS
+) -> bool:
+    """Return whether the database can answer a bounded lightweight query."""
+
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            async with engine.connect() as connection:
+                await connection.execute(text("SELECT 1"))
+    except Exception:
+        return False
+    return True
 
 
 def _alembic_config() -> Config:

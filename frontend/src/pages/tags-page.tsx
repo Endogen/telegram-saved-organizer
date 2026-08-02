@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { LoaderCircle, Pencil, Tag, TagIcon, Trash2 } from "lucide-react";
+import { Link } from "react-router";
 
 import { createTag, deleteTag, listManagedTags, updateTag, type ManagedTag } from "@/api/tags";
 import { DeleteConfirmationDialog } from "@/components/organization/delete-confirmation-dialog";
@@ -204,6 +205,13 @@ export function TagsPage() {
                     <span className="truncate">#{tag.name}</span>
                   </span>
                   <p className="mt-2 text-sm text-[hsl(var(--muted-foreground))]">{messageCountLabel(tag.message_count)}</p>
+                  <Link
+                    to={`/messages?tag=${encodeURIComponent(tag.name)}`}
+                    aria-label={`View messages tagged #${tag.name}`}
+                    className="mt-2 inline-flex text-sm font-semibold text-[hsl(var(--primary))] underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+                  >
+                    View messages
+                  </Link>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
                   <Button

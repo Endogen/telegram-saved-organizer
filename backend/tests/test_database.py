@@ -7,10 +7,41 @@ import pytest
 from sqlalchemy import delete, event, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.database import _configure_sqlite_connection, _secure_sqlite_database_file
+from app import database as database_module
+from app.database import (
+    _configure_sqlite_connection,
+    _secure_sqlite_database_file,
+    database_is_ready,
+)
 from app.models import Base, Category, Message, MessageTag, Tag, User
 
 USER_ID = "00000000-0000-0000-0000-000000000001"
+
+
+@pytest.mark.asyncio
+async def test_database_readiness_probe_executes_a_lightweight_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    monkeypatch.setattr(database_module, "engine", test_engine)
+
+    try:
+        assert await database_is_ready()
+    finally:
+        await test_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_database_readiness_probe_handles_connection_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnavailableEngine:
+        def connect(self) -> None:
+            raise RuntimeError("sensitive database connection details")
+
+    monkeypatch.setattr(database_module, "engine", UnavailableEngine())
+
+    assert not await database_is_ready()
 
 
 @pytest.mark.asyncio

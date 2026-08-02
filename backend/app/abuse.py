@@ -58,6 +58,12 @@ class RateLimitExceeded(RuntimeError):
 LOGIN_PER_IP = RateLimitRule("login_ip", 50, timedelta(minutes=15))
 LOGIN_PER_IDENTITY = RateLimitRule("login_identity", 20, timedelta(minutes=15))
 REGISTRATION_PER_IP = RateLimitRule("registration_ip", 5, timedelta(hours=1))
+SENSITIVE_PASSWORD_PER_IP = RateLimitRule(
+    "sensitive_password_ip", 30, timedelta(minutes=15)
+)
+SENSITIVE_PASSWORD_PER_USER = RateLimitRule(
+    "sensitive_password_user", 10, timedelta(minutes=15)
+)
 TELEGRAM_SEND_PER_IP = RateLimitRule("telegram_send_ip", 10, timedelta(hours=1))
 TELEGRAM_SEND_PER_PHONE = RateLimitRule("telegram_send_phone", 5, timedelta(hours=1))
 TELEGRAM_VERIFY_PER_IP = RateLimitRule("telegram_verify_ip", 30, timedelta(minutes=15))

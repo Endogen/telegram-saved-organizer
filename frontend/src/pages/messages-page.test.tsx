@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -213,10 +213,15 @@ function mockMessageServer(items: MessageListItem[] = messagesFixture) {
 }
 
 function renderMessagesPage(initialEntry = "/messages") {
+  function LocationProbe() {
+    const location = useLocation();
+    return <output data-testid="location-search">{location.search}</output>;
+  }
+
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
-        <Route path="/messages" element={<MessagesPage />} />
+        <Route path="/messages" element={<><MessagesPage /><LocationProbe /></>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -337,6 +342,90 @@ describe("MessagesPage filters", () => {
       expect(screen.getByText("1 matching message")).toBeInTheDocument();
       expect(screen.getByText("Weekly standup audio")).toBeInTheDocument();
       expect(screen.queryByText("React animation reference")).not.toBeInTheDocument();
+    });
+  });
+
+  it("hydrates every supported library option from a deep link", async () => {
+    vi.mocked(listMessages).mockResolvedValue({
+      items: messagesFixture,
+      total: 90,
+      page: 2,
+      per_page: 30,
+    });
+
+    renderMessagesPage(
+      "/messages?category=audio&q=Weekly%20standup&tag=frontend&tag=meeting&sort=sender&page=2&per_page=30",
+    );
+
+    await waitFor(() => expect(listMessages).toHaveBeenCalledWith({
+      page: 2,
+      per_page: 30,
+      sort: "sender",
+      category: "audio",
+      search: "weekly standup",
+      tag: ["frontend", "meeting"],
+    }));
+    expect(screen.getByPlaceholderText("Search by text, URL, sender, or tag...")).toHaveValue("Weekly standup");
+    expect(screen.getByRole("combobox", { name: "Category" })).toHaveValue("audio");
+    expect(screen.getByRole("combobox", { name: "Sort" })).toHaveValue("sender");
+    expect(screen.getByRole("combobox", { name: "Per page" })).toHaveValue("30");
+    expect(screen.getByRole("button", { name: "#frontend" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "#meeting" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("falls back safely when deep-link values are invalid", async () => {
+    const oversizedSearch = "x".repeat(501);
+    const oversizedTag = "t".repeat(101);
+    renderMessagesPage(
+      `/messages?q=${oversizedSearch}&tag=&tag=${oversizedTag}&sort=unknown&page=0&per_page=30items`,
+    );
+
+    await waitFor(() => expect(listMessages).toHaveBeenCalledWith({
+      page: 1,
+      per_page: 60,
+      sort: "date_desc",
+      category: undefined,
+      search: undefined,
+      tag: undefined,
+    }));
+    expect(screen.getByPlaceholderText("Search by text, URL, sender, or tag...")).toHaveValue("");
+    expect(screen.getByRole("combobox", { name: "Sort" })).toHaveValue("date_desc");
+    expect(screen.getByRole("combobox", { name: "Per page" })).toHaveValue("60");
+    expect(screen.getByText("0 selected")).toBeInTheDocument();
+  });
+
+  it("persists deliberate controls and debounced search together in the URL", async () => {
+    vi.mocked(listMessages).mockResolvedValue({
+      items: messagesFixture,
+      total: 130,
+      page: 1,
+      per_page: 60,
+    });
+    renderMessagesPage("/messages?extra=keep");
+    await screen.findByText(/^130 messages/);
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Category" }), { target: { value: "audio" } });
+    await waitFor(() => expect(screen.getByTestId("location-search")).toHaveTextContent("category=audio"));
+    fireEvent.click(screen.getByRole("button", { name: "#frontend" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Sort" }), { target: { value: "category" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Per page" }), { target: { value: "30" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Page 2" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Page 2" }));
+    await waitFor(() => expect(screen.getByTestId("location-search")).toHaveTextContent("page=2"));
+
+    fireEvent.change(screen.getByPlaceholderText("Search by text, URL, sender, or tag..."), {
+      target: { value: "backend checklist" },
+    });
+
+    await waitFor(() => {
+      const params = new URLSearchParams(screen.getByTestId("location-search").textContent ?? "");
+      expect(params.get("extra")).toBe("keep");
+      expect(params.get("category")).toBe("audio");
+      expect(params.getAll("tag")).toEqual(["frontend"]);
+      expect(params.get("sort")).toBe("category");
+      expect(params.get("per_page")).toBe("30");
+      expect(params.get("q")).toBe("backend checklist");
+      expect(params.has("page")).toBe(false);
     });
   });
 

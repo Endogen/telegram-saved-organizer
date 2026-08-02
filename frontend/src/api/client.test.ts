@@ -89,6 +89,51 @@ describe("shared API client", () => {
     window.removeEventListener(API_UNAUTHORIZED_EVENT, unauthorizedListener);
   });
 
+  it("surfaces the first FastAPI validation message", async () => {
+    fetchMock.mockResolvedValue(response({
+      detail: [
+        {
+          type: "value_error",
+          loc: ["body", "password"],
+          msg: "Value error, Password must contain at least 12 bytes.",
+        },
+        {
+          type: "missing",
+          loc: ["body", "display_name"],
+          msg: "Field required",
+        },
+      ],
+    }, { ok: false, status: 422 }));
+
+    const error = await requestJson("/api/account/register", undefined, {
+      fallbackMessage: "Could not complete registration.",
+    }).catch((requestError: unknown) => requestError);
+
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({
+      status: 422,
+      detail: "Password must contain at least 12 bytes.",
+      message: "Password must contain at least 12 bytes.",
+    });
+  });
+
+  it.each([
+    { detail: [] },
+    { detail: ["Field required"] },
+    { detail: [{ type: "missing", loc: ["body", "name"] }] },
+    { detail: [{ type: "value_error", loc: ["body", "name"], msg: 42 }] },
+  ])("uses the fallback for a malformed validation detail array %#", async ({ detail }) => {
+    fetchMock.mockResolvedValue(response({ detail }, { ok: false, status: 422 }));
+
+    await expect(requestJson("/api/probe", undefined, {
+      fallbackMessage: "Could not validate the request.",
+    })).rejects.toMatchObject({
+      status: 422,
+      detail: null,
+      message: "Could not validate the request.",
+    });
+  });
+
   it("can suppress the global unauthorized event for the unlock endpoint", async () => {
     const unauthorizedListener = vi.fn();
     window.addEventListener(API_UNAUTHORIZED_EVENT, unauthorizedListener);

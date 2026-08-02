@@ -36,6 +36,8 @@ from app.abuse import (
     LOGIN_PER_IDENTITY,
     LOGIN_PER_IP,
     REGISTRATION_PER_IP,
+    SENSITIVE_PASSWORD_PER_IP,
+    SENSITIVE_PASSWORD_PER_USER,
     RateLimitCheck,
     client_ip_subject,
     enforce_rate_limits,
@@ -207,6 +209,13 @@ async def change_password(
     context: Annotated[AuthContext, Depends(get_auth_context)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> None:
+    await enforce_rate_limits(
+        session,
+        (
+            RateLimitCheck(SENSITIVE_PASSWORD_PER_IP, client_ip_subject(request)),
+            RateLimitCheck(SENSITIVE_PASSWORD_PER_USER, str(context.user.id)),
+        ),
+    )
     try:
         credentials = await AccountService(session=session).change_password(
             user=context.user,
@@ -225,10 +234,18 @@ async def change_password(
 @router.delete("/account", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_account(
     payload: AccountDeleteRequest,
+    request: Request,
     response: Response,
     context: Annotated[AuthContext, Depends(get_auth_context)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> None:
+    await enforce_rate_limits(
+        session,
+        (
+            RateLimitCheck(SENSITIVE_PASSWORD_PER_IP, client_ip_subject(request)),
+            RateLimitCheck(SENSITIVE_PASSWORD_PER_USER, str(context.user.id)),
+        ),
+    )
     try:
         await AccountService(session=session).delete_account(
             user=context.user,

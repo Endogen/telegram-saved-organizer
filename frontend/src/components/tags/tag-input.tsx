@@ -15,7 +15,7 @@ type TagInputDialogProps = {
   onClose: () => void;
   onAddTag: (messageId: number, tagId: number) => Promise<void> | void;
   onRemoveTag: (messageId: number, tagId: number) => Promise<void> | void;
-  onCreateTag: (name: string) => Promise<void> | void;
+  onCreateTag: (name: string) => Promise<boolean> | boolean;
 };
 
 function withAlpha(color: string | null, alphaHex: string): string | null {
@@ -65,8 +65,10 @@ export function TagInputDialog({
     if (newTagName.trim().length === 0) {
       return;
     }
-    await onCreateTag(newTagName);
-    setNewTagName("");
+    const wasCreated = await onCreateTag(newTagName);
+    if (wasCreated) {
+      setNewTagName("");
+    }
   }
 
   return (

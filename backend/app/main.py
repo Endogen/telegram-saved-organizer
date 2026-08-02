@@ -14,7 +14,7 @@ from app.accounts.router import router as account_router
 from app.auth.router import router as telegram_auth_router
 from app.categories.router import router as categories_router
 from app.config import settings
-from app.database import dispose_engine, verify_database_revision
+from app.database import database_is_ready, dispose_engine, verify_database_revision
 from app.messages.router import router as messages_router
 from app.tags.router import router as tags_router
 from app.telegram.router import router as scan_router
@@ -121,6 +121,19 @@ def _api_router() -> APIRouter:
     @router.get("/health", tags=["health"])
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @router.get(
+        "/ready",
+        tags=["health"],
+        responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "Database unavailable"}},
+    )
+    async def readiness() -> Response:
+        if not await database_is_ready():
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"status": "unavailable"},
+            )
+        return JSONResponse(content={"status": "ready"})
 
     return router
 

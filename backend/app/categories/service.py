@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -14,7 +15,8 @@ from app.models import Category, Message
 
 OTHER_CATEGORY_SLUG = "other"
 HEX_COLOR_PATTERN = re.compile(r"^#[0-9A-F]{6}$")
-SLUG_SANITIZE_PATTERN = re.compile(r"[^a-z0-9]+")
+SLUG_SANITIZE_PATTERN = re.compile(r"[\W_]+")
+MAX_SLUG_LENGTH = 100
 
 
 class CategoryNotFoundError(RuntimeError):
@@ -254,7 +256,9 @@ class CategoryService:
         return value
 
     def _slugify(self, value: str) -> str:
-        slug = SLUG_SANITIZE_PATTERN.sub("-", value.lower()).strip("-")
+        normalized_value = unicodedata.normalize("NFC", value).casefold()
+        slug = SLUG_SANITIZE_PATTERN.sub("-", normalized_value).strip("-")
+        slug = slug[:MAX_SLUG_LENGTH].rstrip("-")
         if not slug:
             raise ValueError("name must include at least one alphanumeric character.")
         return slug

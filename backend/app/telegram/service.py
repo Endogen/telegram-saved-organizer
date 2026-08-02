@@ -33,6 +33,7 @@ from app.telegram.scanner import (
     ScanProgress,
     SavedMessagesScanner,
 )
+from app.telegram.schemas import SCAN_FAILURE_MESSAGE
 
 logger = logging.getLogger(__name__)
 
@@ -292,12 +293,12 @@ async def process_scan_job(job_id: str) -> bool:
     except asyncio.CancelledError:
         await _release_interrupted_scan(lease=lease)
         raise
-    except Exception as exc:
+    except Exception:
         logger.exception("Telegram scan job %s failed", job_id)
         finalized = await _finalize_scan_job(
             lease=lease,
             state="failed",
-            error=str(exc) or "Telegram scan failed.",
+            error=SCAN_FAILURE_MESSAGE,
             completion_reason=None,
         )
         if not finalized:

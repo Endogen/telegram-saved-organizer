@@ -41,6 +41,40 @@ const sortOptions: { value: SortOption; label: string }[] = [
   { value: "category", label: "Category" },
   { value: "sender", label: "Sender" },
 ];
+const DEFAULT_SORT_OPTION: SortOption = "date_desc";
+const DEFAULT_ITEMS_PER_PAGE = 60;
+const MAX_PAGE_NUMBER = 1_000_000;
+const MAX_SEARCH_LENGTH = 500;
+const MAX_TAG_FILTERS = 20;
+const MAX_TAG_NAME_LENGTH = 100;
+const itemsPerPageOptions = [30, 60, 120, 200] as const;
+
+function isSortOption(value: string | null): value is SortOption {
+  return sortOptions.some((option) => option.value === value);
+}
+
+function readPageNumber(value: string | null): number {
+  if (value === null || !/^\d+$/.test(value)) {
+    return 1;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return parsed > 0 && parsed <= MAX_PAGE_NUMBER && Number.isSafeInteger(parsed) ? parsed : 1;
+}
+
+function readItemsPerPage(value: string | null): number {
+  if (value === null || !/^\d+$/.test(value)) {
+    return DEFAULT_ITEMS_PER_PAGE;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return itemsPerPageOptions.includes(parsed as (typeof itemsPerPageOptions)[number])
+    ? parsed
+    : DEFAULT_ITEMS_PER_PAGE;
+}
+
+function readSearchQuery(value: string | null): string {
+  const normalized = value?.trim() ?? "";
+  return normalized.length <= MAX_SEARCH_LENGTH ? normalized : "";
+}
 
 function normalizeTagKey(name: string): string {
   return name.trim().toLowerCase();
@@ -140,10 +174,8 @@ export function MessagesPage() {
   const [totalMessages, setTotalMessages] = useState(0);
   const [reloadRevision, setReloadRevision] = useState(0);
   const [pageError, setPageError] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
-  const [selectedTagFilters, setSelectedTagFilters] = useState<string[]>([]);
-  const [sortOption, setSortOption] = useState<SortOption>("date_desc");
+  const urlSearchQuery = readSearchQuery(searchParams.get("q"));
+  const [searchQuery, setSearchQuery] = useState(urlSearchQuery);
   const [moveDialogMessageId, setMoveDialogMessageId] = useState<number | null>(null);
   const [tagDialogMessageId, setTagDialogMessageId] = useState<number | null>(null);
   const [detailDialogMessageId, setDetailDialogMessageId] = useState<number | null>(null);
@@ -157,19 +189,48 @@ export function MessagesPage() {
   const [moveDialogError, setMoveDialogError] = useState<string | null>(null);
   const [tagDialogError, setTagDialogError] = useState<string | null>(null);
   const [bulkActionError, setBulkActionError] = useState<string | null>(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(60);
   const gridTopRef = useRef<HTMLDivElement | null>(null);
   const { categories: fetchedCategories, isFallback: isCategoriesFallback } = useCategories();
   const categoryFilter = searchParams.get("category")?.trim().toLowerCase() ?? "";
+  const selectedTagFilters = useMemo(
+    () => [...new Set(
+      searchParams
+        .getAll("tag")
+        .map(normalizeTagKey)
+        .filter((tag) => tag.length > 0 && tag.length <= MAX_TAG_NAME_LENGTH),
+    )].slice(0, MAX_TAG_FILTERS),
+    [searchParams],
+  );
+  const requestedSortOption = searchParams.get("sort");
+  const sortOption = isSortOption(requestedSortOption) ? requestedSortOption : DEFAULT_SORT_OPTION;
+  const currentPage = readPageNumber(searchParams.get("page"));
+  const itemsPerPage = readItemsPerPage(searchParams.get("per_page"));
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+  const normalizedUrlSearchQuery = urlSearchQuery.toLowerCase();
 
   useEffect(() => {
+    setSearchQuery(urlSearchQuery);
+  }, [urlSearchQuery]);
+
+  useEffect(() => {
+    if (normalizedSearchQuery === normalizedUrlSearchQuery) {
+      return;
+    }
+
     const timeout = window.setTimeout(() => {
-      setDebouncedSearchQuery(normalizedSearchQuery);
+      setSearchParams((currentParams) => {
+        const nextParams = new URLSearchParams(currentParams);
+        if (searchQuery.trim().length === 0) {
+          nextParams.delete("q");
+        } else {
+          nextParams.set("q", searchQuery.trim());
+        }
+        nextParams.delete("page");
+        return nextParams;
+      }, { replace: true });
     }, 250);
     return () => window.clearTimeout(timeout);
-  }, [normalizedSearchQuery]);
+  }, [normalizedSearchQuery, normalizedUrlSearchQuery, searchQuery, setSearchParams]);
 
   useEffect(() => {
     let isCanceled = false;
@@ -203,7 +264,7 @@ export function MessagesPage() {
           per_page: itemsPerPage,
           sort: sortOption,
           category: categoryFilter || undefined,
-          search: debouncedSearchQuery || undefined,
+          search: normalizedUrlSearchQuery || undefined,
           tag: selectedTagFilters.length > 0 ? selectedTagFilters : undefined,
         });
         if (isCanceled) return;
@@ -227,8 +288,8 @@ export function MessagesPage() {
   }, [
     categoryFilter,
     currentPage,
-    debouncedSearchQuery,
     itemsPerPage,
+    normalizedUrlSearchQuery,
     reloadRevision,
     selectedTagFilters,
     sortOption,
@@ -266,31 +327,17 @@ export function MessagesPage() {
     [actionCategories],
   );
 
-  const availableTags = useMemo(() => {
-    const tagCounts = new Map<string, number>();
-
-    for (const message of messages) {
-      for (const tag of message.tags) {
-        const key = normalizeTagKey(tag.name);
-        tagCounts.set(key, (tagCounts.get(key) ?? 0) + 1);
-      }
-    }
-
-    return mergeTags(knownTags, deriveTagsFromMessages(messages)).map((tag) => ({
+  const availableTags = useMemo(
+    () => mergeTags(knownTags, deriveTagsFromMessages(messages)).map((tag) => ({
       key: normalizeTagKey(tag.name),
       label: tag.name,
-      count: tagCounts.get(normalizeTagKey(tag.name)) ?? 0,
       id: tag.id,
       color: tag.color,
-    }));
-  }, [knownTags, messages]);
+    })),
+    [knownTags, messages],
+  );
 
   const filteredAndSorted = messages;
-
-  // Reset to page 1 when filters change
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [categoryFilter, normalizedSearchQuery, selectedTagFilters, sortOption]);
 
   const totalPages = Math.max(1, Math.ceil(totalMessages / itemsPerPage));
   const safePage = Math.min(currentPage, totalPages);
@@ -298,13 +345,29 @@ export function MessagesPage() {
 
   useEffect(() => {
     if (!isInitialLoading && currentPage > totalPages) {
-      setCurrentPage(totalPages);
+      setSearchParams((currentParams) => {
+        const nextParams = new URLSearchParams(currentParams);
+        if (totalPages === 1) {
+          nextParams.delete("page");
+        } else {
+          nextParams.set("page", String(totalPages));
+        }
+        return nextParams;
+      }, { replace: true });
     }
-  }, [currentPage, isInitialLoading, totalPages]);
+  }, [currentPage, isInitialLoading, setSearchParams, totalPages]);
 
   function goToPage(page: number) {
     const clamped = Math.max(1, Math.min(page, totalPages));
-    setCurrentPage(clamped);
+    setSearchParams((currentParams) => {
+      const nextParams = new URLSearchParams(currentParams);
+      if (clamped === 1) {
+        nextParams.delete("page");
+      } else {
+        nextParams.set("page", String(clamped));
+      }
+      return nextParams;
+    });
     gridTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
@@ -410,30 +473,71 @@ export function MessagesPage() {
   }, [messages, moveSingleMessageToCategory]);
 
   function setCategoryParam(nextCategory: string) {
-    const nextSearchParams = new URLSearchParams(searchParams);
-    if (nextCategory.length === 0) {
-      nextSearchParams.delete("category");
-    } else {
-      nextSearchParams.set("category", nextCategory);
-    }
-
-    setSearchParams(nextSearchParams);
+    setSearchParams((currentParams) => {
+      const nextParams = new URLSearchParams(currentParams);
+      if (nextCategory.length === 0) {
+        nextParams.delete("category");
+      } else {
+        nextParams.set("category", nextCategory);
+      }
+      nextParams.delete("page");
+      return nextParams;
+    });
   }
 
   function toggleTagFilter(tagKey: string) {
-    setSelectedTagFilters((currentFilters) => {
-      if (currentFilters.includes(tagKey)) {
-        return currentFilters.filter((existingTag) => existingTag !== tagKey);
+    const nextTags = selectedTagFilters.includes(tagKey)
+      ? selectedTagFilters.filter((existingTag) => existingTag !== tagKey)
+      : [...selectedTagFilters, tagKey];
+
+    setSearchParams((currentParams) => {
+      const nextParams = new URLSearchParams(currentParams);
+      nextParams.delete("tag");
+      for (const tag of nextTags) {
+        nextParams.append("tag", tag);
       }
-      return [...currentFilters, tagKey];
+      nextParams.delete("page");
+      return nextParams;
+    });
+  }
+
+  function setSortParam(nextSort: SortOption) {
+    setSearchParams((currentParams) => {
+      const nextParams = new URLSearchParams(currentParams);
+      if (nextSort === DEFAULT_SORT_OPTION) {
+        nextParams.delete("sort");
+      } else {
+        nextParams.set("sort", nextSort);
+      }
+      nextParams.delete("page");
+      return nextParams;
+    });
+  }
+
+  function setItemsPerPageParam(nextItemsPerPage: number) {
+    setSearchParams((currentParams) => {
+      const nextParams = new URLSearchParams(currentParams);
+      if (nextItemsPerPage === DEFAULT_ITEMS_PER_PAGE) {
+        nextParams.delete("per_page");
+      } else {
+        nextParams.set("per_page", String(nextItemsPerPage));
+      }
+      nextParams.delete("page");
+      return nextParams;
     });
   }
 
   function clearFilters() {
     setSearchQuery("");
-    setSelectedTagFilters([]);
-    setSortOption("date_desc");
-    setCategoryParam("");
+    setSearchParams((currentParams) => {
+      const nextParams = new URLSearchParams(currentParams);
+      nextParams.delete("q");
+      nextParams.delete("category");
+      nextParams.delete("tag");
+      nextParams.delete("sort");
+      nextParams.delete("page");
+      return nextParams;
+    });
   }
 
   function activateBulkSelectionMode() {
@@ -530,10 +634,10 @@ export function MessagesPage() {
     }
   }
 
-  async function handleCreateAndAttachTag(name: string) {
+  async function handleCreateAndAttachTag(name: string): Promise<boolean> {
     const normalizedName = name.trim().replace(/\s+/g, " ");
     if (normalizedName.length === 0 || activeTagMessage === null) {
-      return;
+      return false;
     }
 
     setTagDialogError(null);
@@ -551,8 +655,10 @@ export function MessagesPage() {
       if (hasActiveFilters) {
         setReloadRevision((current) => current + 1);
       }
+      return true;
     } catch (error) {
       setTagDialogError(toErrorMessage(error, "Unable to create tag."));
+      return false;
     } finally {
       setIsTagSubmitting(false);
     }
@@ -779,7 +885,7 @@ export function MessagesPage() {
             </span>
             <select
               value={sortOption}
-              onChange={(event) => setSortOption(event.target.value as SortOption)}
+              onChange={(event) => setSortParam(event.target.value as SortOption)}
               disabled={isInitialLoading}
               className="h-10 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 text-sm text-[hsl(var(--foreground))] outline-none ring-[hsl(var(--ring))] transition focus:ring-2"
             >
@@ -833,6 +939,7 @@ export function MessagesPage() {
                     key={tag.id}
                     type="button"
                     onClick={() => toggleTagFilter(tag.key)}
+                    aria-pressed={isActive}
                     className={[
                       "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
                       isActive
@@ -841,9 +948,6 @@ export function MessagesPage() {
                     ].join(" ")}
                   >
                     <span>#{tag.label}</span>
-                    <span className="rounded-full bg-[hsl(var(--muted)/0.85)] px-1.5 py-0.5 text-[10px] leading-none">
-                      {tag.count}
-                    </span>
                   </button>
                 );
               })}
@@ -869,16 +973,12 @@ export function MessagesPage() {
             Per page
             <select
               value={itemsPerPage}
-              onChange={(event) => {
-                setItemsPerPage(Number(event.target.value));
-                setCurrentPage(1);
-              }}
+              onChange={(event) => setItemsPerPageParam(Number(event.target.value))}
               className="h-8 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 text-xs text-[hsl(var(--foreground))] outline-none ring-[hsl(var(--ring))] transition focus:ring-2"
             >
-              <option value={30}>30</option>
-              <option value={60}>60</option>
-              <option value={120}>120</option>
-              <option value={200}>200</option>
+              {itemsPerPageOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
             </select>
           </label>
 

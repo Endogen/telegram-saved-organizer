@@ -8,6 +8,7 @@ from fastapi import BackgroundTasks
 
 from app.telegram import router as router_module
 from app.telegram.router import _format_sse_event, scan_status, start_scan, stop_scan
+from app.telegram.schemas import SCAN_FAILURE_MESSAGE
 
 
 def _job(*, state: str = "pending") -> SimpleNamespace:
@@ -108,6 +109,27 @@ async def test_scan_status_and_stop_are_service_backed(monkeypatch: pytest.Monke
     assert current.job_id == "job-a"
     assert stopped.state == "stopping"
     assert stopped.stop_requested is True
+
+
+@pytest.mark.asyncio
+async def test_failed_scan_status_serializes_only_safe_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel_secret = "telegram-session-secret-should-not-be-serialized"
+    service = _FakeService()
+    service.job = _job(state="failed")
+    service.job.error = sentinel_secret
+    service.job.finished_at = datetime.now(tz=UTC)
+    monkeypatch.setattr(router_module, "_service", lambda **_: service)
+
+    response = await scan_status(
+        user=SimpleNamespace(id="user-a"),
+        session=object(),  # type: ignore[arg-type]
+    )
+    serialized = response.model_dump_json()
+
+    assert response.error == SCAN_FAILURE_MESSAGE
+    assert sentinel_secret not in serialized
 
 
 def test_format_sse_event() -> None:

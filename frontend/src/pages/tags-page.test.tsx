@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/api/tags", () => ({
@@ -16,6 +17,10 @@ const tags = [
   { id: 2, name: "urgent", color: null, message_count: 1 },
 ];
 
+function renderPage() {
+  return render(<MemoryRouter><TagsPage /></MemoryRouter>);
+}
+
 describe("TagsPage", () => {
   beforeEach(() => {
     vi.mocked(listManagedTags).mockReset();
@@ -29,7 +34,7 @@ describe("TagsPage", () => {
   });
 
   it("loads reusable tags with global assignment counts", async () => {
-    render(<TagsPage />);
+    renderPage();
 
     expect(await screen.findByText("#frontend")).toBeInTheDocument();
     expect(screen.getByText("4 messages")).toBeInTheDocument();
@@ -37,7 +42,7 @@ describe("TagsPage", () => {
   });
 
   it("creates and edits a tag", async () => {
-    render(<TagsPage />);
+    renderPage();
     await screen.findByText("#frontend");
 
     fireEvent.click(screen.getByRole("button", { name: "New tag" }));
@@ -55,7 +60,7 @@ describe("TagsPage", () => {
   });
 
   it("deletes a tag without deleting its messages", async () => {
-    render(<TagsPage />);
+    renderPage();
     await screen.findByText("#frontend");
 
     fireEvent.click(screen.getByRole("button", { name: "Delete #frontend" }));
@@ -65,5 +70,15 @@ describe("TagsPage", () => {
     await waitFor(() => expect(deleteTag).toHaveBeenCalledWith(1));
     expect(screen.queryByText("#frontend")).not.toBeInTheDocument();
     expect(screen.getByText("Deleted #frontend and removed it from 4 messages.")).toBeInTheDocument();
+  });
+
+  it("links each tag to its filtered message library", async () => {
+    renderPage();
+    await screen.findByText("#frontend");
+
+    expect(screen.getByRole("link", { name: "View messages tagged #frontend" }))
+      .toHaveAttribute("href", "/messages?tag=frontend");
+    expect(screen.getByRole("link", { name: "View messages tagged #urgent" }))
+      .toHaveAttribute("href", "/messages?tag=urgent");
   });
 });
