@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.accounts.dependencies import get_current_user
 from app.database import get_session
+from app.identifiers import MAX_DATABASE_INTEGER
 from app.models import User
 from app.messages.schemas import (
     MessageBulkDeleteRequest,
@@ -34,9 +35,8 @@ from app.telegram.client import (
 )
 
 router = APIRouter(prefix="/messages", tags=["messages"])
-MAX_DB_IDENTIFIER = 2**63 - 1
 MAX_PAGE_NUMBER = 1_000_000
-MessageIdentifier = Annotated[int, Path(ge=1, le=MAX_DB_IDENTIFIER)]
+MessageIdentifier = Annotated[int, Path(ge=1, le=MAX_DATABASE_INTEGER)]
 
 
 async def get_message_service(

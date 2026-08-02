@@ -10,6 +10,7 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.identifiers import MAX_DATABASE_INTEGER
 from app.models import Category, Message, MessageTag, Tag
 from app.telegram.client import (
     TelegramClientNotConnectedError,
@@ -18,7 +19,6 @@ from app.telegram.client import (
     delete_saved_messages,
 )
 
-MAX_DB_IDENTIFIER = 2**63 - 1
 MAX_PAGE_NUMBER = 1_000_000
 
 __all__ = [
@@ -365,7 +365,7 @@ class MessageService:
                 not isinstance(message_id, int)
                 or isinstance(message_id, bool)
                 or message_id <= 0
-                or message_id > MAX_DB_IDENTIFIER
+                or message_id > MAX_DATABASE_INTEGER
             ):
                 raise ValueError("message_ids must contain only positive integers.")
             if message_id in seen_ids:

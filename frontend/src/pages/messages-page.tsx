@@ -945,7 +945,12 @@ export function MessagesPage() {
         <h2 className="text-2xl font-semibold text-[hsl(var(--foreground))]">Messages</h2>
         <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
           Search by content, URL, sender, and tags. Layer filters to narrow down your Saved Messages quickly.
-          {categoryFilter.length > 0 ? ` Active category: ${formatCategoryFilter(categoryFilter)}.` : ""}
+          {categoryFilter.length > 0
+            ? ` Active category: ${
+                availableCategories.find((category) => category.slug === categoryFilter)?.name ??
+                formatCategoryFilter(categoryFilter)
+              }.`
+            : ""}
         </p>
         {loadError ? (
           <StatePanel

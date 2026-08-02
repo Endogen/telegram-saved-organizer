@@ -6,11 +6,13 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.identifiers import MAX_DATABASE_INTEGER
 from app.tags.service import TagWithCount
 
 HEX_COLOR_REGEX = r"^#[0-9A-Fa-f]{6}$"
-MAX_DB_IDENTIFIER = 2**63 - 1
-PositiveIdentifier = Annotated[int, Field(gt=0, le=MAX_DB_IDENTIFIER, strict=True)]
+PositiveIdentifier = Annotated[
+    int, Field(gt=0, le=MAX_DATABASE_INTEGER, strict=True)
+]
 
 
 class TagResponse(BaseModel):

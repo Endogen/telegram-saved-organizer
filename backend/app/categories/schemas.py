@@ -7,9 +7,9 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.categories.service import CategoryDeleteResult, CategoryWithCount
+from app.identifiers import MAX_DATABASE_INTEGER
 
 HEX_COLOR_REGEX = r"^#[0-9A-Fa-f]{6}$"
-MAX_DB_INTEGER = 2**31 - 1
 
 
 class CategoryResponse(BaseModel):
@@ -59,7 +59,9 @@ class CategoryCreateRequest(BaseModel):
     name: NameField
     icon: IconField
     color: ColorField
-    position: int | None = Field(default=None, ge=0, le=MAX_DB_INTEGER, strict=True)
+    position: int | None = Field(
+        default=None, ge=0, le=MAX_DATABASE_INTEGER, strict=True
+    )
 
 
 class CategoryUpdateRequest(BaseModel):
@@ -71,7 +73,9 @@ class CategoryUpdateRequest(BaseModel):
     name: NameField = None  # type: ignore[assignment]
     icon: IconField = None  # type: ignore[assignment]
     color: ColorField = None  # type: ignore[assignment]
-    position: int = Field(default=None, ge=0, le=MAX_DB_INTEGER, strict=True)  # type: ignore[arg-type]
+    position: int = Field(  # type: ignore[arg-type]
+        default=None, ge=0, le=MAX_DATABASE_INTEGER, strict=True
+    )
 
     @model_validator(mode="after")
     def validate_has_update_fields(self) -> "CategoryUpdateRequest":

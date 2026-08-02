@@ -58,6 +58,14 @@ const errorScanStatus: ScanStatus = {
 
 const originalEventSourceDescriptor = Object.getOwnPropertyDescriptor(window, "EventSource");
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 describe("ScanProgress", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -101,7 +109,7 @@ describe("ScanProgress", () => {
     expect(screen.getAllByText("0").length).toBeGreaterThanOrEqual(1); // messages/batches checked
     expect(screen.getByText("Import Saved Messages")).toBeInTheDocument();
     expect(screen.getByText("Find new messages in Telegram and add them to your organizer.")).toBeInTheDocument();
-    expect(screen.getByText("Checking for active imports")).toBeInTheDocument();
+    expect(screen.getByText("No active import")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Scan for new messages" })).toBeInTheDocument();
     expect(subscribeToScanStatus).not.toHaveBeenCalled();
   });
@@ -412,6 +420,46 @@ describe("ScanProgress", () => {
     });
   });
 
+  it("does not let a stale poll overwrite a newer live status", async () => {
+    let onStatusCallback: ((status: ScanStatus) => void) | undefined;
+    const stalePoll = deferred<ScanStatus>();
+    const runningStatus: ScanStatus = {
+      ...idleScanStatus,
+      job_id: "job-a",
+      state: "running",
+      messages_scanned: 25,
+      started_at: "2026-02-15T10:00:00.000Z",
+    };
+    vi.mocked(fetchScanStatus)
+      .mockResolvedValueOnce(runningStatus)
+      .mockReturnValueOnce(stalePoll.promise);
+    vi.mocked(subscribeToScanStatus).mockImplementation((handlers: any) => {
+      onStatusCallback = handlers.onStatus;
+      return { close: vi.fn() };
+    });
+
+    render(<ScanProgress />);
+    await screen.findByText("Importing Saved Messages");
+
+    act(() => {
+      vi.advanceTimersByTime(1_500);
+    });
+    await waitFor(() => expect(fetchScanStatus).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      onStatusCallback?.(completeScanStatus);
+    });
+    await screen.findByText("Import complete");
+
+    await act(async () => {
+      stalePoll.resolve(runningStatus);
+      await stalePoll.promise;
+    });
+
+    expect(screen.getByText("Import complete")).toBeInTheDocument();
+    expect(screen.queryByText("Importing Saved Messages")).not.toBeInTheDocument();
+  });
+
   it("closes live updates immediately when they report a terminal state", async () => {
     let onStatusCallback: ((status: ScanStatus) => void) | undefined;
     const closeFn = vi.fn();
@@ -435,7 +483,7 @@ describe("ScanProgress", () => {
 
     await waitFor(() => expect(closeFn).toHaveBeenCalledTimes(1));
     expect(screen.getByText("Import complete")).toBeInTheDocument();
-    expect(screen.getByText("Checking for active imports")).toBeInTheDocument();
+    expect(screen.getByText("No active import")).toBeInTheDocument();
   });
 
   it("refreshes category counts once when polling observes a terminal scan", async () => {

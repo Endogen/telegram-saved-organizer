@@ -87,7 +87,7 @@ class AccountService:
         normalized_email = normalize_email(email)
         password_hash = await hash_password(password)
         user = User(
-            email=normalized_email,
+            email=email.strip(),
             normalized_email=normalized_email,
             display_name=display_name.strip(),
             password_hash=password_hash,

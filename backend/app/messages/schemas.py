@@ -7,9 +7,8 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.identifiers import MAX_DATABASE_INTEGER
 from app.messages.service import MessageListResult
-
-MAX_DB_IDENTIFIER = 2**63 - 1
 
 
 class MessageCategoryResponse(BaseModel):
@@ -78,7 +77,9 @@ class MessageListResponse(BaseModel):
 class MessageUpdateRequest(BaseModel):
     """Updatable message fields."""
 
-    category_id: int = Field(default=None, gt=0, le=MAX_DB_IDENTIFIER, strict=True)  # type: ignore[arg-type]
+    category_id: int = Field(  # type: ignore[arg-type]
+        default=None, gt=0, le=MAX_DATABASE_INTEGER, strict=True
+    )
     content: str | None = None
 
     @model_validator(mode="after")
@@ -88,7 +89,9 @@ class MessageUpdateRequest(BaseModel):
         return self
 
 
-PositiveIdentifier = Annotated[int, Field(gt=0, le=MAX_DB_IDENTIFIER, strict=True)]
+PositiveIdentifier = Annotated[
+    int, Field(gt=0, le=MAX_DATABASE_INTEGER, strict=True)
+]
 
 
 class MessageBulkDeleteRequest(BaseModel):

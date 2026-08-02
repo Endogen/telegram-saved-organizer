@@ -19,6 +19,7 @@ from app.auth.service import (
     TelegramChallengeExpiredError,
     TelegramConnectionNotFoundError,
     TelegramIdentityConflictError,
+    TelegramPhoneMismatchError,
     TelegramVerificationError,
 )
 from app.abuse import (
@@ -81,6 +82,11 @@ async def connect_telegram(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="telegram_account_already_connected",
+        ) from exc
+    except TelegramPhoneMismatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="telegram_phone_mismatch",
         ) from exc
     except TelegramClientTimeoutError as exc:
         raise HTTPException(

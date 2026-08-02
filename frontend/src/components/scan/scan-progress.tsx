@@ -121,6 +121,9 @@ export function ScanProgress() {
   const [streamConnectionState, setStreamConnectionState] = useState<StreamConnectionState>("idle");
   const inFlightRef = useRef(false);
   const notifiedTerminalKeysRef = useRef(new Set<string>());
+  // Shared across every status writer (poll, SSE, start/stop/refresh actions) so a
+  // response from an older request can never overwrite a newer one that already applied.
+  const statusRequestVersionRef = useRef(0);
   const scanIsActive = isActiveScan(status);
 
   const refreshStatus = useCallback(async (mode: RefreshMode) => {
@@ -128,6 +131,7 @@ export function ScanProgress() {
       return;
     }
 
+    const requestVersion = ++statusRequestVersionRef.current;
     inFlightRef.current = true;
     if (mode === "initial") {
       setIsInitialLoading(true);
@@ -138,6 +142,9 @@ export function ScanProgress() {
 
     try {
       const nextStatus = await fetchScanStatus();
+      if (requestVersion !== statusRequestVersionRef.current) {
+        return;
+      }
       setStatus(nextStatus);
       if (isActiveScan(nextStatus) || mode === "initial" || mode === "manual") {
         setPageSizeInput(String(nextStatus.page_size));
@@ -145,6 +152,9 @@ export function ScanProgress() {
       setNow(Date.now());
       setRequestError(null);
     } catch (error) {
+      if (requestVersion !== statusRequestVersionRef.current) {
+        return;
+      }
       if (mode !== "poll") {
         setRequestError(toErrorMessage(error));
       }
@@ -186,6 +196,7 @@ export function ScanProgress() {
         setStreamConnectionState("connected");
       },
       onStatus: (nextStatus) => {
+        statusRequestVersionRef.current += 1;
         setStatus((prev) => {
           // Only sync page size from server when scan is active (input is disabled anyway)
           // or on the very first status update — avoid overwriting user input while idle.
@@ -278,19 +289,27 @@ export function ScanProgress() {
   const handleStartScan = useCallback(async () => {
     setRequestError(null);
     setIsStarting(true);
+    const requestVersion = ++statusRequestVersionRef.current;
 
     const normalizedPageSize = clampPageSize(Number.parseInt(pageSizeInput, 10));
     setPageSizeInput(String(normalizedPageSize));
 
     try {
       const nextStatus = await startScan(normalizedPageSize);
-      setStatus(nextStatus);
-      setNow(Date.now());
+      if (requestVersion === statusRequestVersionRef.current) {
+        setStatus(nextStatus);
+        setNow(Date.now());
+      }
     } catch (error) {
-      setRequestError(toErrorMessage(error));
+      if (requestVersion === statusRequestVersionRef.current) {
+        setRequestError(toErrorMessage(error));
+      }
       try {
+        const syncRequestVersion = ++statusRequestVersionRef.current;
         const syncedStatus = await fetchScanStatus();
-        setStatus(syncedStatus);
+        if (syncRequestVersion === statusRequestVersionRef.current) {
+          setStatus(syncedStatus);
+        }
       } catch {
         // Keep the existing status when the sync request fails.
       }
@@ -302,13 +321,18 @@ export function ScanProgress() {
   const handleStopScan = useCallback(async () => {
     setRequestError(null);
     setIsStopping(true);
+    const requestVersion = ++statusRequestVersionRef.current;
 
     try {
       const nextStatus = await stopScan();
-      setStatus(nextStatus);
-      setNow(Date.now());
+      if (requestVersion === statusRequestVersionRef.current) {
+        setStatus(nextStatus);
+        setNow(Date.now());
+      }
     } catch (error) {
-      setRequestError(toErrorMessage(error));
+      if (requestVersion === statusRequestVersionRef.current) {
+        setRequestError(toErrorMessage(error));
+      }
     } finally {
       setIsStopping(false);
     }
@@ -326,18 +350,23 @@ export function ScanProgress() {
 
     setRequestError(null);
     setIsRefreshingLibrary(true);
+    const requestVersion = ++statusRequestVersionRef.current;
 
     try {
       const normalizedPageSize = clampPageSize(Number.parseInt(pageSizeInput, 10));
       setPageSizeInput(String(normalizedPageSize));
 
       const nextStatus = await startScan(normalizedPageSize, true);
-      setStatus(nextStatus);
-      notifyCategoriesChanged();
-      setPageSizeInput(String(nextStatus.page_size));
-      setNow(Date.now());
+      if (requestVersion === statusRequestVersionRef.current) {
+        setStatus(nextStatus);
+        notifyCategoriesChanged();
+        setPageSizeInput(String(nextStatus.page_size));
+        setNow(Date.now());
+      }
     } catch (error) {
-      setRequestError(toErrorMessage(error));
+      if (requestVersion === statusRequestVersionRef.current) {
+        setRequestError(toErrorMessage(error));
+      }
     } finally {
       setIsRefreshingLibrary(false);
     }
@@ -377,7 +406,7 @@ export function ScanProgress() {
 
   const streamStatusLabel = useMemo(() => {
     if (streamConnectionState === "idle") {
-      return "Checking for active imports";
+      return "No active import";
     }
     if (streamConnectionState === "connected") {
       return "Updates are live";

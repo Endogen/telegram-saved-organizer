@@ -22,11 +22,11 @@ from app.categories.service import (
     CategoryService,
 )
 from app.database import get_session
+from app.identifiers import MAX_DATABASE_INTEGER
 from app.models import User
 
 router = APIRouter(prefix="/categories", tags=["categories"])
-MAX_DB_IDENTIFIER = 2**63 - 1
-CategoryIdentifier = Annotated[int, Path(ge=1, le=MAX_DB_IDENTIFIER)]
+CategoryIdentifier = Annotated[int, Path(ge=1, le=MAX_DATABASE_INTEGER)]
 
 
 async def get_category_service(

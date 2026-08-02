@@ -160,6 +160,22 @@ describe("ConnectPage", () => {
     );
   });
 
+  it("explains that a different phone requires disconnecting first", async () => {
+    vi.mocked(connectTelegram).mockRejectedValue(
+      new ApiRequestError("telegram_phone_mismatch", 409, "telegram_phone_mismatch"),
+    );
+
+    renderPage();
+
+    const phone = await screen.findByLabelText("Phone Number");
+    fireEvent.change(phone, { target: { value: "+15550001234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue with Telegram" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Telegram is already connected with a different phone number. Disconnect it before connecting a new one.",
+    );
+  });
+
   it("renders a friendly rate-limit message", async () => {
     vi.mocked(connectTelegram).mockRejectedValue(
       new ApiRequestError("too_many_requests", 429, "too_many_requests"),

@@ -15,6 +15,7 @@ from app.auth.schemas import (
     TelegramConnectionResponse,
     TelegramConnectionState,
 )
+from app.identifiers import normalize_phone_number
 from app.models import Message, ScanJob, TelegramConnection
 from app.security import SecretDecryptionError, decrypt_secret, encrypt_secret
 from app.telegram.client import revoke_telegram_connection, short_lived_client
@@ -36,6 +37,10 @@ class TelegramVerificationError(RuntimeError):
 
 class TelegramIdentityConflictError(RuntimeError):
     """Raised when a Telegram principal is already bound to another account."""
+
+
+class TelegramPhoneMismatchError(RuntimeError):
+    """Raised when a still-authorized session is reused for a different phone."""
 
 
 class TelegramAuthService:
@@ -63,7 +68,7 @@ class TelegramAuthService:
         return self._response_state(connection)
 
     async def start(self, *, phone: str) -> TelegramConnectionState:
-        normalized_phone = phone.strip()
+        normalized_phone = normalize_phone_number(phone)
         connection = await self._load_connection(for_update=True)
         if connection is None:
             connection = TelegramConnection(
@@ -83,6 +88,20 @@ class TelegramAuthService:
             session_string = None
         async with short_lived_client(session_string=session_string) as client:
             if await client.is_user_authorized():
+                try:
+                    existing_phone = self._decrypt_optional(
+                        connection.phone_encrypted, purpose="phone"
+                    )
+                except SecretDecryptionError:
+                    existing_phone = None
+                if (
+                    existing_phone is not None
+                    and normalize_phone_number(existing_phone) != normalized_phone
+                ):
+                    raise TelegramPhoneMismatchError(
+                        "Disconnect the current Telegram account before "
+                        "connecting a different phone number."
+                    )
                 await self._bind_authorized_principal(
                     connection=connection, client=client
                 )

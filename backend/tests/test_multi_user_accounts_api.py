@@ -131,6 +131,25 @@ async def test_locked_account_requests_do_not_extend_the_lockout() -> None:
 
 
 @pytest.mark.asyncio
+async def test_registration_preserves_original_email_capitalization() -> None:
+    async with api_database() as (app, _):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url=TEST_ORIGIN
+        ) as client:
+            await register(
+                client,
+                email=" Jane.Doe@Example.COM ",
+                display_name="Jane",
+            )
+
+            login_response = await login(client, email="jane.doe@example.com")
+
+            # Pydantic's EmailStr lowercases the (case-insensitive) domain, but the
+            # locally-significant part of the address must keep its original casing.
+            assert login_response.json()["user"]["email"] == "Jane.Doe@example.com"
+
+
+@pytest.mark.asyncio
 async def test_session_cookies_csrf_revocation_and_logout() -> None:
     async with api_database() as (app, session_factory):
         transport = ASGITransport(app=app)

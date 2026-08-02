@@ -6,10 +6,16 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
+from app.auth import router as router_module
 from app.auth import service as service_module
-from app.auth.schemas import TelegramConnectionState, TelegramVerifyRequest
+from app.auth.schemas import (
+    TelegramConnectionRequest,
+    TelegramConnectionState,
+    TelegramVerifyRequest,
+)
 from app.auth.router import router
 from app.auth.service import TelegramAuthService
 from app.security import SecretDecryptionError
@@ -113,6 +119,45 @@ def test_connection_router_exposes_the_user_scoped_contract() -> None:
     assert ("/telegram/connection", "POST") in operations
     assert ("/telegram/connection", "DELETE") in operations
     assert ("/telegram/connection/verify", "POST") in operations
+
+
+@pytest.mark.asyncio
+async def test_connect_maps_phone_mismatch_to_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MismatchService:
+        async def start(self, *, phone: str) -> TelegramConnectionState:
+            assert phone == "+49123456789"
+            raise service_module.TelegramPhoneMismatchError("different phone")
+
+    async def skip_rate_limits(*_: Any, **__: Any) -> None:
+        return None
+
+    monkeypatch.setattr(router_module, "_service", lambda **_: MismatchService())
+    monkeypatch.setattr(router_module, "enforce_rate_limits", skip_rate_limits)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/telegram/connection",
+            "headers": [],
+            "query_string": b"",
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "scheme": "http",
+        }
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await router_module.connect_telegram(
+            TelegramConnectionRequest(phone="+49123456789"),
+            request,
+            SimpleNamespace(id="user-a"),
+            object(),  # type: ignore[arg-type]
+        )
+
+    assert rejected.value.status_code == 409
+    assert rejected.value.detail == "telegram_phone_mismatch"
 
 
 @pytest.mark.asyncio
@@ -324,6 +369,76 @@ async def test_starting_new_challenge_clears_old_principal_and_generation(
         "scan_jobs",
     }
     assert "scan_jobs" in str(session.execute_calls[0])
+
+
+@pytest.mark.asyncio
+async def test_start_rejects_different_phone_while_still_authorized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _connection(
+        telegram_user_id=111,
+        phone_encrypted="phone-cipher",
+        session_encrypted="session-cipher",
+        state="connected",
+    )
+    session = _FakeSession(connection)
+    client = _FakeClient(authorized=True)
+
+    @asynccontextmanager
+    async def fake_client(**_: Any):
+        yield client
+
+    def fake_decrypt(_value: str, *, context: str) -> str:
+        return "+491111111" if context.endswith(":phone") else "session"
+
+    monkeypatch.setattr(service_module, "short_lived_client", fake_client)
+    monkeypatch.setattr(service_module, "decrypt_secret", fake_decrypt)
+
+    with pytest.raises(service_module.TelegramPhoneMismatchError):
+        await TelegramAuthService(session=session, user_id="user-a").start(  # type: ignore[arg-type]
+            phone="+492222222"
+        )
+
+    assert connection.state == "connected"
+    assert connection.telegram_user_id == 111
+    assert client.sent_phone is None
+    assert session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_start_reconnects_same_phone_with_equivalent_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _connection(
+        telegram_user_id=111,
+        phone_encrypted="phone-cipher",
+        session_encrypted="session-cipher",
+        state="connected",
+    )
+    session = _FakeSession(connection)
+    client = _FakeClient(authorized=True)
+    client.telegram_user_id = 111
+
+    @asynccontextmanager
+    async def fake_client(**_: Any):
+        yield client
+
+    def fake_decrypt(_value: str, *, context: str) -> str:
+        return "+49 (123) 456-789" if context.endswith(":phone") else "session"
+
+    monkeypatch.setattr(service_module, "short_lived_client", fake_client)
+    monkeypatch.setattr(service_module, "decrypt_secret", fake_decrypt)
+    monkeypatch.setattr(
+        service_module, "encrypt_secret", lambda value, *, context: f"cipher:{value}"
+    )
+
+    state = await TelegramAuthService(session=session, user_id="user-a").start(  # type: ignore[arg-type]
+        phone="0049 123 456 789"
+    )
+
+    assert state is TelegramConnectionState.CONNECTED
+    assert connection.state == "connected"
+    assert client.sent_phone is None
 
 
 @pytest.mark.asyncio

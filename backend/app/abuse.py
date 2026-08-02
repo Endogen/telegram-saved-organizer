@@ -16,6 +16,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.identifiers import normalize_phone_number
 from app.models import AbuseRateLimitBucket, TelegramConnection
 from app.security import SecretDecryptionError, decrypt_secret
 
@@ -83,17 +84,7 @@ def client_ip_subject(request: Request) -> str:
 def phone_subject(value: str) -> str:
     """Collapse common display variants of a phone number into one quota key."""
 
-    stripped = value.strip()
-    digits = "".join(
-        character
-        for character in stripped
-        if character.isascii() and character.isdigit()
-    )
-    if stripped.startswith("+"):
-        return f"+{digits}"
-    if digits.startswith("00"):
-        return f"+{digits[2:]}"
-    return digits or stripped.casefold()
+    return normalize_phone_number(value)
 
 
 async def telegram_phone_subject(session: AsyncSession, *, user_id: str) -> str:

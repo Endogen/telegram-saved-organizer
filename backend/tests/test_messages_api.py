@@ -465,6 +465,26 @@ async def test_get_message_endpoint_returns_not_found(
 
 
 @pytest.mark.asyncio
+async def test_get_message_endpoint_rejects_id_beyond_column_width(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    """message_id must stay within the Integer primary key's 32-bit range.
+
+    A bound wider than the actual column type would let an out-of-range id
+    reach the database layer and raise an unhandled error there instead of a
+    clean 404, on database backends (e.g. PostgreSQL) that enforce column width.
+    """
+
+    app, service = message_context
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/api/messages/9999999999")
+
+    assert response.status_code == 422
+    assert service.get_calls == []
+
+
+@pytest.mark.asyncio
 async def test_update_message_endpoint_returns_updated_message(
     message_context: tuple[Any, _FakeMessageService],
 ) -> None:

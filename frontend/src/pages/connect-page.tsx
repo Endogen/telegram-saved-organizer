@@ -25,6 +25,9 @@ function toErrorMessage(error: unknown): string {
     if (error.detail === "telegram_account_already_connected") {
       return "This Telegram account is already connected to another organizer account.";
     }
+    if (error.detail === "telegram_phone_mismatch") {
+      return "Telegram is already connected with a different phone number. Disconnect it before connecting a new one.";
+    }
     if (error.detail === "telegram_connection_failed") {
       return "Telegram could not start the connection. Check the phone number and try again.";
     }

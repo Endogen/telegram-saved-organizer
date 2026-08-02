@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.accounts.dependencies import get_current_user
 from app.database import get_session
+from app.identifiers import MAX_DATABASE_INTEGER
 from app.models import User
 from app.tags.schemas import (
     MessageBulkTagRequest,
@@ -30,8 +31,7 @@ from app.tags.service import (
 )
 
 router = APIRouter(tags=["tags"])
-MAX_DB_IDENTIFIER = 2**63 - 1
-DatabaseIdentifier = Annotated[int, Path(ge=1, le=MAX_DB_IDENTIFIER)]
+DatabaseIdentifier = Annotated[int, Path(ge=1, le=MAX_DATABASE_INTEGER)]
 
 
 async def get_tag_service(
