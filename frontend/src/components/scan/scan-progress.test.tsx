@@ -520,6 +520,7 @@ describe("ScanProgress", () => {
 
     render(<ScanProgress />);
     await screen.findByText("Importing Saved Messages");
+    await waitFor(() => expect(subscribeToScanStatus).toHaveBeenCalled());
 
     act(() => {
       onStatusCallback?.({
