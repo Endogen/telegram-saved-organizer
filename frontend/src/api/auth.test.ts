@@ -55,7 +55,7 @@ describe("auth api client", () => {
     fetchMock.mockResolvedValue(createResponse(connectedStatus));
 
     const result = await fetchTelegramAuthStatus();
-    expect(fetchMock).toHaveBeenCalledWith("/api/auth/status", undefined);
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/status", { credentials: "same-origin" });
     expect(result).toEqual(connectedStatus);
   });
 

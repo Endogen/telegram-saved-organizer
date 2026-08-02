@@ -63,8 +63,8 @@ class _FakeMessageService:
         ] = []
         self.get_calls: list[int] = []
         self.update_calls: list[tuple[int, dict[str, Any]]] = []
-        self.delete_calls: list[int] = []
-        self.bulk_delete_calls: list[tuple[int, ...]] = []
+        self.delete_calls: list[tuple[int, bool]] = []
+        self.bulk_delete_calls: list[tuple[tuple[int, ...], bool]] = []
         self.bulk_move_calls: list[tuple[tuple[int, ...], int]] = []
         self.list_error: Exception | None = None
         self.get_error: Exception | None = None
@@ -115,13 +115,13 @@ class _FakeMessageService:
             raise self.update_error
         return self.update_result
 
-    async def delete_message(self, *, message_id: int) -> None:
-        self.delete_calls.append(message_id)
+    async def delete_message(self, *, message_id: int, local_only: bool = False) -> None:
+        self.delete_calls.append((message_id, local_only))
         if self.delete_error is not None:
             raise self.delete_error
 
-    async def bulk_delete_messages(self, *, message_ids: list[int]) -> int:
-        self.bulk_delete_calls.append(tuple(message_ids))
+    async def bulk_delete_messages(self, *, message_ids: list[int], local_only: bool = False) -> int:
+        self.bulk_delete_calls.append((tuple(message_ids), local_only))
         if self.bulk_delete_error is not None:
             raise self.bulk_delete_error
         return self.bulk_delete_result
@@ -166,7 +166,7 @@ def _build_message() -> _FakeMessage:
 @pytest.fixture
 def message_context() -> tuple[Any, _FakeMessageService]:
     service = _FakeMessageService()
-    app = create_app()
+    app = create_app(api_token=None)
 
     async def override_message_service() -> _FakeMessageService:
         return service
@@ -247,7 +247,24 @@ async def test_bulk_delete_endpoint_returns_deleted_count(
 
     assert response.status_code == 200
     assert response.json() == {"deleted_count": 2}
-    assert service.bulk_delete_calls == [(12, 13)]
+    assert service.bulk_delete_calls == [((12, 13), False)]
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_endpoint_forwards_local_only(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.bulk_delete_result = 1
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/messages/bulk-delete?local_only=true",
+            json={"message_ids": [12]},
+        )
+
+    assert response.status_code == 200
+    assert service.bulk_delete_calls == [((12,), True)]
 
 
 @pytest.mark.asyncio
@@ -265,7 +282,7 @@ async def test_bulk_delete_endpoint_returns_not_found(
 
 
 @pytest.mark.asyncio
-async def test_bulk_delete_endpoint_returns_bad_request_when_telegram_not_connected(
+async def test_bulk_delete_endpoint_returns_conflict_when_telegram_not_connected(
     message_context: tuple[Any, _FakeMessageService],
 ) -> None:
     app, service = message_context
@@ -276,11 +293,8 @@ async def test_bulk_delete_endpoint_returns_bad_request_when_telegram_not_connec
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.post("/api/messages/bulk-delete", json={"message_ids": [404]})
 
-    assert response.status_code == 400
-    assert (
-        response.json()["detail"]
-        == "Telegram client is not connected. Connect first before deleting messages."
-    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "telegram_not_connected"
 
 
 @pytest.mark.asyncio
@@ -507,7 +521,20 @@ async def test_delete_message_endpoint_returns_confirmation(
 
     assert response.status_code == 200
     assert response.json() == {"deleted": True}
-    assert service.delete_calls == [12]
+    assert service.delete_calls == [(12, False)]
+
+
+@pytest.mark.asyncio
+async def test_delete_message_endpoint_forwards_local_only(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.delete("/api/messages/12?local_only=true")
+
+    assert response.status_code == 200
+    assert service.delete_calls == [(12, True)]
 
 
 @pytest.mark.asyncio
@@ -525,7 +552,7 @@ async def test_delete_message_endpoint_returns_not_found(
 
 
 @pytest.mark.asyncio
-async def test_delete_message_endpoint_returns_bad_request_when_telegram_not_connected(
+async def test_delete_message_endpoint_returns_conflict_when_telegram_not_connected(
     message_context: tuple[Any, _FakeMessageService],
 ) -> None:
     app, service = message_context
@@ -536,11 +563,8 @@ async def test_delete_message_endpoint_returns_bad_request_when_telegram_not_con
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.delete("/api/messages/12")
 
-    assert response.status_code == 400
-    assert (
-        response.json()["detail"]
-        == "Telegram client is not connected. Connect first before deleting messages."
-    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "telegram_not_connected"
 
 
 @pytest.mark.asyncio

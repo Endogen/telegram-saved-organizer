@@ -1,9 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-// Mock react-router-dom to provide a controlled error
-vi.mock("react-router-dom", async () => {
-  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+// Mock react-router to provide a controlled error
+vi.mock("react-router", async () => {
+  const actual = await vi.importActual<typeof import("react-router")>("react-router");
   return {
     ...actual,
     useRouteError: vi.fn(),
@@ -11,11 +11,11 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
-import { isRouteErrorResponse, useRouteError } from "react-router-dom";
+import { isRouteErrorResponse, useRouteError } from "react-router";
 import { RouteErrorPage } from "@/pages/route-error-page";
 
 // We need MemoryRouter for Link components
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 
 function renderWithRouter() {
   return render(

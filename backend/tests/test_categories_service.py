@@ -4,7 +4,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.categories.service import (
     CategoryConflictError,
@@ -24,8 +26,9 @@ class _FakeScalarResult:
 
 
 class _FakeExecuteResult:
-    def __init__(self, rows: list[tuple[Any, Any]]) -> None:
+    def __init__(self, rows: list[tuple[Any, Any]], *, rowcount: int = 0) -> None:
         self._rows = rows
+        self.rowcount = rowcount
 
     def all(self) -> list[tuple[Any, Any]]:
         return self._rows
@@ -36,6 +39,7 @@ class _FakeSession:
         self.scalar_values: list[Any] = []
         self.scalars_values: list[list[Any]] = []
         self.execute_values: list[list[tuple[Any, Any]]] = []
+        self.execute_rowcounts: list[int] = []
         self.get_values: dict[tuple[type[Any], int], Any] = {}
         self.scalar_calls: list[Any] = []
         self.scalars_calls: list[Any] = []
@@ -49,7 +53,8 @@ class _FakeSession:
     async def execute(self, statement: Any) -> _FakeExecuteResult:
         self.execute_calls.append(statement)
         rows = self.execute_values.pop(0) if self.execute_values else []
-        return _FakeExecuteResult(rows)
+        rowcount = self.execute_rowcounts.pop(0) if self.execute_rowcounts else 0
+        return _FakeExecuteResult(rows, rowcount=rowcount)
 
     async def scalar(self, statement: Any) -> Any:
         self.scalar_calls.append(statement)
@@ -243,21 +248,60 @@ async def test_delete_category_moves_messages_to_other_and_deletes() -> None:
     session = _FakeSession()
     source = _build_category(category_id=2, name="Links", slug="links", position=2)
     other = _build_category(category_id=8, name="Other", slug="other", position=8, is_default=True)
-    message_one = _build_message(message_id=1, category_id=2)
-    message_two = _build_message(message_id=2, category_id=2)
     session.get_values[(Category, 2)] = source
     session.scalar_values = [other]
-    session.scalars_values = [[message_one, message_two]]
+    session.execute_rowcounts = [2]
     service = CategoryService(session=session)  # type: ignore[arg-type]
 
     result = await service.delete_category(category_id=2)
 
     assert result.moved_message_count == 2
     assert result.destination_category_id == 8
-    assert message_one.category_id == 8
-    assert message_two.category_id == 8
+    assert "UPDATE messages SET category_id" in str(session.execute_calls[0])
     assert session.delete_calls == [source]
     assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_category_reassigns_messages_before_deleting_with_sqlite() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Category.metadata.create_all)
+
+        async with session_factory() as session:
+            source = _build_category(category_id=None, name="Temporary", slug="temporary")
+            fallback = _build_category(
+                category_id=None,
+                name="Other",
+                slug="other",
+                position=8,
+                is_default=True,
+            )
+            session.add_all([source, fallback])
+            await session.flush()
+            source_id = source.id
+            fallback_id = fallback.id
+            session.add_all(
+                [
+                    _build_message(message_id=1, category_id=source_id),
+                    _build_message(message_id=2, category_id=source_id),
+                ]
+            )
+            await session.commit()
+
+        async with session_factory() as session:
+            result = await CategoryService(session=session).delete_category(category_id=source_id)
+
+            assert result.moved_message_count == 2
+            assert result.destination_category_id == fallback_id
+            assert await session.get(Category, source_id) is None
+            category_ids = await session.scalars(select(Message.category_id).order_by(Message.id))
+            assert list(category_ids) == [fallback_id, fallback_id]
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

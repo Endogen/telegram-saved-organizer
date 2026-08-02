@@ -1,5 +1,6 @@
-import { Menu } from "lucide-react";
+import { LockKeyhole, Menu } from "lucide-react";
 
+import { useApiSession } from "@/components/auth/api-session-gate";
 import { Button } from "@/components/ui/button";
 
 type TopBarProps = {
@@ -9,6 +10,8 @@ type TopBarProps = {
 };
 
 export function TopBar({ title, subtitle, onMenuClick }: TopBarProps) {
+  const apiSession = useApiSession();
+
   return (
     <header className="rounded-2xl border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--card)/0.85)] p-4 shadow-sm backdrop-blur md:p-5">
       <div className="flex items-start justify-between gap-4">
@@ -32,7 +35,21 @@ export function TopBar({ title, subtitle, onMenuClick }: TopBarProps) {
           </div>
         </div>
 
-        <img src="/telegram.png" alt="Telegram" className="hidden size-10 rounded-lg sm:block" />
+        <div className="flex shrink-0 items-center gap-2">
+          {apiSession !== null ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-2 text-[hsl(var(--muted-foreground))]"
+              onClick={() => void apiSession.lockWorkspace()}
+              aria-label="Lock workspace"
+            >
+              <LockKeyhole className="size-4" />
+              <span className="hidden lg:inline">Lock</span>
+            </Button>
+          ) : null}
+          <img src="/telegram.png" alt="Telegram" className="hidden size-10 rounded-lg sm:block" />
+        </div>
       </div>
     </header>
   );

@@ -12,7 +12,7 @@ import {
   type LucideIcon,
   Video,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 
 import { ScanProgress } from "@/components/scan/scan-progress";
 import { useCategories } from "@/hooks/use-categories";

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -8,9 +10,10 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 from telethon.errors import PhoneCodeInvalidError, SessionPasswordNeededError
 
+from app.auth import service as auth_service_module
 from app.auth.schemas import VerifyRequest
 from app.auth.router import get_auth_service
-from app.auth.service import TelegramAuthService, VerificationCodeRequiredError
+from app.auth.service import TelegramAuthService, VerificationCodeRequiredError, _save_credentials
 from app.main import create_app
 from app.telegram.client import TelegramClientCredentialsMismatchError
 
@@ -97,12 +100,15 @@ class _FakeTelegramManager:
     def has_session(self) -> bool:
         return self.session
 
+    def get_connected_client(self) -> _FakeTelethonClient | None:
+        return self.client if self.connected else None
+
 
 @pytest.fixture
 def auth_context() -> tuple[Any, _FakeTelegramManager]:
     manager = _FakeTelegramManager()
     service = TelegramAuthService(manager=manager)
-    app = create_app()
+    app = create_app(api_token=None)
 
     async def override_auth_service() -> TelegramAuthService:
         return service
@@ -352,6 +358,55 @@ async def test_verify_returns_not_authorized_when_telegram_rejects_sign_in() -> 
     assert status.password_required is False
 
 
+@pytest.mark.asyncio
+async def test_status_does_not_treat_unauthorized_saved_session_as_authorized() -> None:
+    manager = _FakeTelegramManager()
+    manager.connected = True
+    manager.session = True
+    manager.client.authorized = False
+    service = TelegramAuthService(manager=manager)
+
+    status = await service.status()
+
+    assert status.connected is True
+    assert status.has_session is True
+    assert status.authorized is False
+
+
+@pytest.mark.asyncio
+async def test_status_reports_connected_authorized_session() -> None:
+    manager = _FakeTelegramManager()
+    manager.connected = True
+    manager.session = True
+    manager.client.authorized = True
+    service = TelegramAuthService(manager=manager)
+
+    status = await service.status()
+
+    assert status.connected is True
+    assert status.has_session is True
+    assert status.authorized is True
+
+
 def test_verify_request_model_rejects_blank_code_and_password() -> None:
     with pytest.raises(ValidationError, match="Either code or password must be provided."):
         VerifyRequest(code=" ", password=" ")
+
+
+def test_save_credentials_restricts_file_permissions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials_file = tmp_path / "credentials.json"
+    credentials_file.write_text("stale", encoding="utf-8")
+    credentials_file.chmod(0o644)
+    monkeypatch.setattr(auth_service_module, "CREDENTIALS_FILE", credentials_file)
+
+    _save_credentials(api_id=12345, api_hash="abc123", phone="+15550001111")
+
+    assert credentials_file.stat().st_mode & 0o777 == 0o600
+    assert json.loads(credentials_file.read_text(encoding="utf-8")) == {
+        "api_id": 12345,
+        "api_hash": "abc123",
+        "phone": "+15550001111",
+    }

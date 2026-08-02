@@ -59,7 +59,7 @@ class _FakeScanService:
 @pytest.fixture
 def scan_context() -> tuple[Any, _FakeScanService]:
     service = _FakeScanService()
-    app = create_app()
+    app = create_app(api_token=None)
 
     async def override_scan_service() -> _FakeScanService:
         return service

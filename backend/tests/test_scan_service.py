@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import patch, AsyncMock
 
 import pytest
 
-from app.telegram.scanner import ScanAlreadyRunningError, ScanProgress
+from app.telegram.scanner import ScanAlreadyRunningError, ScanProgress, SavedMessagesScanner
 from app.telegram.service import TelegramClientNotConnectedError, TelegramScanService
 
 
@@ -47,6 +49,33 @@ class _FakeScanner:
         return self.progress
 
 
+class _OneMessageClient:
+    def iter_messages(self, entity: str, *, limit: int, offset_id: int = 0):
+        async def messages():
+            yield SimpleNamespace(
+                id=1,
+                message="persist me",
+                date=datetime.now(tz=UTC),
+                video=None,
+                audio=None,
+                voice=None,
+                photo=None,
+                document=None,
+                fwd_from=None,
+                sender=None,
+            )
+
+        return messages()
+
+
+class _FailingSessionContext:
+    async def __aenter__(self):
+        raise RuntimeError("database unavailable")
+
+    async def __aexit__(self, exc_type, exc, traceback) -> bool:
+        return False
+
+
 @pytest.mark.asyncio
 async def test_start_requires_connected_client() -> None:
     service = TelegramScanService(manager=_FakeManager(client=None))
@@ -81,6 +110,28 @@ async def test_start_launches_background_scan() -> None:
 
     assert final_progress.is_running is False
     assert final_progress.is_complete is True
+
+
+@pytest.mark.asyncio
+async def test_scan_reports_persistence_setup_failure_instead_of_success() -> None:
+    client = _OneMessageClient()
+    service = TelegramScanService(
+        manager=_FakeManager(client=client),
+        scanner=SavedMessagesScanner(),
+    )
+
+    with patch("app.telegram.service.SessionLocal", return_value=_FailingSessionContext()):
+        progress = await service.start(page_size=10)
+        for _ in range(40):
+            progress = await service.status()
+            if progress.error is not None:
+                break
+            await asyncio.sleep(0.01)
+
+    assert progress.is_running is False
+    assert progress.is_complete is False
+    assert progress.error == "Failed to persist scanned messages."
+    assert progress.messages_scanned == 0
 
 
 @pytest.mark.asyncio

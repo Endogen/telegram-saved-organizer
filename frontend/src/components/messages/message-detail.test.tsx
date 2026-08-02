@@ -86,7 +86,7 @@ describe("MessageDetail", () => {
     expect(screen.getAllByText("Links").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Test User")).toBeInTheDocument();
     expect(screen.getByText(/Telegram #5001/)).toBeInTheDocument();
-    expect(screen.getByText("https://example.com/file")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /example.com/ })).toHaveAttribute("href", "https://example.com/file");
     expect(screen.getByText("document")).toBeInTheDocument();
     expect(screen.getByText("application/pdf")).toBeInTheDocument();
     expect(screen.getByText("report.pdf")).toBeInTheDocument();
@@ -95,7 +95,7 @@ describe("MessageDetail", () => {
     expect(screen.getByText("#work")).toBeInTheDocument();
   });
 
-  it("shows empty content message when content is null", () => {
+  it("shows the link preview when content is null", () => {
     const message = createMessage({ content: null });
 
     render(
@@ -109,7 +109,7 @@ describe("MessageDetail", () => {
       />,
     );
 
-    expect(screen.getByText("No text content on this message.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /example.com/ })).toHaveAttribute("href", "https://example.com/file");
   });
 
   it("shows 'No tags attached' when tags are empty", () => {
@@ -343,7 +343,7 @@ describe("MessageDetail", () => {
         onDeleteRequest={vi.fn()}
       />,
     );
-    expect(screen.getByText("No text content on this message.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /example.com/ })).toHaveAttribute("href", "https://example.com/file");
   });
 
   it("handles sender_name being null", () => {

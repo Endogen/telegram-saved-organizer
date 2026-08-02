@@ -19,7 +19,7 @@ describe("setDraggedMessageId / getDraggedMessageId", () => {
     const dataTransfer = {
       setData: (key: string, value: string) => store.set(key, value),
       getData: (key: string) => store.get(key) ?? "",
-    } as DataTransfer;
+    } as unknown as DataTransfer;
 
     setDraggedMessageId(dataTransfer, 42);
     expect(getDraggedMessageId(dataTransfer)).toBe(42);

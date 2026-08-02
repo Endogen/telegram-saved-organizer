@@ -3,31 +3,14 @@ import type {
   TelegramAuthStatus,
   VerifyTelegramPayload,
 } from "@/types/auth";
+import { requestJson } from "@/api/client";
 
 const AUTH_BASE_PATH = "/api/auth";
 
-type ApiErrorPayload = {
-  detail?: unknown;
-};
-
-function toErrorMessage(payload: unknown): string | null {
-  if (typeof payload !== "object" || payload === null) {
-    return null;
-  }
-
-  const detail = (payload as ApiErrorPayload).detail;
-  return typeof detail === "string" && detail.length > 0 ? detail : null;
-}
-
 async function requestAuthStatus(path: string, init?: RequestInit): Promise<TelegramAuthStatus> {
-  const response = await fetch(`${AUTH_BASE_PATH}${path}`, init);
-  const payload: unknown = await response.json();
-
-  if (!response.ok) {
-    throw new Error(toErrorMessage(payload) ?? "Telegram auth request failed.");
-  }
-
-  return payload as TelegramAuthStatus;
+  return requestJson<TelegramAuthStatus>(`${AUTH_BASE_PATH}${path}`, init, {
+    fallbackMessage: "Telegram auth request failed.",
+  });
 }
 
 export async function fetchTelegramAuthStatus(): Promise<TelegramAuthStatus> {

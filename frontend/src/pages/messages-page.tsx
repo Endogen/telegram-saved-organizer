@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckSquare2, ChevronLeft, ChevronRight, Search, X } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router";
 
 import {
   bulkDeleteMessages,
@@ -1222,10 +1222,12 @@ export function MessagesPage() {
           setDetailDialogMessageId(null);
         }}
         onMoveRequest={(message) => {
+          setDetailDialogMessageId(null);
           setMoveDialogError(null);
           setMoveDialogMessageId(message.id);
         }}
         onTagRequest={(message) => {
+          setDetailDialogMessageId(null);
           setTagDialogError(null);
           setTagDialogMessageId(message.id);
         }}

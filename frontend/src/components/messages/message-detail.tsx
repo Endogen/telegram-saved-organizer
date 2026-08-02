@@ -1,12 +1,9 @@
-import { useEffect } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   CalendarClock,
-  ExternalLink,
   FileDigit,
   FolderInput,
   Hash,
-  Link2,
   MessageSquareText,
   Tags,
   Trash2,
@@ -15,6 +12,9 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { MessageContent } from "@/components/messages/message-content";
+import { ModalPortal } from "@/components/ui/modal-portal";
+import { useModalLifecycle } from "@/hooks/use-modal-lifecycle";
 import type { MessageListItem } from "@/types/message";
 
 function withAlpha(color: string | null, alphaHex: string): string | null {
@@ -119,37 +119,15 @@ export function MessageDetail({
 }: MessageDetailProps) {
   const shouldReduceMotion = useReducedMotion();
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    }
-
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    document.addEventListener("keydown", handleEscape);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      document.removeEventListener("keydown", handleEscape);
-    };
-  }, [onClose, open]);
+  useModalLifecycle(open, onClose);
 
   const hasDetails = message !== null;
-  const content =
-    message?.content !== null && message?.content.trim().length > 0
-      ? message.content.trim()
-      : "No text content on this message.";
   const fileSizeLabel = message !== null ? formatFileSize(message.file_size) : null;
   const showFileDetails = message?.media_type !== null || message?.file_name !== null || message?.mime_type !== null;
 
   return (
-    <AnimatePresence>
+    <ModalPortal>
+      <AnimatePresence>
       {open && hasDetails ? (
         <motion.div
           className="fixed inset-0 z-50 flex items-end sm:items-center sm:justify-center sm:px-4"
@@ -242,30 +220,12 @@ export function MessageDetail({
               <section>
                 <h4 className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-[hsl(var(--muted-foreground))]">
                   <MessageSquareText className="size-3.5" />
-                  Full content
+                  Content
                 </h4>
                 <div className="mt-2 rounded-xl border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--background)/0.75)] p-3">
-                  <p className="whitespace-pre-wrap break-words text-sm text-[hsl(var(--foreground))]">{content}</p>
+                  <MessageContent content={message.content} url={message.url} />
                 </div>
               </section>
-
-              {message.url ? (
-                <section className="mt-4">
-                  <h4 className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-[hsl(var(--muted-foreground))]">
-                    <Link2 className="size-3.5" />
-                    Link
-                  </h4>
-                  <a
-                    href={message.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-2 inline-flex items-center gap-1.5 break-all rounded-lg border border-[hsl(var(--primary)/0.35)] bg-[hsl(var(--primary)/0.08)] px-3 py-2 text-sm text-[hsl(var(--primary))] transition-colors hover:bg-[hsl(var(--primary)/0.16)]"
-                  >
-                    {message.url}
-                    <ExternalLink className="size-3.5" />
-                  </a>
-                </section>
-              ) : null}
 
               {showFileDetails ? (
                 <section className="mt-4">
@@ -385,6 +345,7 @@ export function MessageDetail({
           </motion.section>
         </motion.div>
       ) : null}
-    </AnimatePresence>
+      </AnimatePresence>
+    </ModalPortal>
   );
 }

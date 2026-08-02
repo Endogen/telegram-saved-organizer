@@ -301,3 +301,18 @@ def test_scanner_rejects_messages_without_valid_ids() -> None:
 
     with pytest.raises(ValueError, match="without an id"):
         scanner._normalize_message(raw_message)
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_url"),
+    [
+        ("Read https://example.com/article.", "https://example.com/article"),
+        ("Watch (https://youtu.be/dQw4w9WgXcQ).", "https://youtu.be/dQw4w9WgXcQ"),
+        ("Docs https://example.com/guide_(draft)", "https://example.com/guide_(draft)"),
+        ("Repository www.github.com/openai/codex", "https://www.github.com/openai/codex"),
+    ],
+)
+def test_scanner_trims_sentence_punctuation_from_urls(content: str, expected_url: str) -> None:
+    scanner = SavedMessagesScanner()
+
+    assert scanner._extract_url(content) == expected_url

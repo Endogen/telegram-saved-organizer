@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -147,15 +147,17 @@ class CategoryService:
                 "Fallback category 'other' was not found. Re-seed default categories before deleting."
             )
 
-        message_rows = await self.session.scalars(select(Message).where(Message.category_id == category.id))
-        messages = list(message_rows)
-        for message in messages:
-            message.category_id = fallback_category.id
+        update_result = await self.session.execute(
+            update(Message)
+            .where(Message.category_id == category.id)
+            .values(category_id=fallback_category.id)
+        )
+        moved_message_count = max(int(update_result.rowcount or 0), 0)
 
         await self.session.delete(category)
         await self._commit_with_conflict_handling()
         return CategoryDeleteResult(
-            moved_message_count=len(messages),
+            moved_message_count=moved_message_count,
             destination_category_id=fallback_category.id,
         )
 
@@ -231,4 +233,3 @@ class CategoryService:
         if not slug:
             raise ValueError("name must include at least one alphanumeric character.")
         return slug
-

@@ -114,12 +114,10 @@ export function ScanProgress() {
 
     try {
       const nextStatus = await fetchScanStatus();
-      setStatus((prev) => {
-        if (nextStatus.is_running || mode === "initial" || mode === "manual") {
-          setPageSizeInput(String(nextStatus.page_size));
-        }
-        return nextStatus;
-      });
+      setStatus(nextStatus);
+      if (nextStatus.is_running || mode === "initial" || mode === "manual") {
+        setPageSizeInput(String(nextStatus.page_size));
+      }
       setNow(Date.now());
       setRequestError(null);
     } catch (error) {
@@ -279,10 +277,8 @@ export function ScanProgress() {
       setPageSizeInput(String(normalizedPageSize));
 
       const nextStatus = await startScan(normalizedPageSize);
-      setStatus((prev) => {
-        setPageSizeInput(String(nextStatus.page_size));
-        return nextStatus;
-      });
+      setStatus(nextStatus);
+      setPageSizeInput(String(nextStatus.page_size));
       setNow(Date.now());
     } catch (error) {
       setRequestError(toErrorMessage(error));

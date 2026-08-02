@@ -1,10 +1,7 @@
 import type { MessageListItem, MessageListResponse } from "@/types/message";
+import { ApiRequestError, requestJson } from "@/api/client";
 
 const MESSAGES_BASE_PATH = "/api/messages";
-
-type ApiErrorPayload = {
-  detail?: unknown;
-};
 
 type MessageListQuery = {
   page?: number;
@@ -23,15 +20,6 @@ type BulkMoveResponse = {
   moved_count: number;
   category_id: number;
 };
-
-function toErrorMessage(payload: unknown): string | null {
-  if (typeof payload !== "object" || payload === null) {
-    return null;
-  }
-
-  const detail = (payload as ApiErrorPayload).detail;
-  return typeof detail === "string" && detail.length > 0 ? detail : null;
-}
 
 function parseMessageListResponse(payload: unknown): MessageListResponse | null {
   if (typeof payload !== "object" || payload === null) {
@@ -92,22 +80,21 @@ export class TelegramNotConnectedError extends Error {
   }
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${MESSAGES_BASE_PATH}${path}`, init);
-  const payload: unknown = await response.json();
-
-  if (!response.ok) {
-    if (response.status === 409 && toErrorMessage(payload) === "telegram_not_connected") {
+async function requestMessageJson<T>(path: string, init?: RequestInit): Promise<T> {
+  try {
+    return await requestJson<T>(`${MESSAGES_BASE_PATH}${path}`, init, {
+      fallbackMessage: "Message request failed.",
+    });
+  } catch (error) {
+    if (error instanceof ApiRequestError && error.status === 409 && error.detail === "telegram_not_connected") {
       throw new TelegramNotConnectedError();
     }
-    throw new Error(toErrorMessage(payload) ?? "Message request failed.");
+    throw error;
   }
-
-  return payload as T;
 }
 
 export async function listMessages(query: MessageListQuery = {}): Promise<MessageListResponse> {
-  const payload = await requestJson<unknown>(buildQueryString(query));
+  const payload = await requestMessageJson<unknown>(buildQueryString(query));
   const parsed = parseMessageListResponse(payload);
   if (parsed === null) {
     throw new Error("Unexpected messages payload.");
@@ -116,7 +103,7 @@ export async function listMessages(query: MessageListQuery = {}): Promise<Messag
 }
 
 export async function moveMessageToCategory(messageId: number, categoryId: number): Promise<MessageListItem> {
-  return requestJson<MessageListItem>(`/${messageId}`, {
+  return requestMessageJson<MessageListItem>(`/${messageId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ category_id: categoryId }),
@@ -125,12 +112,12 @@ export async function moveMessageToCategory(messageId: number, categoryId: numbe
 
 export async function deleteMessage(messageId: number, localOnly = false): Promise<void> {
   const query = localOnly ? "?local_only=true" : "";
-  await requestJson<{ deleted: boolean }>(`/${messageId}${query}`, { method: "DELETE" });
+  await requestMessageJson<{ deleted: boolean }>(`/${messageId}${query}`, { method: "DELETE" });
 }
 
 export async function bulkDeleteMessages(messageIds: number[], localOnly = false): Promise<BulkDeleteResponse> {
   const query = localOnly ? "?local_only=true" : "";
-  return requestJson<BulkDeleteResponse>(`/bulk-delete${query}`, {
+  return requestMessageJson<BulkDeleteResponse>(`/bulk-delete${query}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message_ids: messageIds }),
@@ -138,11 +125,11 @@ export async function bulkDeleteMessages(messageIds: number[], localOnly = false
 }
 
 export async function clearAllMessages(): Promise<{ cleared_count: number }> {
-  return requestJson<{ cleared_count: number }>("/clear", { method: "POST" });
+  return requestMessageJson<{ cleared_count: number }>("/clear", { method: "POST" });
 }
 
 export async function bulkMoveMessages(messageIds: number[], categoryId: number): Promise<BulkMoveResponse> {
-  return requestJson<BulkMoveResponse>("/bulk-move", {
+  return requestMessageJson<BulkMoveResponse>("/bulk-move", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message_ids: messageIds, category_id: categoryId }),

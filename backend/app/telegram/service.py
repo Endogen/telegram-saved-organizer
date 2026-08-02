@@ -28,6 +28,10 @@ class TelegramClientNotConnectedError(RuntimeError):
     """Raised when scan endpoints are used before Telegram is connected."""
 
 
+class ScanPersistenceError(RuntimeError):
+    """Raised when scanned messages cannot be persisted safely."""
+
+
 class TelegramScanManagerProtocol(Protocol):
     """Telegram client manager methods required by scan service."""
 
@@ -82,19 +86,20 @@ class TelegramScanService:
         client: TelegramScannerClientProtocol,
         page_size: int,
     ) -> None:
-        # Pre-load category slug → id mapping for persistence
-        category_map: dict[str, int] = {}
-        try:
-            async with SessionLocal() as session:
-                result = await session.execute(select(Category.slug, Category.id))
-                category_map = {row.slug: row.id for row in result}
-        except Exception:
-            logger.exception("Failed to load category map for scan")
+        category_map: dict[str, int] | None = None
 
         async def persist_page(page: ScanPage) -> None:
-            if not category_map:
-                return
             try:
+                nonlocal category_map
+                if category_map is None:
+                    async with SessionLocal() as session:
+                        result = await session.execute(select(Category.slug, Category.id))
+                        category_map = {row.slug: row.id for row in result}
+                    if "other" not in category_map:
+                        raise ScanPersistenceError(
+                            "Cannot persist scan because the fallback category is missing."
+                        )
+
                 async with SessionLocal() as session:
                     for scanned in page.messages:
                         # Skip duplicates by telegram_id
@@ -105,7 +110,7 @@ class TelegramScanService:
                             continue
 
                         slug = categorize_scanned_message(scanned)
-                        category_id = category_map.get(slug) or category_map.get("other", 1)
+                        category_id = category_map.get(slug, category_map["other"])
 
                         session.add(Message(
                             telegram_id=scanned.telegram_id,
@@ -121,8 +126,11 @@ class TelegramScanService:
                             raw_data=scanned.raw_data,
                         ))
                     await session.commit()
-            except Exception:
+            except ScanPersistenceError:
+                raise
+            except Exception as exc:
                 logger.exception("Failed to persist scan page")
+                raise ScanPersistenceError("Failed to persist scanned messages.") from exc
 
         try:
             await self.scanner.scan(client=client, page_size=page_size, on_page=persist_page)

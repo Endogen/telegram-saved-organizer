@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import type { MessageListItem } from "@/types/message";
+import { MessageContent } from "@/components/messages/message-content";
 import { announceMessageDragEnd, announceMessageDragStart, setDraggedMessageId } from "@/lib/message-drag-events";
 
 const categoryIconMap: Record<string, LucideIcon> = {
@@ -76,19 +77,6 @@ function resolveMediaLabel(mediaType: string | null, hasUrl: boolean): string {
     return "Link";
   }
   return "Text";
-}
-
-function parseUrlDomain(rawUrl: string | null): string | null {
-  if (rawUrl === null || rawUrl.trim().length === 0) {
-    return null;
-  }
-
-  try {
-    const parsed = new URL(rawUrl);
-    return parsed.hostname.replace(/^www\./, "") || rawUrl;
-  } catch {
-    return rawUrl;
-  }
 }
 
 function formatRelativeDate(isoDate: string): string {
@@ -162,25 +150,19 @@ export function MessageCard({
   const [isActionsOpen, setIsActionsOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const CategoryIcon = resolveCategoryIcon(message.category.icon);
-  const urlDomain = parseUrlDomain(message.url);
   const hasUrl = message.url !== null && message.url.trim().length > 0;
   const MediaIcon = resolveMediaIcon(message.media_type, hasUrl);
   const mediaLabel = resolveMediaLabel(message.media_type, hasUrl);
-  const rawPreview =
-    message.content !== null && message.content.trim().length > 0
-      ? message.content.trim()
-      : "No text preview available for this message.";
-  const previewText = rawPreview.length > 280 ? `${rawPreview.slice(0, 280)}…` : rawPreview;
   const cardEnterAnimation = shouldReduceMotion ? false : { opacity: 0, y: 20, scale: 0.98 };
   const cardExitAnimation = shouldReduceMotion
     ? { opacity: 0, transition: { duration: 0.12 } }
-    : { opacity: 0, scale: 0.95, y: 6, transition: { duration: 0.2, ease: [0.4, 0, 1, 1] } };
+    : { opacity: 0, scale: 0.95, y: 6, transition: { duration: 0.2, ease: [0.4, 0, 1, 1] as const } };
   const hoverAnimation = shouldReduceMotion
     ? undefined
     : {
         y: -6,
         boxShadow: "0 24px 44px -28px rgba(15, 23, 42, 0.55)",
-        transition: { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] },
+        transition: { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] as const },
       };
 
   useEffect(() => {
@@ -247,7 +229,7 @@ export function MessageCard({
       exit={cardExitAnimation}
       whileHover={hoverAnimation}
       draggable={!isDeletePending}
-      onDragStart={handleDragStart}
+      onDragStartCapture={handleDragStart}
       onDragEnd={handleDragEnd}
       className={[
         "group overflow-visible rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.96)] p-4 shadow-sm transition-colors",
@@ -383,7 +365,9 @@ export function MessageCard({
         </span>
       </div>
 
-      <p className="mt-2 break-words text-sm text-[hsl(var(--foreground))]" style={{ overflowWrap: "anywhere" }}>{previewText}</p>
+      <div className="mt-3">
+        <MessageContent content={message.content} url={message.url} compact />
+      </div>
       <button
         type="button"
         draggable="false"
@@ -393,13 +377,6 @@ export function MessageCard({
         <Eye className="size-3.5" />
         View full message
       </button>
-
-      {urlDomain !== null ? (
-        <p className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-[hsl(var(--primary))]">
-          <Link2 className="size-3.5" />
-          {urlDomain}
-        </p>
-      ) : null}
 
       {message.tags.length > 0 ? (
         <ul className="mt-3 flex flex-wrap gap-1.5">

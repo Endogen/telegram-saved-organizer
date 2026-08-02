@@ -122,7 +122,6 @@ describe("MessageCard", () => {
       />,
     );
 
-    expect(screen.getByText("No text preview available for this message.")).toBeInTheDocument();
     expect(screen.getByText("not-a-valid-url")).toBeInTheDocument();
 
     const checkbox = screen.getByRole("checkbox", { name: "Select message" });

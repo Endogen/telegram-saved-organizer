@@ -9,7 +9,7 @@ from typing import Protocol
 
 from telethon import TelegramClient
 
-from app.config import settings
+from app.config import PRIVATE_FILE_MODE, settings
 
 
 class TelegramClientCredentialsMismatchError(ValueError):
@@ -56,6 +56,7 @@ class TelegramClientManager:
                 self._api_hash = api_hash
 
             if client.is_connected():
+                self._secure_session_artifacts()
                 return client
 
             try:
@@ -69,6 +70,7 @@ class TelegramClientManager:
                     await client.disconnect()
                 raise
 
+            self._secure_session_artifacts()
             return client
 
     async def disconnect(self) -> None:
@@ -127,6 +129,11 @@ class TelegramClientManager:
         if base_path.suffix:
             return (base_path, Path(f"{base_path}-journal"))
         return (Path(f"{base_path}.session"), Path(f"{base_path}.session-journal"))
+
+    def _secure_session_artifacts(self) -> None:
+        for file_path in self._session_artifacts():
+            if file_path.exists():
+                file_path.chmod(PRIVATE_FILE_MODE)
 
 
 telegram_client_manager = TelegramClientManager(session_path=settings.data_dir / "telegram")

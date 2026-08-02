@@ -104,6 +104,21 @@ async def test_reset_session_removes_session_artifacts(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_connect_restricts_existing_session_file_permissions(tmp_path: Path) -> None:
+    session_file = tmp_path / "telegram.session"
+    session_file.write_text("session", encoding="utf-8")
+    session_file.chmod(0o644)
+    manager = TelegramClientManager(
+        session_path=tmp_path / "telegram",
+        client_factory=_FakeClientFactory(),
+    )
+
+    await manager.connect(api_id=1001, api_hash="hash")
+
+    assert session_file.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.asyncio
 async def test_connect_failure_does_not_cache_failed_client(tmp_path: Path) -> None:
     factory = _FakeClientFactory(fail_connect=True)
     manager = TelegramClientManager(session_path=tmp_path / "telegram", client_factory=factory)

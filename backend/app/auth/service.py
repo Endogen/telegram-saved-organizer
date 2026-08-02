@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Protocol
 
 from telethon.errors import SessionPasswordNeededError
 
-from app.config import settings as app_settings
+from app.config import PRIVATE_FILE_MODE, settings as app_settings
 from app.telegram.client import telegram_client_manager
 
 logger = logging.getLogger(__name__)
@@ -21,10 +21,20 @@ CREDENTIALS_FILE = app_settings.data_dir / "credentials.json"
 
 def _save_credentials(api_id: int, api_hash: str, phone: str) -> None:
     """Persist Telegram credentials to disk."""
-    CREDENTIALS_FILE.write_text(
-        json.dumps({"api_id": api_id, "api_hash": api_hash, "phone": phone}),
-        encoding="utf-8",
+
+    file_descriptor = os.open(
+        CREDENTIALS_FILE,
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+        PRIVATE_FILE_MODE,
     )
+    try:
+        os.fchmod(file_descriptor, PRIVATE_FILE_MODE)
+        with os.fdopen(file_descriptor, "w", encoding="utf-8") as credentials_file:
+            file_descriptor = -1
+            json.dump({"api_id": api_id, "api_hash": api_hash, "phone": phone}, credentials_file)
+    finally:
+        if file_descriptor >= 0:
+            os.close(file_descriptor)
 
 
 def _load_credentials() -> dict[str, Any] | None:
@@ -106,6 +116,8 @@ class TelegramAuthManagerProtocol(Protocol):
     def is_connected(self) -> bool: ...
 
     def has_session(self) -> bool: ...
+
+    def get_connected_client(self) -> TelegramAuthClientProtocol | None: ...
 
 
 async def auto_reconnect() -> None:
@@ -204,7 +216,11 @@ class TelegramAuthService:
     async def status(self) -> AuthStatus:
         """Return current auth/session status."""
 
-        return self._status()
+        connected_client = self._manager.get_connected_client()
+        authorized = False
+        if connected_client is not None:
+            authorized = await connected_client.is_user_authorized()
+        return self._status(authorized_override=authorized)
 
     async def disconnect(self) -> AuthStatus:
         """Disconnect and remove local session data."""

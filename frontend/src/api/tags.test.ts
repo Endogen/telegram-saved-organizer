@@ -32,7 +32,7 @@ describe("tags api client", () => {
     fetchMock.mockResolvedValue(createResponse(payload));
 
     await expect(listTags()).resolves.toEqual(payload);
-    expect(fetchMock).toHaveBeenCalledWith("/api/tags", undefined);
+    expect(fetchMock).toHaveBeenCalledWith("/api/tags", { credentials: "same-origin" });
   });
 
   it("normalizes the create-tag payload and validates required input", async () => {

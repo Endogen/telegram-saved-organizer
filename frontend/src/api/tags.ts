@@ -1,10 +1,7 @@
 import type { MessageTag } from "@/types/message";
+import { requestJson as requestApiJson } from "@/api/client";
 
 const TAGS_BASE_PATH = "/api";
-
-type ApiErrorPayload = {
-  detail?: unknown;
-};
 
 type MessageTagsResponse = {
   message_id: number;
@@ -16,24 +13,10 @@ type CreateTagRequest = {
   color?: string | null;
 };
 
-function toErrorMessage(payload: unknown): string | null {
-  if (typeof payload !== "object" || payload === null) {
-    return null;
-  }
-
-  const detail = (payload as ApiErrorPayload).detail;
-  return typeof detail === "string" && detail.length > 0 ? detail : null;
-}
-
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${TAGS_BASE_PATH}${path}`, init);
-  const payload: unknown = await response.json();
-
-  if (!response.ok) {
-    throw new Error(toErrorMessage(payload) ?? "Tag request failed.");
-  }
-
-  return payload as T;
+  return requestApiJson<T>(`${TAGS_BASE_PATH}${path}`, init, {
+    fallbackMessage: "Tag request failed.",
+  });
 }
 
 function normalizeTagName(name: string): string {

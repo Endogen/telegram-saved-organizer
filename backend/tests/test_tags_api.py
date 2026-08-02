@@ -79,7 +79,7 @@ class _FakeTagService:
 @pytest.fixture
 def tag_context() -> tuple[Any, _FakeTagService]:
     service = _FakeTagService()
-    app = create_app()
+    app = create_app(api_token=None)
 
     async def override_tag_service() -> _FakeTagService:
         return service

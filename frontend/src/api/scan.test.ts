@@ -47,7 +47,7 @@ describe("scan api client", () => {
     fetchMock.mockResolvedValue(createResponse(idleScanStatus));
 
     const result = await fetchScanStatus();
-    expect(fetchMock).toHaveBeenCalledWith("/api/scan/status", undefined);
+    expect(fetchMock).toHaveBeenCalledWith("/api/scan/status", { credentials: "same-origin" });
     expect(result).toEqual(idleScanStatus);
   });
 

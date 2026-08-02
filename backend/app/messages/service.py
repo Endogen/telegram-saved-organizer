@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from telethon.errors import RPCError
 
-from app.models import Category, Message, Tag
+from app.models import Category, Message, MessageTag, Tag
 from app.telegram.client import telegram_client_manager
 
 
@@ -204,6 +204,9 @@ class MessageService:
 
         count_statement = select(func.count()).select_from(Message)
         total = await self.session.scalar(count_statement)
+        # This also removes legacy orphans created before SQLite foreign-key
+        # enforcement was enabled. Bulk ORM deletes do not clean secondary rows.
+        await self.session.execute(delete(MessageTag))
         await self.session.execute(delete(Message))
         await self.session.commit()
         return int(total or 0)

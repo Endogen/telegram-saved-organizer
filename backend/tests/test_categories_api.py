@@ -101,7 +101,7 @@ def _build_category() -> _FakeCategory:
 @pytest.fixture
 def category_context() -> tuple[Any, _FakeCategoryService]:
     service = _FakeCategoryService()
-    app = create_app()
+    app = create_app(api_token=None)
 
     async def override_category_service() -> _FakeCategoryService:
         return service

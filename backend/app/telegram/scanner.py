@@ -8,7 +8,25 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable, Protocol
 
-URL_PATTERN = re.compile(r"https?://[^\s]+")
+URL_PATTERN = re.compile(r"(?:https?://|www\.)[^\s]+", re.IGNORECASE)
+SIMPLE_URL_TRAILING_PUNCTUATION = frozenset(".,!?;:\"'")
+URL_CLOSING_PAIRS = {")": "(", "]": "[", "}": "{"}
+
+
+def _trim_url_punctuation(value: str) -> str:
+    normalized = value.strip()
+    while normalized:
+        final_character = normalized[-1]
+        if final_character in SIMPLE_URL_TRAILING_PUNCTUATION:
+            normalized = normalized[:-1]
+            continue
+
+        opening_character = URL_CLOSING_PAIRS.get(final_character)
+        if opening_character is not None and normalized.count(final_character) > normalized.count(opening_character):
+            normalized = normalized[:-1]
+            continue
+        break
+    return normalized
 
 
 class ScanAlreadyRunningError(RuntimeError):
@@ -298,7 +316,8 @@ class SavedMessagesScanner:
         matched = URL_PATTERN.search(content)
         if not matched:
             return None
-        return matched.group(0)
+        extracted_url = _trim_url_punctuation(matched.group(0))
+        return f"https://{extracted_url}" if extracted_url.lower().startswith("www.") else extracted_url
 
     def _extract_date(self, raw_message: Any) -> datetime:
         date_value = getattr(raw_message, "date", None)

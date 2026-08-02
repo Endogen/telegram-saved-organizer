@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -8,6 +8,7 @@ import {
   deleteMessage,
   listMessages,
   moveMessageToCategory,
+  TelegramNotConnectedError,
 } from "@/api/messages";
 import {
   addTagsToMessage,
@@ -21,6 +22,7 @@ import type { CategoryWithCount } from "@/types/category";
 import type { MessageListItem, MessageTag } from "@/types/message";
 
 vi.mock("@/api/messages", () => ({
+  TelegramNotConnectedError: class TelegramNotConnectedError extends Error {},
   listMessages: vi.fn(),
   moveMessageToCategory: vi.fn(),
   deleteMessage: vi.fn(),
@@ -352,6 +354,21 @@ describe("MessagesPage actions", () => {
     expect(screen.getByText("Message details")).toBeInTheDocument();
   });
 
+  it("replaces message details with the requested action dialog", async () => {
+    renderMessagesPage();
+    await screen.findByText("3 messages");
+
+    fireEvent.click(screen.getAllByRole("button", { name: "View full message" })[0]);
+    await screen.findByText("Message details");
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    expect(await screen.findByText("Move message")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByText("Message details")).not.toBeInTheDocument();
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    });
+  });
+
   it("opens move dialog from card menu", async () => {
     renderMessagesPage();
     await screen.findByText("3 messages");
@@ -387,12 +404,31 @@ describe("MessagesPage actions", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Delete message" }));
 
     await waitFor(() => {
-      expect(deleteMessage).toHaveBeenCalledWith(101);
+      expect(deleteMessage).toHaveBeenCalledWith(101, false);
     });
 
     await waitFor(() => {
       expect(screen.getByText("2 messages")).toBeInTheDocument();
     });
+  });
+
+  it("offers a local-only delete when Telegram is disconnected", async () => {
+    vi.mocked(deleteMessage)
+      .mockRejectedValueOnce(new TelegramNotConnectedError())
+      .mockResolvedValueOnce();
+
+    renderMessagesPage();
+    await screen.findByText("3 messages");
+
+    const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
+    fireEvent.click(menuButtons[0]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete message" }));
+
+    await waitFor(() => {
+      expect(deleteMessage).toHaveBeenNthCalledWith(1, 101, false);
+      expect(deleteMessage).toHaveBeenNthCalledWith(2, 101, true);
+    });
+    expect(screen.getByText("2 messages")).toBeInTheDocument();
   });
 
   it("cancels delete when user declines confirmation", async () => {
@@ -573,8 +609,27 @@ describe("MessagesPage actions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
 
     await waitFor(() => {
-      expect(bulkDeleteMessages).toHaveBeenCalledWith([101, 102, 103]);
+      expect(bulkDeleteMessages).toHaveBeenCalledWith([101, 102, 103], false);
     });
+  });
+
+  it("offers a local-only bulk delete when Telegram is disconnected", async () => {
+    vi.mocked(bulkDeleteMessages)
+      .mockRejectedValueOnce(new TelegramNotConnectedError())
+      .mockResolvedValueOnce({ deleted_count: 3 });
+
+    renderMessagesPage();
+    await screen.findByText("3 messages");
+
+    fireEvent.click(screen.getByRole("button", { name: "Bulk select" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select visible (3)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+
+    await waitFor(() => {
+      expect(bulkDeleteMessages).toHaveBeenNthCalledWith(1, [101, 102, 103], false);
+      expect(bulkDeleteMessages).toHaveBeenNthCalledWith(2, [101, 102, 103], true);
+    });
+    expect(screen.getByText("No messages yet.")).toBeInTheDocument();
   });
 
   it("performs bulk move", async () => {

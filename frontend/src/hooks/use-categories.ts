@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation } from "react-router";
 
+import { requestJson } from "@/api/client";
 import type { CategoryWithCount } from "@/types/category";
 
 const CATEGORIES_ENDPOINT = "/api/categories";
@@ -146,12 +147,9 @@ export function useCategories(): UseCategoriesResult {
 
   const fetchCategories = useCallback(async (signal: AbortSignal) => {
     try {
-      const response = await fetch(CATEGORIES_ENDPOINT, { signal });
-      if (!response.ok) {
-        throw new Error("Failed to fetch categories.");
-      }
-
-      const payload: unknown = await response.json();
+      const payload = await requestJson<unknown>(CATEGORIES_ENDPOINT, { signal }, {
+        fallbackMessage: "Failed to fetch categories.",
+      });
       const parsed = normalizeCategories(payload);
       if (parsed === null) {
         throw new Error("Unexpected category payload.");

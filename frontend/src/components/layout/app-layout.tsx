@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { MessageSquareMore, PlugZap, Rows3 } from "lucide-react";
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation } from "react-router";
 
 import { Sidebar, type SidebarPrimaryItem } from "@/components/layout/sidebar";
 import { useCategories } from "@/hooks/use-categories";

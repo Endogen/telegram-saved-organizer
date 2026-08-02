@@ -1,29 +1,12 @@
 import type { ScanStatus } from "@/types/scan";
+import { requestJson } from "@/api/client";
 
 const SCAN_BASE_PATH = "/api/scan";
 
-type ApiErrorPayload = {
-  detail?: unknown;
-};
-
-function toErrorMessage(payload: unknown): string | null {
-  if (typeof payload !== "object" || payload === null) {
-    return null;
-  }
-
-  const detail = (payload as ApiErrorPayload).detail;
-  return typeof detail === "string" && detail.length > 0 ? detail : null;
-}
-
 async function requestScanStatus(path: string, init?: RequestInit): Promise<ScanStatus> {
-  const response = await fetch(`${SCAN_BASE_PATH}${path}`, init);
-  const payload: unknown = await response.json();
-
-  if (!response.ok) {
-    throw new Error(toErrorMessage(payload) ?? "Scan request failed.");
-  }
-
-  return payload as ScanStatus;
+  return requestJson<ScanStatus>(`${SCAN_BASE_PATH}${path}`, init, {
+    fallbackMessage: "Scan request failed.",
+  });
 }
 
 export async function fetchScanStatus(): Promise<ScanStatus> {

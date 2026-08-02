@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Tags, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ModalPortal } from "@/components/ui/modal-portal";
+import { useModalLifecycle } from "@/hooks/use-modal-lifecycle";
 import type { MessageListItem, MessageTag } from "@/types/message";
 
 type TagInputDialogProps = {
@@ -36,22 +38,7 @@ export function TagInputDialog({
 }: TagInputDialogProps) {
   const [newTagName, setNewTagName] = useState("");
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    }
-
-    document.addEventListener("keydown", handleEscape);
-    return () => {
-      document.removeEventListener("keydown", handleEscape);
-    };
-  }, [onClose, open]);
+  useModalLifecycle(open, onClose);
 
   useEffect(() => {
     if (!open) {
@@ -83,15 +70,21 @@ export function TagInputDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4" role="presentation">
-      <div className="absolute inset-0" onClick={onClose} aria-hidden="true" />
-      <div className="relative z-10 w-full max-w-xl rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-2xl">
+    <ModalPortal>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4" role="presentation">
+        <div className="absolute inset-0" onClick={onClose} aria-hidden="true" />
+        <div
+          className="relative z-10 w-full max-w-xl rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-2xl"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="tag-dialog-title"
+        >
         <div className="flex items-start gap-3">
           <span className="mt-0.5 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-[hsl(var(--primary)/0.16)] text-[hsl(var(--primary))]">
             <Tags className="size-4" />
           </span>
           <div>
-            <h3 className="text-base font-semibold text-[hsl(var(--foreground))]">Manage tags</h3>
+            <h3 id="tag-dialog-title" className="text-base font-semibold text-[hsl(var(--foreground))]">Manage tags</h3>
             <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
               Add existing tags or remove tags on this message.
             </p>
@@ -181,7 +174,8 @@ export function TagInputDialog({
             Close
           </Button>
         </div>
+        </div>
       </div>
-    </div>
+    </ModalPortal>
   );
 }

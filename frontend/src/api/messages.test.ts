@@ -79,7 +79,7 @@ describe("messages api client", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/messages?page=1&per_page=4&sort=date_desc&category=links&search=release+notes&tag=frontend&tag=release",
-      undefined,
+      { credentials: "same-origin" },
     );
     expect(result).toEqual(payload);
   });

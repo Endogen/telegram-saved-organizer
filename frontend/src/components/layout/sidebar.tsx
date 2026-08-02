@@ -11,7 +11,7 @@ import {
   type LucideIcon,
   Video,
 } from "lucide-react";
-import { Link, NavLink, useLocation } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router";
 import { AnimatePresence, motion } from "framer-motion";
 
 import {

@@ -15,7 +15,7 @@ from app.messages.service import (
     TelegramClientNotConnectedError,
     TelegramMessageDeleteError,
 )
-from app.models import Category, Message, Tag
+from app.models import Category, Message, MessageTag, Tag
 
 
 class _FakeScalarResult:
@@ -33,6 +33,7 @@ class _FakeSession:
         self.get_values: dict[tuple[type[Any], int], Any] = {}
         self.scalar_calls: list[Any] = []
         self.scalars_calls: list[Any] = []
+        self.execute_calls: list[Any] = []
         self.delete_calls: list[Any] = []
         self.commit_calls = 0
 
@@ -49,6 +50,9 @@ class _FakeSession:
 
     async def get(self, model: type[Any], item_id: int) -> Any:
         return self.get_values.get((model, item_id))
+
+    async def execute(self, statement: Any) -> None:
+        self.execute_calls.append(statement)
 
     async def delete(self, item: Any) -> None:
         self.delete_calls.append(item)
@@ -132,6 +136,21 @@ async def test_list_messages_returns_paginated_items() -> None:
     assert result.per_page == 1
     assert result.items == [message]
     assert "ORDER BY messages.date ASC" in str(session.scalars_calls[0])
+
+
+@pytest.mark.asyncio
+async def test_clear_all_messages_removes_associations_before_messages() -> None:
+    session = _FakeSession()
+    session.scalar_values = [2]
+    service = MessageService(session=session)  # type: ignore[arg-type]
+
+    cleared_count = await service.clear_all_messages()
+
+    assert cleared_count == 2
+    assert len(session.execute_calls) == 2
+    assert session.execute_calls[0].table.name == MessageTag.__tablename__
+    assert session.execute_calls[1].table.name == Message.__tablename__
+    assert session.commit_calls == 1
 
 
 @pytest.mark.asyncio

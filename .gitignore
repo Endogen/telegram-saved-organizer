@@ -22,3 +22,4 @@ htmlcov/
 .ralph/inject.md
 data/
 frontend/coverage/
+graphify-out/

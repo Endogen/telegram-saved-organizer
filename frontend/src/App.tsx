@@ -1,7 +1,12 @@
-import { RouterProvider } from "react-router-dom";
+import { RouterProvider } from "react-router/dom";
 
+import { ApiSessionGate } from "@/components/auth/api-session-gate";
 import { router } from "@/router";
 
 export default function App() {
-  return <RouterProvider router={router} />;
+  return (
+    <ApiSessionGate>
+      <RouterProvider router={router} />
+    </ApiSessionGate>
+  );
 }
