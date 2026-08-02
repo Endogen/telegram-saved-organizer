@@ -77,7 +77,11 @@ async def connect_telegram(
         ),
     )
     try:
-        state = await service.start(phone=payload.phone)
+        state = await service.start(
+            api_id=payload.api_id,
+            api_hash=payload.api_hash,
+            phone=payload.phone,
+        )
     except TelegramIdentityConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

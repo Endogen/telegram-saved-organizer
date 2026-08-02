@@ -21,7 +21,11 @@ export async function connectTelegram(payload: ConnectTelegramPayload): Promise<
   return requestConnection("", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      api_id: payload.apiId,
+      api_hash: payload.apiHash,
+      phone: payload.phone,
+    }),
   });
 }
 

@@ -52,22 +52,77 @@ class TelegramAuthService:
 
     async def status(self) -> TelegramConnectionState:
         connection = await self._load_connection()
-        if connection is None or not connection.session_encrypted:
+        if connection is None:
             return TelegramConnectionState.DISCONNECTED
+
+        has_any_authorization_material = any(
+            (
+                connection.telegram_user_id,
+                connection.session_encrypted,
+                connection.api_id_encrypted,
+                connection.api_hash_encrypted,
+                connection.phone_encrypted,
+                connection.pending_phone_code_hash_encrypted,
+                connection.pending_expires_at,
+                connection.password_required,
+            )
+        )
+        if connection.state not in {"pending", "connected"}:
+            if has_any_authorization_material:
+                await self._invalidate_corrupt_connection(connection)
+            return TelegramConnectionState.DISCONNECTED
+
+        required_values = [
+            connection.session_encrypted,
+            connection.api_id_encrypted,
+            connection.api_hash_encrypted,
+            connection.phone_encrypted,
+        ]
+        if connection.state == "pending":
+            required_values.extend(
+                [
+                    connection.pending_phone_code_hash_encrypted,
+                    connection.pending_expires_at,
+                ]
+            )
+            has_invalid_state_material = connection.telegram_user_id is not None
+        else:
+            required_values.append(connection.telegram_user_id)
+            has_invalid_state_material = any(
+                (
+                    connection.pending_phone_code_hash_encrypted,
+                    connection.pending_expires_at,
+                    connection.password_required,
+                )
+            )
+        if not all(required_values) or has_invalid_state_material:
+            await self._invalidate_corrupt_connection(connection)
+            return TelegramConnectionState.DISCONNECTED
+
         if connection.state == "pending" and self._challenge_expired(
             connection.pending_expires_at
         ):
             self._erase_expired_challenge(connection)
             await self._session.commit()
             return TelegramConnectionState.DISCONNECTED
+
         try:
             self._decrypt_required(connection.session_encrypted, purpose="session")
+            self._decrypt_api_credentials(connection)
+            self._decrypt_required(connection.phone_encrypted, purpose="phone")
+            if connection.state == "pending":
+                self._decrypt_required(
+                    connection.pending_phone_code_hash_encrypted,
+                    purpose="phone_code_hash",
+                )
         except SecretDecryptionError:
             await self._invalidate_corrupt_connection(connection)
             return TelegramConnectionState.DISCONNECTED
         return self._response_state(connection)
 
-    async def start(self, *, phone: str) -> TelegramConnectionState:
+    async def start(
+        self, *, api_id: int, api_hash: str, phone: str
+    ) -> TelegramConnectionState:
         normalized_phone = normalize_phone_number(phone)
         connection = await self._load_connection(for_update=True)
         if connection is None:
@@ -78,15 +133,44 @@ class TelegramAuthService:
             self._session.add(connection)
             await self._session.flush()
 
-        try:
-            session_string = self._decrypt_optional(
-                connection.session_encrypted,
-                purpose="session",
-            )
-        except SecretDecryptionError:
-            await self._invalidate_corrupt_connection(connection)
+        if connection.state not in {"pending", "connected"}:
+            if any(
+                (
+                    connection.telegram_user_id,
+                    connection.session_encrypted,
+                    connection.api_id_encrypted,
+                    connection.api_hash_encrypted,
+                    connection.phone_encrypted,
+                    connection.pending_phone_code_hash_encrypted,
+                    connection.pending_expires_at,
+                    connection.password_required,
+                )
+            ):
+                await self._invalidate_corrupt_connection(connection)
             session_string = None
-        async with short_lived_client(session_string=session_string) as client:
+        else:
+            try:
+                session_string = self._decrypt_optional(
+                    connection.session_encrypted,
+                    purpose="session",
+                )
+            except SecretDecryptionError:
+                await self._invalidate_corrupt_connection(connection)
+                session_string = None
+
+        connection.api_id_encrypted = encrypt_secret(
+            str(api_id),
+            context=self._secret_context("api_id"),
+        )
+        connection.api_hash_encrypted = encrypt_secret(
+            api_hash,
+            context=self._secret_context("api_hash"),
+        )
+        async with short_lived_client(
+            session_string=session_string,
+            api_id=api_id,
+            api_hash=api_hash,
+        ) as client:
             if await client.is_user_authorized():
                 try:
                     existing_phone = self._decrypt_optional(
@@ -173,13 +257,18 @@ class TelegramAuthService:
                 connection.session_encrypted,
                 purpose="session",
             )
+            api_id, api_hash = self._decrypt_api_credentials(connection)
         except SecretDecryptionError as exc:
             await self._invalidate_corrupt_connection(connection)
             raise TelegramVerificationError(
                 "The saved Telegram verification state could not be opened."
             ) from exc
 
-        async with short_lived_client(session_string=session_string) as client:
+        async with short_lived_client(
+            session_string=session_string,
+            api_id=api_id,
+            api_hash=api_hash,
+        ) as client:
             try:
                 if password is not None:
                     await client.sign_in(password=password)
@@ -349,6 +438,8 @@ class TelegramAuthService:
 
         await self._cancel_active_scans()
         connection.telegram_user_id = None
+        connection.api_id_encrypted = None
+        connection.api_hash_encrypted = None
         connection.phone_encrypted = None
         connection.session_encrypted = None
         self._clear_challenge(connection)
@@ -367,6 +458,29 @@ class TelegramAuthService:
                 "Telegram verification challenge is incomplete."
             )
         return decrypt_secret(value, context=self._secret_context(purpose))
+
+    def _decrypt_api_credentials(
+        self, connection: TelegramConnection
+    ) -> tuple[int, str]:
+        api_id_raw = self._decrypt_required(
+            connection.api_id_encrypted,
+            purpose="api_id",
+        )
+        api_hash = self._decrypt_required(
+            connection.api_hash_encrypted,
+            purpose="api_hash",
+        )
+        try:
+            api_id = int(api_id_raw)
+        except (TypeError, ValueError) as exc:
+            raise SecretDecryptionError(
+                "Encrypted Telegram API ID is invalid."
+            ) from exc
+        if api_id <= 0 or len(api_hash) != 32:
+            raise SecretDecryptionError(
+                "Encrypted Telegram API credentials are invalid."
+            )
+        return api_id, api_hash
 
     def _secret_context(self, purpose: str) -> str:
         return f"telegram:{self._user_id}:{purpose}"
@@ -407,6 +521,8 @@ class TelegramAuthService:
         """Crypto-erase stale unauthorized session and phone material."""
 
         cls._clear_challenge(connection)
+        connection.api_id_encrypted = None
+        connection.api_hash_encrypted = None
         connection.phone_encrypted = None
         connection.session_encrypted = None
         connection.telegram_user_id = None

@@ -76,29 +76,43 @@ class User(Base):
 
     __tablename__ = "users"
     __table_args__ = (
-        CheckConstraint("failed_login_attempts >= 0", name="failed_login_attempts_non_negative"),
+        CheckConstraint(
+            "failed_login_attempts >= 0", name="failed_login_attempts_non_negative"
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     email: Mapped[str] = mapped_column(String(320), nullable=False)
-    normalized_email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
+    normalized_email: Mapped[str] = mapped_column(
+        String(320), unique=True, nullable=False
+    )
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    failed_login_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_login_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
     web_sessions: Mapped[list[WebSession]] = relationship(
         back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
     telegram_connection: Mapped[TelegramConnection | None] = relationship(
-        back_populates="user", cascade="all, delete-orphan", passive_deletes=True, uselist=False
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
     )
     scan_jobs: Mapped[list[ScanJob]] = relationship(
         back_populates="user", cascade="all, delete-orphan", passive_deletes=True
@@ -131,9 +145,15 @@ class WebSession(Base):
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    idle_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    idle_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     user: Mapped[User] = relationship(back_populates="web_sessions")
 
@@ -153,21 +173,39 @@ class TelegramConnection(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
     )
-    telegram_user_id: Mapped[int | None] = mapped_column(BigInteger, unique=True, nullable=True)
+    telegram_user_id: Mapped[int | None] = mapped_column(
+        BigInteger, unique=True, nullable=True
+    )
+    api_id_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    api_hash_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     phone_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     session_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    state: Mapped[str] = mapped_column(String(24), nullable=False, default="disconnected")
-    pending_phone_code_hash_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    pending_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    password_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    state: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="disconnected"
+    )
+    pending_phone_code_hash_encrypted: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    pending_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    password_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
     user: Mapped[User] = relationship(back_populates="telegram_connection")
@@ -259,19 +297,28 @@ class ScanJob(Base):
     telegram_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     connection_generation: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     lease_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
     user: Mapped[User] = relationship(back_populates="scan_jobs")
@@ -306,8 +353,12 @@ class Category(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "id", name="uq_categories_user_id_id"),
         UniqueConstraint("user_id", "slug", name="uq_categories_user_id_slug"),
-        UniqueConstraint("user_id", "normalized_name", name="uq_categories_user_id_normalized_name"),
-        UniqueConstraint("user_id", "system_key", name="uq_categories_user_id_system_key"),
+        UniqueConstraint(
+            "user_id", "normalized_name", name="uq_categories_user_id_normalized_name"
+        ),
+        UniqueConstraint(
+            "user_id", "system_key", name="uq_categories_user_id_system_key"
+        ),
         Index("ix_categories_user_id_position_id", "user_id", "position", "id"),
     )
 
@@ -389,7 +440,10 @@ class Message(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
     category: Mapped[Category] = relationship(back_populates="messages")
@@ -408,7 +462,9 @@ class Tag(Base):
     __tablename__ = "tags"
     __table_args__ = (
         UniqueConstraint("user_id", "id", name="uq_tags_user_id_id"),
-        UniqueConstraint("user_id", "normalized_name", name="uq_tags_user_id_normalized_name"),
+        UniqueConstraint(
+            "user_id", "normalized_name", name="uq_tags_user_id_normalized_name"
+        ),
         Index("ix_tags_user_id_normalized_name", "user_id", "normalized_name"),
     )
 

@@ -23,10 +23,6 @@ TELEGRAM_LOGOUT_TIMEOUT_SECONDS = 10.0
 logger = logging.getLogger(__name__)
 
 
-class TelegramConfigurationError(RuntimeError):
-    """Raised when server-owned Telegram API credentials are unavailable."""
-
-
 class TelegramClientNotConnectedError(RuntimeError):
     """Raised when a user has no authorized Telegram connection."""
 
@@ -69,27 +65,42 @@ class TelethonClientProtocol(Protocol):
     async def log_out(self) -> Any: ...
 
 
-def _telegram_api_credentials() -> tuple[int, str]:
-    api_id = getattr(settings, "telegram_api_id", None)
-    api_hash = getattr(settings, "telegram_api_hash", None)
-    if not api_id or not api_hash:
-        raise TelegramConfigurationError(
-            "Server Telegram API credentials are not configured."
-        )
-    return int(api_id), str(api_hash)
+def decrypt_telegram_api_credentials(
+    *, connection: TelegramConnection, user_id: str
+) -> tuple[int, str]:
+    """Open one tenant's context-bound Telegram application credentials."""
+
+    api_id_raw = decrypt_secret(
+        connection.api_id_encrypted,
+        context=f"telegram:{user_id}:api_id",
+    )
+    api_hash = decrypt_secret(
+        connection.api_hash_encrypted,
+        context=f"telegram:{user_id}:api_hash",
+    )
+    try:
+        api_id = int(api_id_raw)
+    except (TypeError, ValueError) as exc:
+        raise SecretDecryptionError("Encrypted Telegram API ID is invalid.") from exc
+    if api_id <= 0 or len(api_hash) != 32:
+        raise SecretDecryptionError("Encrypted Telegram API credentials are invalid.")
+    return api_id, api_hash
 
 
 @asynccontextmanager
 async def short_lived_client(
     *,
     session_string: str | None,
+    api_id: int,
+    api_hash: str,
     client_factory: type[TelegramClient] = TelegramClient,
     connect_timeout_seconds: float | None = None,
     disconnect_timeout_seconds: float | None = None,
 ) -> AsyncIterator[TelethonClientProtocol]:
     """Create one client from StringSession with bounded connect and cleanup."""
 
-    api_id, api_hash = _telegram_api_credentials()
+    if api_id <= 0 or not api_hash:
+        raise ValueError("Telegram API credentials are required.")
     client = client_factory(StringSession(session_string), api_id, api_hash)
     connect_deadline = float(
         settings.telegram_connect_timeout_seconds
@@ -169,6 +180,10 @@ async def delete_saved_messages(
             connection.session_encrypted,
             context=f"telegram:{normalized_user_id}:session",
         )
+        api_id, api_hash = decrypt_telegram_api_credentials(
+            connection=connection,
+            user_id=normalized_user_id,
+        )
     except SecretDecryptionError as exc:
         await _invalidate_authorization(
             user_id=normalized_user_id,
@@ -179,7 +194,11 @@ async def delete_saved_messages(
             "The saved Telegram authorization could not be opened."
         ) from exc
     try:
-        async with short_lived_client(session_string=session_string) as client:
+        async with short_lived_client(
+            session_string=session_string,
+            api_id=api_id,
+            api_hash=api_hash,
+        ) as client:
             if not await client.is_user_authorized():
                 await _invalidate_authorization(
                     user_id=normalized_user_id,
@@ -228,6 +247,8 @@ async def _invalidate_authorization(
     connection.state = "disconnected"
     connection.telegram_user_id = None
     connection.generation += 1
+    connection.api_id_encrypted = None
+    connection.api_hash_encrypted = None
     connection.phone_encrypted = None
     connection.session_encrypted = None
     connection.password_required = False
@@ -306,16 +327,24 @@ async def revoke_telegram_connection(*, user_id: str, session: AsyncSession) -> 
         return
 
     serialized: str | None = None
+    api_credentials: tuple[int, str] | None = None
     if connection.session_encrypted:
         try:
             serialized = decrypt_secret(
                 connection.session_encrypted,
                 context=f"telegram:{normalized_user_id}:session",
             )
+            api_credentials = decrypt_telegram_api_credentials(
+                connection=connection,
+                user_id=normalized_user_id,
+            )
         except Exception:
             serialized = None
+            api_credentials = None
 
     connection.telegram_user_id = None
+    connection.api_id_encrypted = None
+    connection.api_hash_encrypted = None
     connection.phone_encrypted = None
     connection.session_encrypted = None
     connection.pending_phone_code_hash_encrypted = None
@@ -327,11 +356,16 @@ async def revoke_telegram_connection(*, user_id: str, session: AsyncSession) -> 
     # authorization material. Account deletion continues in a second transaction.
     await session.commit()
 
-    if serialized is None:
+    if serialized is None or api_credentials is None:
         return
+    api_id, api_hash = api_credentials
     try:
         async with asyncio.timeout(TELEGRAM_LOGOUT_TIMEOUT_SECONDS):
-            async with short_lived_client(session_string=serialized) as client:
+            async with short_lived_client(
+                session_string=serialized,
+                api_id=api_id,
+                api_hash=api_hash,
+            ) as client:
                 if await client.is_user_authorized():
                     await client.log_out()
     except Exception:

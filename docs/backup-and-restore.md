@@ -15,7 +15,7 @@ With the production database service running:
 ./ops/backup-postgres.sh /secure/backup/location
 ```
 
-The script uses PostgreSQL's consistent custom dump format, validates the archive with `pg_restore --list`, writes it with a private umask, and creates a SHA-256 sidecar. Transfer both files to encrypted off-host storage. Back up the production environment configuration separately, or at minimum record the exact `TSO_MASTER_KEY`, public origin, Telegram API credentials, and database password in the approved secret store.
+The script uses PostgreSQL's consistent custom dump format, validates the archive with `pg_restore --list`, writes it with a private umask, and creates a SHA-256 sidecar. Transfer both files to encrypted off-host storage. Back up the production environment configuration separately, or at minimum record the exact `TSO_MASTER_KEY`, public origin, and database password in the approved secret store. Per-user Telegram API hashes and authorization sessions are encrypted inside the database and are unusable without the master key; treat both the dump and key as credentials and store them separately.
 
 Choose retention appropriate to the deployment; a practical baseline is seven daily, five weekly, and twelve monthly copies. Monitor the script's exit status and archive size. A successful command is not a substitute for a restore test.
 

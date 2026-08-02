@@ -440,9 +440,10 @@ describe("ScanProgress", () => {
 
     render(<ScanProgress />);
     await screen.findByText("Importing Saved Messages");
+    await waitFor(() => expect(subscribeToScanStatus).toHaveBeenCalledTimes(1));
 
-    act(() => {
-      vi.advanceTimersByTime(1_500);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_500);
     });
     await waitFor(() => expect(fetchScanStatus).toHaveBeenCalledTimes(2));
 
@@ -475,6 +476,7 @@ describe("ScanProgress", () => {
     });
 
     render(<ScanProgress />);
+    await screen.findByText("Importing Saved Messages");
     await waitFor(() => expect(subscribeToScanStatus).toHaveBeenCalledTimes(1));
 
     act(() => {

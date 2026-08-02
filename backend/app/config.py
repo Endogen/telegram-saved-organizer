@@ -49,8 +49,6 @@ def _reject_production_placeholder(name: str, value: str) -> None:
     normalized = value.strip().casefold()
     if any(marker in normalized for marker in PRODUCTION_PLACEHOLDER_MARKERS):
         raise RuntimeError(f"{name} still contains an example placeholder.")
-    if name == "TSO_TELEGRAM_API_ID" and normalized == "123456":
-        raise RuntimeError(f"{name} still contains the example placeholder.")
 
 
 def _normalize_origin(value: str, *, require_https: bool) -> str:
@@ -189,8 +187,6 @@ class Settings:
     scan_max_streams_per_user: int
     telegram_connect_timeout_seconds: int
     telegram_disconnect_timeout_seconds: int
-    telegram_api_id: int | None
-    telegram_api_hash: str | None
 
     @property
     def production(self) -> bool:
@@ -276,25 +272,6 @@ def _build_settings() -> Settings:
     if production and not cookie_secure:
         raise RuntimeError("TSO_COOKIE_SECURE cannot be disabled in production.")
 
-    telegram_api_id_raw = os.getenv("TSO_TELEGRAM_API_ID")
-    telegram_api_hash = os.getenv("TSO_TELEGRAM_API_HASH")
-    telegram_api_id: int | None = None
-    if telegram_api_id_raw:
-        try:
-            telegram_api_id = int(telegram_api_id_raw)
-        except ValueError as exc:
-            raise RuntimeError("TSO_TELEGRAM_API_ID must be an integer.") from exc
-        if telegram_api_id <= 0:
-            raise RuntimeError("TSO_TELEGRAM_API_ID must be positive.")
-    if bool(telegram_api_id) != bool(telegram_api_hash):
-        raise RuntimeError(
-            "TSO_TELEGRAM_API_ID and TSO_TELEGRAM_API_HASH must be configured together."
-        )
-    if production and telegram_api_id_raw:
-        _reject_production_placeholder("TSO_TELEGRAM_API_ID", telegram_api_id_raw)
-    if production and telegram_api_hash:
-        _reject_production_placeholder("TSO_TELEGRAM_API_HASH", telegram_api_hash)
-
     absolute_seconds = _read_positive_int(
         "TSO_SESSION_ABSOLUTE_SECONDS", default=30 * 24 * 60 * 60
     )
@@ -342,8 +319,6 @@ def _build_settings() -> Settings:
             "TSO_TELEGRAM_DISCONNECT_TIMEOUT_SECONDS",
             default=5,
         ),
-        telegram_api_id=telegram_api_id,
-        telegram_api_hash=telegram_api_hash.strip() if telegram_api_hash else None,
     )
 
 

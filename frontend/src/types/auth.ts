@@ -1,4 +1,6 @@
 export type ConnectTelegramPayload = {
+  apiId: number;
+  apiHash: string;
   phone: string;
 };
 

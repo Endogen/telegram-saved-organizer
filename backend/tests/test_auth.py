@@ -20,6 +20,9 @@ from app.auth.router import router
 from app.auth.service import TelegramAuthService
 from app.security import SecretDecryptionError
 
+API_ID = 123456
+API_HASH = "0123456789abcdef0123456789abcdef"
+
 
 class _FakeSession:
     def __init__(self, connection: object | None) -> None:
@@ -87,6 +90,8 @@ def _connection(**overrides: Any) -> SimpleNamespace:
     values = {
         "user_id": "user-a",
         "telegram_user_id": None,
+        "api_id_encrypted": None,
+        "api_hash_encrypted": None,
         "phone_encrypted": None,
         "session_encrypted": None,
         "state": "disconnected",
@@ -111,6 +116,22 @@ def test_verify_schema_accepts_exactly_one_ephemeral_secret() -> None:
         TelegramVerifyRequest(code="123", password="secret")
 
 
+def test_connection_schema_requires_each_user_to_supply_api_credentials() -> None:
+    payload = TelegramConnectionRequest(
+        api_id=123456,
+        api_hash="0123456789abcdef0123456789abcdef",
+        phone="  +491****6789  ",
+    )
+
+    assert payload.api_id == 123456
+    assert payload.api_hash == "0123456789abcdef0123456789abcdef"
+    assert payload.phone == "+491****6789"
+    with pytest.raises(ValidationError):
+        TelegramConnectionRequest(phone="+491****6789")
+    with pytest.raises(ValidationError):
+        TelegramConnectionRequest(api_id=0, api_hash="short", phone="+491****6789")
+
+
 def test_connection_router_exposes_the_user_scoped_contract() -> None:
     operations = {
         (route.path, next(iter(route.methods or set()))) for route in router.routes
@@ -126,8 +147,12 @@ async def test_connect_maps_phone_mismatch_to_conflict(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class MismatchService:
-        async def start(self, *, phone: str) -> TelegramConnectionState:
-            assert phone == "+49123456789"
+        async def start(
+            self, *, api_id: int, api_hash: str, phone: str
+        ) -> TelegramConnectionState:
+            assert api_id == 123456
+            assert api_hash == "0123456789abcdef0123456789abcdef"
+            assert phone == "+491****6789"
             raise service_module.TelegramPhoneMismatchError("different phone")
 
     async def skip_rate_limits(*_: Any, **__: Any) -> None:
@@ -150,7 +175,11 @@ async def test_connect_maps_phone_mismatch_to_conflict(
 
     with pytest.raises(HTTPException) as rejected:
         await router_module.connect_telegram(
-            TelegramConnectionRequest(phone="+49123456789"),
+            TelegramConnectionRequest(
+                api_id=123456,
+                api_hash="0123456789abcdef0123456789abcdef",
+                phone="+491****6789",
+            ),
             request,
             SimpleNamespace(id="user-a"),
             object(),  # type: ignore[arg-type]
@@ -167,12 +196,18 @@ async def test_status_maps_persisted_pending_state_without_network(
     monkeypatch.setattr(
         service_module,
         "decrypt_secret",
-        lambda value, *, context: "session",
+        lambda value, *, context: "123456" if context.endswith(":api_id") else API_HASH
+        if context.endswith(":api_hash")
+        else "session",
     )
     session = _FakeSession(
         _connection(
             state="pending",
+            api_id_encrypted="api-id-cipher",
+            api_hash_encrypted="api-hash-cipher",
+            phone_encrypted="phone-cipher",
             session_encrypted="cipher",
+            pending_phone_code_hash_encrypted="phone-code-hash-cipher",
             pending_expires_at=datetime.now(tz=UTC) + timedelta(minutes=5),
             password_required=True,
         )
@@ -244,6 +279,8 @@ async def test_connection_response_omits_identity_when_phone_cannot_be_opened(
 async def test_status_crypto_erases_an_expired_challenge() -> None:
     connection = _connection(
         state="pending",
+        api_id_encrypted="api-id-cipher",
+        api_hash_encrypted="api-hash-cipher",
         phone_encrypted="phone-cipher",
         session_encrypted="session-cipher",
         pending_phone_code_hash_encrypted="hash-cipher",
@@ -271,6 +308,8 @@ async def test_status_invalidates_corrupt_connection_ciphertext(
     connection = _connection(
         state="connected",
         telegram_user_id=123,
+        api_id_encrypted="api-id-cipher",
+        api_hash_encrypted="api-hash-cipher",
         phone_encrypted="phone-cipher",
         session_encrypted="corrupt-session",
         generation=4,
@@ -300,6 +339,109 @@ async def test_status_invalidates_corrupt_connection_ciphertext(
 
 
 @pytest.mark.asyncio
+async def test_status_crypto_erases_connection_with_missing_api_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _connection(
+        state="connected",
+        telegram_user_id=123,
+        phone_encrypted="phone-cipher",
+        session_encrypted="session-cipher",
+        generation=8,
+    )
+    session = _FakeSession(connection)
+    monkeypatch.setattr(
+        service_module,
+        "decrypt_secret",
+        lambda value, *, context: "valid-session",
+    )
+
+    state = await TelegramAuthService(session=session, user_id="user-a").status()  # type: ignore[arg-type]
+
+    assert state is TelegramConnectionState.DISCONNECTED
+    assert connection.state == "error"
+    assert connection.telegram_user_id is None
+    assert connection.api_id_encrypted is None
+    assert connection.api_hash_encrypted is None
+    assert connection.phone_encrypted is None
+    assert connection.session_encrypted is None
+    assert connection.generation == 9
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("persisted_state", ["disconnected", "error"])
+async def test_status_crypto_erases_authorization_material_in_non_active_states(
+    persisted_state: str,
+) -> None:
+    connection = _connection(
+        state=persisted_state,
+        telegram_user_id=123,
+        api_id_encrypted="api-id-cipher",
+        api_hash_encrypted="api-hash-cipher",
+        phone_encrypted="phone-cipher",
+        session_encrypted="session-cipher",
+        generation=10,
+    )
+    session = _FakeSession(connection)
+
+    state = await TelegramAuthService(session=session, user_id="user-a").status()  # type: ignore[arg-type]
+
+    assert state is TelegramConnectionState.DISCONNECTED
+    assert connection.state == "error"
+    assert connection.telegram_user_id is None
+    assert connection.session_encrypted is None
+    assert connection.api_id_encrypted is None
+    assert connection.api_hash_encrypted is None
+    assert connection.generation == 11
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_status_crypto_erases_incomplete_pending_challenge() -> None:
+    connection = _connection(
+        state="pending",
+        api_id_encrypted="api-id-cipher",
+        api_hash_encrypted="api-hash-cipher",
+        phone_encrypted="phone-cipher",
+        session_encrypted="session-cipher",
+        pending_expires_at=datetime.now(tz=UTC) + timedelta(minutes=5),
+        generation=12,
+    )
+    session = _FakeSession(connection)
+
+    state = await TelegramAuthService(session=session, user_id="user-a").status()  # type: ignore[arg-type]
+
+    assert state is TelegramConnectionState.DISCONNECTED
+    assert connection.state == "error"
+    assert connection.session_encrypted is None
+    assert connection.pending_expires_at is None
+    assert connection.generation == 13
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_status_crypto_erases_connected_state_without_telegram_identity() -> None:
+    connection = _connection(
+        state="connected",
+        api_id_encrypted="api-id-cipher",
+        api_hash_encrypted="api-hash-cipher",
+        phone_encrypted="phone-cipher",
+        session_encrypted="session-cipher",
+        generation=14,
+    )
+    session = _FakeSession(connection)
+
+    state = await TelegramAuthService(session=session, user_id="user-a").status()  # type: ignore[arg-type]
+
+    assert state is TelegramConnectionState.DISCONNECTED
+    assert connection.state == "error"
+    assert connection.session_encrypted is None
+    assert connection.generation == 15
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_start_persists_only_encrypted_challenge_material(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -319,7 +461,7 @@ async def test_start_persists_only_encrypted_challenge_material(
     )
 
     state = await TelegramAuthService(session=session, user_id="user-a").start(
-        phone=" +49123 "
+        api_id=API_ID, api_hash=API_HASH, phone=" +49123 "
     )  # type: ignore[arg-type]
 
     assert state is TelegramConnectionState.CODE_REQUIRED
@@ -330,6 +472,49 @@ async def test_start_persists_only_encrypted_challenge_material(
     assert connection.generation == 1
     assert "+49123" not in vars(connection).values()
     assert "code-hash" not in vars(connection).values()
+
+
+@pytest.mark.asyncio
+async def test_start_never_reuses_authorization_material_from_disconnected_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _connection(
+        state="disconnected",
+        telegram_user_id=999,
+        api_id_encrypted="old-api-id",
+        api_hash_encrypted="old-api-hash",
+        phone_encrypted="old-phone",
+        session_encrypted="old-session",
+        generation=3,
+    )
+    session = _FakeSession(connection)
+    client = _FakeClient(authorized=False)
+    received_session: list[str | None] = []
+
+    @asynccontextmanager
+    async def fake_client(**kwargs: Any):
+        received_session.append(kwargs["session_string"])
+        yield client
+
+    monkeypatch.setattr(service_module, "short_lived_client", fake_client)
+    monkeypatch.setattr(
+        service_module,
+        "encrypt_secret",
+        lambda value, *, context: f"cipher:{context}:{value}",
+    )
+
+    state = await TelegramAuthService(session=session, user_id="user-a").start(  # type: ignore[arg-type]
+        api_id=API_ID,
+        api_hash=API_HASH,
+        phone="+49123",
+    )
+
+    assert state is TelegramConnectionState.CODE_REQUIRED
+    assert received_session == [None]
+    assert connection.telegram_user_id is None
+    assert connection.state == "pending"
+    assert connection.generation == 5
+    assert session.commit_calls == 2
 
 
 @pytest.mark.asyncio
@@ -358,7 +543,7 @@ async def test_starting_new_challenge_clears_old_principal_and_generation(
     )
 
     state = await TelegramAuthService(session=session, user_id="user-a").start(  # type: ignore[arg-type]
-        phone="+49123"
+        api_id=API_ID, api_hash=API_HASH, phone="+49123"
     )
 
     assert state is TelegramConnectionState.CODE_REQUIRED
@@ -396,7 +581,7 @@ async def test_start_rejects_different_phone_while_still_authorized(
 
     with pytest.raises(service_module.TelegramPhoneMismatchError):
         await TelegramAuthService(session=session, user_id="user-a").start(  # type: ignore[arg-type]
-            phone="+492222222"
+            api_id=API_ID, api_hash=API_HASH, phone="+492****2222"
         )
 
     assert connection.state == "connected"
@@ -433,7 +618,7 @@ async def test_start_reconnects_same_phone_with_equivalent_format(
     )
 
     state = await TelegramAuthService(session=session, user_id="user-a").start(  # type: ignore[arg-type]
-        phone="0049 123 456 789"
+        api_id=API_ID, api_hash=API_HASH, phone="0049 123 456 789"
     )
 
     assert state is TelegramConnectionState.CONNECTED
@@ -447,6 +632,8 @@ async def test_verify_uses_ephemeral_code_and_clears_challenge(
 ) -> None:
     connection = _connection(
         state="pending",
+        api_id_encrypted="api-id-cipher",
+        api_hash_encrypted="api-hash-cipher",
         phone_encrypted="phone-cipher",
         session_encrypted="session-cipher",
         pending_phone_code_hash_encrypted="hash-cipher",
@@ -461,6 +648,8 @@ async def test_verify_uses_ephemeral_code_and_clears_challenge(
 
     plaintext = {
         "phone-cipher": "+49123",
+        "api-id-cipher": str(API_ID),
+        "api-hash-cipher": API_HASH,
         "session-cipher": "session-string",
         "hash-cipher": "phone-code-hash",
     }

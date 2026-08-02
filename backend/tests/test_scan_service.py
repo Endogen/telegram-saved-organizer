@@ -26,7 +26,7 @@ from app.models import (
     TelegramConnection,
     User,
 )
-from app.security import decrypt_secret, encrypt_secret
+from app.security import SecretDecryptionError, decrypt_secret, encrypt_secret
 from app.telegram import service as service_module
 from app.telegram.client import TelegramClientNotConnectedError
 from app.telegram.scanner import (
@@ -59,6 +59,16 @@ from app.telegram.service import (
 
 TELEGRAM_USER_ID = 101
 CONNECTION_GENERATION = 3
+TEST_API_HASH = "0123456789abcdef0123456789abcdef"
+
+
+@pytest.fixture(autouse=True)
+def _stub_user_api_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        service_module,
+        "decrypt_telegram_api_credentials",
+        lambda **_: (123456, TEST_API_HASH),
+    )
 
 
 class _FakeSession:
@@ -164,7 +174,9 @@ async def test_start_rejects_existing_active_job_for_same_user() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_rejects_reclaimable_job_with_different_replacement_intent() -> None:
+async def test_start_rejects_reclaimable_job_with_different_replacement_intent() -> (
+    None
+):
     active = SimpleNamespace(
         state="pending",
         lease_expires_at=None,
@@ -738,6 +750,56 @@ async def test_reclaimed_scan_passes_durable_cursor_and_remaining_quota_to_scann
         assert captured["start_offset_id"] == 777
         assert captured["max_messages"] == 375
         assert captured["max_pages"] == 4
+
+
+@pytest.mark.asyncio
+async def test_worker_crypto_erases_corrupt_user_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _scan_database(tmp_path=tmp_path, monkeypatch=monkeypatch) as sessions:
+        await _seed_user(sessions)
+        async with sessions() as session:
+            session.add_all(
+                [
+                    TelegramConnection(
+                        user_id="user-a",
+                        state="connected",
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        generation=CONNECTION_GENERATION,
+                        api_id_encrypted="corrupt-api-id",
+                        api_hash_encrypted="corrupt-api-hash",
+                        phone_encrypted="corrupt-phone",
+                        session_encrypted="corrupt-session",
+                    ),
+                    ScanJob(
+                        id="job-a",
+                        user_id="user-a",
+                        state="running",
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        connection_generation=CONNECTION_GENERATION,
+                        lease_owner="worker-a",
+                        lease_expires_at=_future_lease(),
+                    ),
+                ]
+            )
+            await session.commit()
+
+        with pytest.raises(SecretDecryptionError):
+            await _execute_claimed_scan(lease=_lease(owner="worker-a"))
+
+        async with sessions() as session:
+            connection = await session.scalar(
+                select(TelegramConnection).where(TelegramConnection.user_id == "user-a")
+            )
+            assert connection is not None
+            assert connection.state == "error"
+            assert connection.telegram_user_id is None
+            assert connection.generation == CONNECTION_GENERATION + 1
+            assert connection.api_id_encrypted is None
+            assert connection.api_hash_encrypted is None
+            assert connection.phone_encrypted is None
+            assert connection.session_encrypted is None
 
 
 @pytest.mark.asyncio

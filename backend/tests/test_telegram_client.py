@@ -21,6 +21,17 @@ from app.telegram.client import (
     short_lived_client,
 )
 
+TEST_API_HASH = "0123456789abcdef0123456789abcdef"
+
+
+@pytest.fixture(autouse=True)
+def _stub_user_api_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        client_module,
+        "decrypt_telegram_api_credentials",
+        lambda **_: (123456, TEST_API_HASH),
+    )
+
 
 class _FakeStringSession:
     def save(self) -> str:
@@ -86,19 +97,18 @@ async def test_short_lived_client_always_disconnects(
         created.append(_FakeClient(session, api_id, api_hash))
         return created[-1]
 
-    monkeypatch.setattr(
-        client_module, "_telegram_api_credentials", lambda: (123, "server-hash")
-    )
-
     with pytest.raises(RuntimeError, match="boom"):
         async with short_lived_client(
-            session_string=None, client_factory=factory
+            session_string=None,
+            api_id=123,
+            api_hash="user-hash",
+            client_factory=factory,
         ) as client:
             assert client.connected is True
             raise RuntimeError("boom")
 
     assert created[0].disconnected is True
-    assert created[0].credentials == (123, "server-hash")
+    assert created[0].credentials == (123, "user-hash")
 
 
 @pytest.mark.asyncio
@@ -119,13 +129,11 @@ async def test_short_lived_client_bounds_connect_time(
         created.append(_HangingConnectClient(session, api_id, api_hash))
         return created[-1]
 
-    monkeypatch.setattr(
-        client_module, "_telegram_api_credentials", lambda: (123, "hash")
-    )
-
     with pytest.raises(TelegramClientTimeoutError, match="connection timeout"):
         async with short_lived_client(
             session_string=None,
+            api_id=123,
+            api_hash="0123456789abcdef0123456789abcdef",
             client_factory=factory,
             connect_timeout_seconds=0.01,
             disconnect_timeout_seconds=0.01,
@@ -154,13 +162,11 @@ async def test_short_lived_client_bounds_disconnect_time_without_masking_success
     ) -> _HangingDisconnectClient:
         return _HangingDisconnectClient(session, api_id, api_hash)
 
-    monkeypatch.setattr(
-        client_module, "_telegram_api_credentials", lambda: (123, "hash")
-    )
-
     with caplog.at_level(logging.WARNING):
         async with short_lived_client(
             session_string=None,
+            api_id=123,
+            api_hash="0123456789abcdef0123456789abcdef",
             client_factory=factory,
             connect_timeout_seconds=0.01,
             disconnect_timeout_seconds=0.01,

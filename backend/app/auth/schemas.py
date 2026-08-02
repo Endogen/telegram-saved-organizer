@@ -15,9 +15,16 @@ class TelegramConnectionState(StrEnum):
 
 
 class TelegramConnectionRequest(BaseModel):
-    """Start Telegram authentication using the server-owned API credentials."""
+    """Start Telegram authentication using this user's API credentials."""
 
+    api_id: int = Field(gt=0, le=2_147_483_647)
+    api_hash: str = Field(min_length=32, max_length=32, pattern=r"^[0-9a-fA-F]{32}$")
     phone: str = Field(min_length=3, max_length=64)
+
+    @field_validator("api_hash", mode="before")
+    @classmethod
+    def normalize_api_hash(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
     @field_validator("phone")
     @classmethod

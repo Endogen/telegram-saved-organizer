@@ -489,7 +489,11 @@ async def test_telegram_quotas_run_before_code_send_and_verification(
             self.start_calls = 0
             self.verify_calls = 0
 
-        async def start(self, *, phone: str) -> TelegramConnectionState:
+        async def start(
+            self, *, api_id: int, api_hash: str, phone: str
+        ) -> TelegramConnectionState:
+            assert api_id == 123456
+            assert api_hash == "0123456789abcdef0123456789abcdef"
             self.start_calls += 1
             return TelegramConnectionState.CODE_REQUIRED
 
@@ -528,10 +532,20 @@ async def test_telegram_quotas_run_before_code_send_and_verification(
             base_url="http://testserver",
         ) as client:
             first_send = await client.post(
-                "/api/telegram/connection", json={"phone": "+49 (123) 456-789"}
+                "/api/telegram/connection",
+                json={
+                    "api_id": 123456,
+                    "api_hash": "0123456789abcdef0123456789abcdef",
+                    "phone": "+49 (123) 456-789",
+                },
             )
             second_send = await client.post(
-                "/api/telegram/connection", json={"phone": "0049 123 456 789"}
+                "/api/telegram/connection",
+                json={
+                    "api_id": 123456,
+                    "api_hash": "0123456789abcdef0123456789abcdef",
+                    "phone": "0049 123 456 789",
+                },
             )
             first_verify = await client.post(
                 "/api/telegram/connection/verify", json={"code": "12345"}

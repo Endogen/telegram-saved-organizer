@@ -1,9 +1,13 @@
 import { expect, test } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 
 import { registerThroughUi, TEST_PASSWORD } from "./support/workflows";
 
 test("a user can register, sign out, sign back in, and navigate by keyboard on mobile", async ({ page }) => {
-  const account = { displayName: "Ada Browser", email: "auth-e2e@example.com" };
+  const account = {
+    displayName: "Ada Browser",
+    email: `auth-e2e-${randomUUID()}@example.com`,
+  };
   await registerThroughUi(page, account);
 
   const accountMenuTrigger = page.getByRole("button", { name: `Open account menu for ${account.displayName}` });

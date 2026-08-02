@@ -21,8 +21,6 @@ const testEnvironment = {
   TSO_COOKIE_SECURE: "false",
   TSO_ALLOW_REGISTRATION: "true",
   TSO_PROCESS_SCANS_IN_API: "false",
-  TSO_TELEGRAM_API_ID: "",
-  TSO_TELEGRAM_API_HASH: "",
 };
 
 function run(command, args) {

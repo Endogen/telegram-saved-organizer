@@ -98,6 +98,146 @@ def test_fresh_alembic_upgrade_creates_current_multi_user_schema(
     } <= scan_job_columns
 
 
+
+def test_per_user_credential_migration_erases_sessions_in_both_directions(
+    tmp_path: Path,
+) -> None:
+    backend_root = Path(__file__).resolve().parents[1]
+    database_file = tmp_path / "credential-migration.db"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "TSO_ENVIRONMENT": "test",
+            "TSO_DATA_DIR": str(tmp_path / "data"),
+            "TSO_DATABASE_URL": f"sqlite+aiosqlite:///{database_file}",
+            "TSO_MASTER_KEY": "migration-test-master-key-with-more-than-43-characters",
+        }
+    )
+
+    def upgrade(revision: str) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", revision],
+            cwd=backend_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+    upgrade("f1a2b3c4d5e6")
+    with sqlite3.connect(database_file) as connection:
+        connection.execute(
+            """
+            INSERT INTO users (
+                id, email, normalized_email, display_name, password_hash,
+                is_active, failed_login_attempts
+            ) VALUES ('user-a', 'a@example.test', 'a@example.test', 'A', 'hash', 1, 0)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO telegram_connections (
+                id, user_id, telegram_user_id, phone_encrypted, session_encrypted,
+                state, pending_phone_code_hash_encrypted, password_required, generation
+            ) VALUES (
+                'connection-a', 'user-a', 101, 'phone', 'session',
+                'connected', 'challenge', 1, 4
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO scan_jobs (
+                id, user_id, state, stop_requested, messages_scanned,
+                pages_scanned, page_size, telegram_user_id, connection_generation
+            ) VALUES ('job-a', 'user-a', 'running', 0, 0, 0, 100, 101, 4)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO categories (
+                id, user_id, name, normalized_name, slug, system_key,
+                icon, color, position, is_default
+            ) VALUES (1, 'user-a', 'Other', 'other', 'other', 'other',
+                      'archive', '#64748B', 1, 1)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO messages (
+                user_id, telegram_id, content, date, category_id, raw_data,
+                last_seen_replacement_job_id
+            ) VALUES ('user-a', 501, 'staged', CURRENT_TIMESTAMP, 1, '{}', 'job-a')
+            """
+        )
+
+    upgrade("head")
+    with sqlite3.connect(database_file) as connection:
+        telegram = connection.execute(
+            """
+            SELECT state, telegram_user_id, phone_encrypted, session_encrypted,
+                   pending_phone_code_hash_encrypted, password_required, generation
+            FROM telegram_connections WHERE id = 'connection-a'
+            """
+        ).fetchone()
+        scan = connection.execute(
+            "SELECT state, stop_requested, lease_owner FROM scan_jobs WHERE id = 'job-a'"
+        ).fetchone()
+        message_marker = connection.execute(
+            "SELECT last_seen_replacement_job_id FROM messages WHERE telegram_id = 501"
+        ).fetchone()
+        assert telegram == ("disconnected", None, None, None, None, 0, 5)
+        assert scan == ("cancelled", 1, None)
+        assert message_marker == (None,)
+        connection.execute(
+            """
+            UPDATE telegram_connections
+            SET state = 'connected', telegram_user_id = 101,
+                api_id_encrypted = 'api-id', api_hash_encrypted = 'api-hash',
+                phone_encrypted = 'phone', session_encrypted = 'session',
+                pending_phone_code_hash_encrypted = 'challenge', password_required = 1
+            WHERE id = 'connection-a'
+            """
+        )
+        connection.execute(
+            "UPDATE scan_jobs SET state = 'running', stop_requested = 0 WHERE id = 'job-a'"
+        )
+        connection.execute(
+            "UPDATE messages SET last_seen_replacement_job_id = 'job-a' WHERE telegram_id = 501"
+        )
+
+    downgrade = subprocess.run(
+        [sys.executable, "-m", "alembic", "-c", "alembic.ini", "downgrade", "f1a2b3c4d5e6"],
+        cwd=backend_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert downgrade.returncode == 0, f"{downgrade.stdout}\n{downgrade.stderr}"
+    with sqlite3.connect(database_file) as connection:
+        telegram = connection.execute(
+            """
+            SELECT state, telegram_user_id, phone_encrypted, session_encrypted,
+                   pending_phone_code_hash_encrypted, password_required, generation
+            FROM telegram_connections WHERE id = 'connection-a'
+            """
+        ).fetchone()
+        scan = connection.execute(
+            "SELECT state, stop_requested, lease_owner FROM scan_jobs WHERE id = 'job-a'"
+        ).fetchone()
+        message_marker = connection.execute(
+            "SELECT last_seen_replacement_job_id FROM messages WHERE telegram_id = 501"
+        ).fetchone()
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(telegram_connections)")}
+    assert telegram == ("disconnected", None, None, None, None, 0, 6)
+    assert scan == ("cancelled", 1, None)
+    assert message_marker == (None,)
+    assert "api_id_encrypted" not in columns
+    assert "api_hash_encrypted" not in columns
+
+
 def test_alembic_refuses_unowned_legacy_single_user_database(tmp_path: Path) -> None:
     backend_root = Path(__file__).resolve().parents[1]
     database_file = tmp_path / "legacy.db"

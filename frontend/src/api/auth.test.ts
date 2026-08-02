@@ -18,6 +18,11 @@ function createResponse(payload: unknown, ok = true): Response {
 const codeRequired: TelegramConnection = { state: "code_required" };
 const connected: TelegramConnection = { state: "connected" };
 const disconnected: TelegramConnection = { state: "disconnected" };
+const connectionPayload = {
+  apiId: 123456,
+  apiHash: "0123456789abcdef0123456789abcdef",
+  phone: "+155****1234",
+};
 
 describe("Telegram connection API client", () => {
   const fetchMock = vi.fn();
@@ -40,16 +45,20 @@ describe("Telegram connection API client", () => {
     expect(result).toEqual(codeRequired);
   });
 
-  it("starts a connection with only the phone number", async () => {
+  it("starts a connection with the user's API credentials and phone number", async () => {
     fetchMock.mockResolvedValue(createResponse(codeRequired));
 
-    const result = await connectTelegram({ phone: "+15550001234" });
+    const result = await connectTelegram(connectionPayload);
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/telegram/connection",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ phone: "+15550001234" }),
+        body: JSON.stringify({
+          api_id: connectionPayload.apiId,
+          api_hash: connectionPayload.apiHash,
+          phone: connectionPayload.phone,
+        }),
       }),
     );
     expect(result).toEqual(codeRequired);
@@ -100,7 +109,7 @@ describe("Telegram connection API client", () => {
   it("surfaces API details and uses the connection fallback", async () => {
     fetchMock.mockResolvedValueOnce(createResponse({ detail: "Invalid phone number." }, false));
 
-    await expect(connectTelegram({ phone: "x" })).rejects.toThrow("Invalid phone number.");
+    await expect(connectTelegram({ ...connectionPayload, phone: "x" })).rejects.toThrow("Invalid phone number.");
 
     fetchMock.mockResolvedValueOnce(createResponse({}, false));
 

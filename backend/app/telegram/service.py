@@ -20,7 +20,11 @@ from app.database import SessionLocal
 from app.models import Category, Message, MessageTag, ScanJob, TelegramConnection, User
 from app.security import SecretDecryptionError, decrypt_secret, encrypt_secret
 from app.telegram.categorizer import categorize_scanned_message
-from app.telegram.client import TelegramClientNotConnectedError, short_lived_client
+from app.telegram.client import (
+    TelegramClientNotConnectedError,
+    decrypt_telegram_api_credentials,
+    short_lived_client,
+)
 from app.telegram.scanner import (
     MESSAGE_LIMIT_REACHED,
     RUNTIME_LIMIT_REACHED,
@@ -225,10 +229,16 @@ class TelegramScanService:
                 connection.session_encrypted,
                 context=f"telegram:{self._user_id}:session",
             )
+            api_id, api_hash = decrypt_telegram_api_credentials(
+                connection=connection,
+                user_id=self._user_id,
+            )
         except SecretDecryptionError as exc:
             connection.state = "error"
             connection.telegram_user_id = None
             connection.generation += 1
+            connection.api_id_encrypted = None
+            connection.api_hash_encrypted = None
             connection.phone_encrypted = None
             connection.session_encrypted = None
             connection.password_required = False
@@ -238,7 +248,11 @@ class TelegramScanService:
             raise TelegramClientNotConnectedError(
                 "The saved Telegram authorization could not be opened."
             ) from exc
-        async with short_lived_client(session_string=session_string) as client:
+        async with short_lived_client(
+            session_string=session_string,
+            api_id=api_id,
+            api_hash=api_hash,
+        ) as client:
             authorized = await client.is_user_authorized()
             identity = await client.get_me() if authorized else None
             connection.session_encrypted = encrypt_secret(
@@ -249,6 +263,8 @@ class TelegramScanService:
             connection.state = "disconnected"
             connection.telegram_user_id = None
             connection.generation += 1
+            connection.api_id_encrypted = None
+            connection.api_hash_encrypted = None
             connection.phone_encrypted = None
             connection.session_encrypted = None
             connection.password_required = False
@@ -265,6 +281,8 @@ class TelegramScanService:
             connection.state = "error"
             connection.telegram_user_id = None
             connection.generation += 1
+            connection.api_id_encrypted = None
+            connection.api_hash_encrypted = None
             connection.phone_encrypted = None
             connection.session_encrypted = None
             await self._session.commit()
@@ -278,6 +296,8 @@ class TelegramScanService:
             connection.telegram_user_id = None
             connection.state = "error"
             connection.generation += 1
+            connection.api_id_encrypted = None
+            connection.api_hash_encrypted = None
             connection.phone_encrypted = None
             connection.session_encrypted = None
             await self._session.commit()
@@ -624,12 +644,29 @@ async def _execute_claimed_scan(*, lease: ScanLease) -> ScanProgress:
                 connection.session_encrypted,
                 context=f"telegram:{lease.user_id}:session",
             )
+            api_id, api_hash = decrypt_telegram_api_credentials(
+                connection=connection,
+                user_id=lease.user_id,
+            )
         except SecretDecryptionError:
             connection.state = "error"
+            connection.telegram_user_id = None
+            connection.generation += 1
+            connection.api_id_encrypted = None
+            connection.api_hash_encrypted = None
+            connection.phone_encrypted = None
+            connection.session_encrypted = None
+            connection.password_required = False
+            connection.pending_phone_code_hash_encrypted = None
+            connection.pending_expires_at = None
             await connection_session.commit()
             raise
 
-    async with short_lived_client(session_string=session_string) as client:
+    async with short_lived_client(
+        session_string=session_string,
+        api_id=api_id,
+        api_hash=api_hash,
+    ) as client:
         if not await client.is_user_authorized():
             await _downgrade_connection(lease=lease)
             raise TelegramClientNotConnectedError(
@@ -1014,6 +1051,8 @@ async def _downgrade_connection(*, lease: ScanLease) -> None:
             connection.state = "disconnected"
             connection.telegram_user_id = None
             connection.generation += 1
+            connection.api_id_encrypted = None
+            connection.api_hash_encrypted = None
             connection.phone_encrypted = None
             connection.session_encrypted = None
             connection.password_required = False

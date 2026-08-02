@@ -15,6 +15,9 @@ from app.database import _configure_sqlite_connection
 from app.models import Base, TelegramConnection, User
 from app.security import SecretDecryptionError, decrypt_secret
 
+API_HASH_ONE = "11111111111111111111111111111111"
+API_HASH_TWO = "22222222222222222222222222222222"
+
 
 class FakeTelegramSession:
     def __init__(self, client: FakeTelegramClient) -> None:
@@ -64,13 +67,16 @@ def build_user(*, user_id: str, email: str) -> User:
 
 
 @pytest.mark.asyncio
-async def test_persisted_telegram_challenges_are_isolated_by_user(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_persisted_telegram_challenges_are_isolated_by_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[dict[str, Any]] = []
 
     @asynccontextmanager
     async def fake_short_lived_client(
-        *, session_string: str | None
+        *, session_string: str | None, api_id: int, api_hash: str
     ) -> AsyncIterator[FakeTelegramClient]:
+        calls.append({"operation": "client", "api_id": api_id, "api_hash": api_hash})
         yield FakeTelegramClient(session_string, calls)
 
     monkeypatch.setattr("app.auth.service.short_lived_client", fake_short_lived_client)
@@ -94,10 +100,22 @@ async def test_persisted_telegram_challenges_are_isolated_by_user(monkeypatch: p
             await session.commit()
 
             first_service = TelegramAuthService(session=session, user_id=first_user.id)
-            second_service = TelegramAuthService(session=session, user_id=second_user.id)
+            second_service = TelegramAuthService(
+                session=session, user_id=second_user.id
+            )
 
-            assert await first_service.start(phone="+491111111") == TelegramConnectionState.CODE_REQUIRED
-            assert await second_service.start(phone="+492222222") == TelegramConnectionState.CODE_REQUIRED
+            assert (
+                await first_service.start(
+                    api_id=111111, api_hash=API_HASH_ONE, phone="+491111111"
+                )
+                == TelegramConnectionState.CODE_REQUIRED
+            )
+            assert (
+                await second_service.start(
+                    api_id=222222, api_hash=API_HASH_TWO, phone="+492222222"
+                )
+                == TelegramConnectionState.CODE_REQUIRED
+            )
 
             rows = list(
                 await session.scalars(
@@ -106,7 +124,24 @@ async def test_persisted_telegram_challenges_are_isolated_by_user(monkeypatch: p
             )
             assert [row.user_id for row in rows] == [first_user.id, second_user.id]
             assert rows[0].session_encrypted != rows[1].session_encrypted
-            assert rows[0].pending_phone_code_hash_encrypted != rows[1].pending_phone_code_hash_encrypted
+            assert rows[0].api_id_encrypted != rows[1].api_id_encrypted
+            assert rows[0].api_hash_encrypted != rows[1].api_hash_encrypted
+            assert (
+                decrypt_secret(
+                    rows[0].api_hash_encrypted or "",
+                    context=f"telegram:{first_user.id}:api_hash",
+                )
+                == API_HASH_ONE
+            )
+            with pytest.raises(SecretDecryptionError):
+                decrypt_secret(
+                    rows[1].api_hash_encrypted or "",
+                    context=f"telegram:{first_user.id}:api_hash",
+                )
+            assert (
+                rows[0].pending_phone_code_hash_encrypted
+                != rows[1].pending_phone_code_hash_encrypted
+            )
             assert (
                 decrypt_secret(
                     rows[0].pending_phone_code_hash_encrypted or "",
@@ -124,7 +159,9 @@ async def test_persisted_telegram_challenges_are_isolated_by_user(monkeypatch: p
                 await first_service.verify(code="11111", password=None)
                 == TelegramConnectionState.CONNECTED
             )
-            assert await second_service.status() == TelegramConnectionState.CODE_REQUIRED
+            assert (
+                await second_service.status() == TelegramConnectionState.CODE_REQUIRED
+            )
             assert (
                 await second_service.verify(code="22222", password=None)
                 == TelegramConnectionState.CONNECTED
@@ -157,7 +194,7 @@ async def test_same_telegram_principal_cannot_bind_to_two_application_users(
 
     @asynccontextmanager
     async def fake_short_lived_client(
-        *, session_string: str | None
+        *, session_string: str | None, api_id: int, api_hash: str
     ) -> AsyncIterator[FakeTelegramClient]:
         client = FakeTelegramClient(session_string, calls)
 
@@ -182,12 +219,25 @@ async def test_same_telegram_principal_cannot_bind_to_two_application_users(
             await session.commit()
 
             first_service = TelegramAuthService(session=session, user_id=first_user.id)
-            second_service = TelegramAuthService(session=session, user_id=second_user.id)
-            assert await first_service.start(phone="+49111") is TelegramConnectionState.CODE_REQUIRED
-            assert await first_service.verify(
-                code="11111", password=None
-            ) is TelegramConnectionState.CONNECTED
-            assert await second_service.start(phone="+49222") is TelegramConnectionState.CODE_REQUIRED
+            second_service = TelegramAuthService(
+                session=session, user_id=second_user.id
+            )
+            assert (
+                await first_service.start(
+                    api_id=111111, api_hash=API_HASH_ONE, phone="+49111"
+                )
+                is TelegramConnectionState.CODE_REQUIRED
+            )
+            assert (
+                await first_service.verify(code="11111", password=None)
+                is TelegramConnectionState.CONNECTED
+            )
+            assert (
+                await second_service.start(
+                    api_id=222222, api_hash=API_HASH_TWO, phone="+49222"
+                )
+                is TelegramConnectionState.CODE_REQUIRED
+            )
 
             with pytest.raises(TelegramIdentityConflictError):
                 await second_service.verify(code="22222", password=None)

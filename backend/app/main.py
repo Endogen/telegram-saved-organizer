@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -109,6 +110,26 @@ async def _security_headers(
     return response
 
 
+async def _sanitized_validation_error(
+    _: Request,
+    exception: RequestValidationError,
+) -> JSONResponse:
+    """Return useful field locations without reflecting request values or constraints."""
+
+    errors = [
+        {
+            "type": str(error.get("type", "value_error")),
+            "loc": list(error.get("loc", ())),
+            "msg": "Invalid value.",
+        }
+        for error in exception.errors()
+    ]
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content={"detail": errors},
+    )
+
+
 def _api_router() -> APIRouter:
     router = APIRouter(prefix="/api")
     router.include_router(account_router)
@@ -157,6 +178,7 @@ def create_app(*, check_migrations: bool = True) -> FastAPI:
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
     app.add_middleware(RequestBodyLimitMiddleware, max_body_bytes=MAX_REQUEST_BODY_BYTES)
     app.middleware("http")(_security_headers)
+    app.add_exception_handler(RequestValidationError, _sanitized_validation_error)
     app.include_router(_api_router())
     return app
 

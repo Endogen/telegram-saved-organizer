@@ -85,3 +85,12 @@ def test_user_owns_all_security_and_organizer_records() -> None:
         )
         assert user_foreign_key.target_fullname == "users.id"
         assert user_foreign_key.ondelete == "CASCADE"
+
+
+def test_telegram_api_credentials_are_stored_as_encrypted_user_scoped_fields() -> None:
+    connection_table = TelegramConnection.__table__
+
+    assert connection_table.c.api_id_encrypted.nullable is True
+    assert connection_table.c.api_hash_encrypted.nullable is True
+    assert "api_id" not in connection_table.c
+    assert "api_hash" not in connection_table.c

@@ -15,15 +15,13 @@ A multi-user web application for importing and organizing each account's own Tel
 
 ## Local development
 
-Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/), Node.js 22.22+, npm, and server Telegram API credentials from `my.telegram.org`.
+Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/), Node.js 22.22+, and npm. Each website user supplies their own Telegram application credentials during connection setup.
 
 Start the API:
 
 ```bash
 cd backend
 uv sync --extra dev
-export TSO_TELEGRAM_API_ID=123456
-export TSO_TELEGRAM_API_HASH=your_api_hash
 uv run alembic upgrade head
 uv run uvicorn app.main:app --reload --port 8500
 ```
@@ -56,7 +54,7 @@ The included Compose topology runs PostgreSQL, a one-shot migration service, two
 5. Confirm `https://your-host/api/ready` returns `{"status":"ready"}`. The separate
    `/api/health` endpoint is a process-only liveness check.
 
-The production config requires HTTPS, secure cookies, an explicit public origin, and a master encryption key encoded from exactly 48 random bytes. Keep both the PostgreSQL volume and `TSO_MASTER_KEY` backed up: losing the key makes stored Telegram sessions intentionally unrecoverable. Follow the [backup and restore runbook](docs/backup-and-restore.md) for verified database archives, separate key custody, and safe fresh-database restores. Rotate the Telegram API hash and master key only with a planned credential migration; existing AES-GCM ciphertext is bound to the current key and tenant context.
+The production config requires HTTPS, secure cookies, an explicit public origin, and a master encryption key encoded from exactly 48 random bytes. Keep both the PostgreSQL volume and `TSO_MASTER_KEY` backed up: losing the key makes stored Telegram sessions intentionally unrecoverable. Follow the [backup and restore runbook](docs/backup-and-restore.md) for verified database archives, separate key custody, and safe fresh-database restores. Users rotate their Telegram API credentials by disconnecting and reconnecting. Rotate the master key only with a planned credential migration; existing AES-GCM ciphertext is bound to the current key and tenant context.
 
 Registration can be closed with `TSO_ALLOW_REGISTRATION=false` after the intended accounts are created. The edge config rate-limits sign-in, registration, Telegram verification, and general API traffic. For a horizontally scaled deployment, use the same environment values for every API/worker replica and a shared PostgreSQL database.
 
@@ -75,7 +73,6 @@ This branch introduces a new tenant schema and intentionally refuses to adopt th
 | `TSO_SESSION_ABSOLUTE_SECONDS` | Maximum session lifetime | Defaults to 30 days |
 | `TSO_SESSION_IDLE_SECONDS` | Idle session lifetime | Defaults to 7 days |
 | `TSO_MAX_ACTIVE_SESSIONS` | Maximum concurrently active sessions per account | Defaults to 10 |
-| `TSO_TELEGRAM_API_ID/HASH` | Server-owned Telegram application credentials | Required to connect Telegram |
 | `TSO_PROCESS_SCANS_IN_API` | Runs scan jobs inside the API process | Defaults off in production; use worker |
 | `TSO_HTTP_BIND/TSO_HTTP_PORT` | Address and port exposed by the web container | Defaults to `127.0.0.1:8080` for a same-host TLS proxy |
 | `TSO_SCAN_MAX_MESSAGES` | Per-job message import ceiling, snapshotted at start | Defaults to 10,000 |

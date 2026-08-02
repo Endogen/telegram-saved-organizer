@@ -1,11 +1,12 @@
 import { expect, test } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 
 import { registerThroughUi } from "./support/workflows";
 
 test("category and tag management support complete create, edit, browse, and delete workflows", async ({ page }) => {
   await registerThroughUi(page, {
     displayName: "Organization Tester",
-    email: "organization-e2e@example.com",
+    email: `organization-e2e-${randomUUID()}@example.com`,
   });
 
   await page.goto("/settings/categories");

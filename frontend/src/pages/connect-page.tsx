@@ -221,8 +221,8 @@ export function ConnectPage() {
             Telegram connection
           </h2>
           <p className="mt-2 max-w-2xl text-sm text-[hsl(var(--muted-foreground))] md:text-base">
-            Connect the Telegram account that contains the Saved Messages you want to organize. API credentials are
-            configured securely by the server and are never requested here.
+            Connect the Telegram account that contains the Saved Messages you want to organize. Enter your own
+            Telegram API ID and API hash; they are encrypted for your website account.
           </p>
         </div>
 
@@ -329,8 +329,8 @@ export function ConnectPage() {
                     <div>
                       <h3 className="text-xl font-semibold text-[hsl(var(--foreground))]">Connect your account</h3>
                       <p className="mt-2 text-sm text-[hsl(var(--muted-foreground))]">
-                        Enter your Telegram phone number. You will confirm the connection using a code from Telegram
-                        and, if enabled, your two-step verification password.
+                        Enter your Telegram application credentials and phone number. You will confirm the connection
+                        using a code from Telegram and, if enabled, your two-step verification password.
                       </p>
                     </div>
                     <ConnectForm isSubmitting={operation === "connecting"} error={formError} onSubmit={handleConnect} />

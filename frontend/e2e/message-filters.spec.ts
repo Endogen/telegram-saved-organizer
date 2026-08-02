@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 
 import {
   createCategoryThroughUi,
@@ -9,7 +10,7 @@ import {
 test("message-library controls hydrate from and persist to a shareable URL", async ({ page }) => {
   await registerThroughUi(page, {
     displayName: "Filter Tester",
-    email: "filters-e2e@example.com",
+    email: `filters-e2e-${randomUUID()}@example.com`,
   });
   await createCategoryThroughUi(page, "Research Queue");
   await createTagThroughUi(page, "reference");

@@ -39,6 +39,13 @@ function renderPage() {
   );
 }
 
+function fillConnectionCredentials() {
+  fireEvent.change(screen.getByLabelText("API ID"), { target: { value: "123456" } });
+  fireEvent.change(screen.getByLabelText("API Hash"), {
+    target: { value: "0123456789abcdef0123456789abcdef" },
+  });
+}
+
 describe("ConnectPage", () => {
   beforeEach(() => {
     vi.mocked(fetchTelegramConnection).mockReset().mockResolvedValue(disconnected);
@@ -58,8 +65,9 @@ describe("ConnectPage", () => {
     });
 
     expect(screen.getByLabelText("Phone Number")).toBeInTheDocument();
-    expect(screen.queryByLabelText("API ID")).not.toBeInTheDocument();
-    expect(screen.getByText(/API credentials are configured securely by the server/)).toBeInTheDocument();
+    expect(screen.getByLabelText("API ID")).toBeInTheDocument();
+    expect(screen.getByLabelText("API Hash")).toBeInTheDocument();
+    expect(screen.getByText(/they are encrypted for your website account/)).toBeInTheDocument();
   });
 
   it("resumes a pending code challenge from server state on refresh", async () => {
@@ -97,11 +105,16 @@ describe("ConnectPage", () => {
     renderPage();
 
     const phone = await screen.findByLabelText("Phone Number");
+    fillConnectionCredentials();
     fireEvent.change(phone, { target: { value: "+15550001234" } });
     fireEvent.click(screen.getByRole("button", { name: "Continue with Telegram" }));
 
     await waitFor(() => {
-      expect(connectTelegram).toHaveBeenCalledWith({ phone: "+15550001234" });
+      expect(connectTelegram).toHaveBeenCalledWith({
+        apiId: 123456,
+        apiHash: "0123456789abcdef0123456789abcdef",
+        phone: "+15550001234",
+      });
     });
 
     const code = await screen.findByLabelText("Verification Code");
@@ -119,11 +132,11 @@ describe("ConnectPage", () => {
     renderPage();
 
     const input = await screen.findByLabelText("Verification Code");
-    fireEvent.change(input, { target: { value: "wrong" } });
+    fireEvent.change(input, { target: { value: "00000" } });
     fireEvent.click(screen.getByRole("button", { name: "Verify Code" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Wrong code.");
-    expect(screen.getByLabelText("Verification Code")).toHaveValue("wrong");
+    expect(screen.getByLabelText("Verification Code")).toHaveValue("00000");
     expect(fetchTelegramConnection).toHaveBeenCalledTimes(1);
   });
 
@@ -133,6 +146,7 @@ describe("ConnectPage", () => {
     renderPage();
 
     const phone = await screen.findByLabelText("Phone Number");
+    fillConnectionCredentials();
     fireEvent.change(phone, { target: { value: "+1555" } });
     fireEvent.click(screen.getByRole("button", { name: "Continue with Telegram" }));
 
@@ -152,6 +166,7 @@ describe("ConnectPage", () => {
     renderPage();
 
     const phone = await screen.findByLabelText("Phone Number");
+    fillConnectionCredentials();
     fireEvent.change(phone, { target: { value: "+15550001234" } });
     fireEvent.click(screen.getByRole("button", { name: "Continue with Telegram" }));
 
@@ -168,6 +183,7 @@ describe("ConnectPage", () => {
     renderPage();
 
     const phone = await screen.findByLabelText("Phone Number");
+    fillConnectionCredentials();
     fireEvent.change(phone, { target: { value: "+15550001234" } });
     fireEvent.click(screen.getByRole("button", { name: "Continue with Telegram" }));
 
@@ -184,6 +200,7 @@ describe("ConnectPage", () => {
     renderPage();
 
     const phone = await screen.findByLabelText("Phone Number");
+    fillConnectionCredentials();
     fireEvent.change(phone, { target: { value: "+15550001234" } });
     fireEvent.click(screen.getByRole("button", { name: "Continue with Telegram" }));
 
@@ -263,6 +280,7 @@ describe("ConnectPage", () => {
     renderPage();
 
     const phone = await screen.findByLabelText("Phone Number");
+    fillConnectionCredentials();
     fireEvent.change(phone, { target: { value: "+15550001234" } });
     const submit = screen.getByRole("button", { name: "Continue with Telegram" });
     fireEvent.click(submit);
