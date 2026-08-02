@@ -50,7 +50,7 @@ function buildQueryString(query: MessageListQuery): string {
     params.set("page", `${Math.max(1, Math.trunc(query.page))}`);
   }
   if (typeof query.per_page === "number") {
-    params.set("per_page", `${Math.max(1, Math.trunc(query.per_page))}`);
+    params.set("per_page", `${Math.min(200, Math.max(1, Math.trunc(query.per_page)))}`);
   }
   if (typeof query.sort === "string" && query.sort.length > 0) {
     params.set("sort", query.sort);
@@ -80,6 +80,13 @@ export class TelegramNotConnectedError extends Error {
   }
 }
 
+export class TelegramConnectionChangedError extends Error {
+  constructor() {
+    super("This message belongs to a previous Telegram connection.");
+    this.name = "TelegramConnectionChangedError";
+  }
+}
+
 async function requestMessageJson<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     return await requestJson<T>(`${MESSAGES_BASE_PATH}${path}`, init, {
@@ -88,6 +95,13 @@ async function requestMessageJson<T>(path: string, init?: RequestInit): Promise<
   } catch (error) {
     if (error instanceof ApiRequestError && error.status === 409 && error.detail === "telegram_not_connected") {
       throw new TelegramNotConnectedError();
+    }
+    if (
+      error instanceof ApiRequestError
+      && error.status === 409
+      && error.detail === "telegram_connection_changed"
+    ) {
+      throw new TelegramConnectionChangedError();
     }
     throw error;
   }

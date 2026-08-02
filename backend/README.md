@@ -1,3 +1,3 @@
 # Telegram Saved Messages Organizer Backend
 
-FastAPI backend for scanning and organizing Telegram Saved Messages. See the repository-level README for setup, local API authentication, and verification commands.
+FastAPI backend for the multi-user Telegram Saved Messages Organizer. It owns account sessions, tenant-scoped organizer data, encrypted per-user Telegram connections, durable scan jobs, and Alembic migrations. See the repository-level README for development and public deployment instructions.

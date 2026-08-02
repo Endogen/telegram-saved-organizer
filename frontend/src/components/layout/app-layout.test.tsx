@@ -6,11 +6,33 @@ vi.mock("@/hooks/use-categories", () => ({
   useCategories: vi.fn(),
 }));
 
+vi.mock("@/components/auth/auth-provider", () => ({
+  useAuth: () => ({
+    user: {
+      id: "user-1",
+      email: "ada@example.com",
+      display_name: "Ada Lovelace",
+      created_at: "2026-08-02T12:00:00Z",
+    },
+    logout: vi.fn(),
+  }),
+}));
+
 import { useCategories } from "@/hooks/use-categories";
 import { AppLayout } from "@/components/layout/app-layout";
 
 describe("AppLayout", () => {
   beforeEach(() => {
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(() => false),
+    }));
     vi.mocked(useCategories).mockReturnValue({
       categories: [
         {
@@ -37,7 +59,7 @@ describe("AppLayout", () => {
           <Route element={<AppLayout />}>
             <Route index element={<div>Dashboard Content</div>} />
             <Route path="messages" element={<div>Messages Content</div>} />
-            <Route path="connect" element={<div>Connect Content</div>} />
+            <Route path="settings/telegram" element={<div>Telegram Content</div>} />
           </Route>
         </Routes>
       </MemoryRouter>,
@@ -59,11 +81,11 @@ describe("AppLayout", () => {
     expect(screen.getByText("Messages Content")).toBeInTheDocument();
   });
 
-  it("renders connect route with correct title", () => {
-    renderAppLayout("/connect");
+  it("renders Telegram settings with the correct title", () => {
+    renderAppLayout("/settings/telegram");
 
-    expect(screen.getByRole("heading", { level: 1, name: "Connect Telegram" })).toBeInTheDocument();
-    expect(screen.getByText("Connect Content")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Telegram connection" })).toBeInTheDocument();
+    expect(screen.getByText("Telegram Content")).toBeInTheDocument();
   });
 
   it("renders navigation links", () => {
@@ -71,6 +93,14 @@ describe("AppLayout", () => {
 
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Messages" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Connect" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Telegram" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Account" })).toBeInTheDocument();
+  });
+
+  it("exposes a skip link and updates the document title", () => {
+    renderAppLayout("/messages");
+
+    expect(screen.getByRole("link", { name: "Skip to main content" })).toHaveAttribute("href", "#main-content");
+    expect(document.title).toBe("Messages · Telegram Saved Organizer");
   });
 });

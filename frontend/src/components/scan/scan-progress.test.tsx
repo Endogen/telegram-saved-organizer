@@ -15,29 +15,35 @@ import { fetchScanStatus, startScan, stopScan, subscribeToScanStatus } from "@/a
 import { ScanProgress } from "@/components/scan/scan-progress";
 
 const idleScanStatus: ScanStatus = {
-  is_running: false,
-  is_complete: false,
+  job_id: null,
+  state: "idle",
   stop_requested: false,
   messages_scanned: 0,
   pages_scanned: 0,
   page_size: 100,
+  max_messages: null,
+  max_runtime_seconds: null,
   last_message_id: null,
   started_at: null,
   finished_at: null,
   error: null,
+  completion_reason: null,
 };
 
 const completeScanStatus: ScanStatus = {
-  is_running: false,
-  is_complete: true,
+  job_id: "job-a",
+  state: "completed",
   stop_requested: false,
   messages_scanned: 150,
   pages_scanned: 3,
   page_size: 100,
+  max_messages: 10_000,
+  max_runtime_seconds: 3600,
   last_message_id: 5000,
   started_at: "2026-02-15T10:00:00.000Z",
   finished_at: "2026-02-15T10:05:00.000Z",
   error: null,
+  completion_reason: "source_exhausted",
 };
 
 const errorScanStatus: ScanStatus = {
@@ -52,7 +58,8 @@ describe("ScanProgress", () => {
     vi.mocked(fetchScanStatus).mockResolvedValue(idleScanStatus);
     vi.mocked(startScan).mockResolvedValue({
       ...idleScanStatus,
-      is_running: true,
+      job_id: "job-a",
+      state: "pending",
     });
     vi.mocked(stopScan).mockResolvedValue({
       ...idleScanStatus,
@@ -88,7 +95,21 @@ describe("ScanProgress", () => {
 
     expect(screen.getByText("150")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
-    expect(screen.getByText("Scan finished successfully")).toBeInTheDocument();
+    expect(screen.getByText("All available Saved Messages were imported.")).toBeInTheDocument();
+  });
+
+  it("explains when a server quota completes the scan", async () => {
+    vi.mocked(fetchScanStatus).mockResolvedValue({
+      ...completeScanStatus,
+      messages_scanned: 10_000,
+      completion_reason: "message_limit_reached",
+    });
+
+    render(<ScanProgress />);
+
+    await waitFor(() => {
+      expect(screen.getByText("The server message limit of 10000 was reached.")).toBeInTheDocument();
+    });
   });
 
   it("renders error status", async () => {
@@ -130,7 +151,8 @@ describe("ScanProgress", () => {
   it("renders running state with stop button enabled", async () => {
     vi.mocked(fetchScanStatus).mockResolvedValue({
       ...idleScanStatus,
-      is_running: true,
+      job_id: "job-a",
+      state: "running",
       messages_scanned: 42,
       pages_scanned: 1,
       started_at: "2026-02-15T10:00:00.000Z",
@@ -150,7 +172,8 @@ describe("ScanProgress", () => {
   it("renders stopping state", async () => {
     vi.mocked(fetchScanStatus).mockResolvedValue({
       ...idleScanStatus,
-      is_running: true,
+      job_id: "job-a",
+      state: "stopping",
       stop_requested: true,
       messages_scanned: 80,
       pages_scanned: 2,
@@ -182,7 +205,8 @@ describe("ScanProgress", () => {
   it("stops a scan when stop button is clicked", async () => {
     vi.mocked(fetchScanStatus).mockResolvedValue({
       ...idleScanStatus,
-      is_running: true,
+      job_id: "job-a",
+      state: "running",
       started_at: "2026-02-15T10:00:00.000Z",
     });
 
@@ -220,7 +244,8 @@ describe("ScanProgress", () => {
   it("handles stop scan error", async () => {
     vi.mocked(fetchScanStatus).mockResolvedValue({
       ...idleScanStatus,
-      is_running: true,
+      job_id: "job-a",
+      state: "running",
       started_at: "2026-02-15T10:00:00.000Z",
     });
     vi.mocked(stopScan).mockRejectedValue(new Error("Stop failed"));
@@ -276,7 +301,8 @@ describe("ScanProgress", () => {
     if (onStatusCallback) {
       onStatusCallback({
         ...idleScanStatus,
-        is_running: true,
+        job_id: "job-a",
+        state: "running",
         messages_scanned: 25,
         started_at: "2026-02-15T10:00:00.000Z",
       });

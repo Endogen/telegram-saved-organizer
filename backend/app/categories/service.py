@@ -50,13 +50,18 @@ class CategoryService:
     """CRUD operations for categories."""
 
     session: AsyncSession
+    user_id: str
 
     async def list_categories(self) -> list[CategoryWithCount]:
         """Return categories ordered by position with message counts."""
 
         statement = (
             select(Category, func.count(Message.id))
-            .outerjoin(Message, Message.category_id == Category.id)
+            .outerjoin(
+                Message,
+                (Message.category_id == Category.id) & (Message.user_id == self.user_id),
+            )
+            .where(Category.user_id == self.user_id)
             .group_by(Category.id)
             .order_by(Category.position.asc(), Category.id.asc())
         )
@@ -86,7 +91,9 @@ class CategoryService:
         await self._ensure_slug_available(slug=normalized_slug, exclude_category_id=None)
 
         category = Category(
+            user_id=self.user_id,
             name=normalized_name,
+            normalized_name=normalized_name.casefold(),
             slug=normalized_slug,
             icon=normalized_icon,
             color=normalized_color,
@@ -118,6 +125,7 @@ class CategoryService:
             await self._ensure_name_available(name=normalized_name, exclude_category_id=category_id)
             await self._ensure_slug_available(slug=normalized_slug, exclude_category_id=category_id)
             category.name = normalized_name
+            category.normalized_name = normalized_name.casefold()
             category.slug = normalized_slug
 
         if "icon" in updates:
@@ -138,7 +146,7 @@ class CategoryService:
         category = await self._load_category(category_id=category_id)
         if category is None:
             raise CategoryNotFoundError(f"Category {category_id} was not found.")
-        if category.slug == OTHER_CATEGORY_SLUG:
+        if category.system_key == OTHER_CATEGORY_SLUG:
             raise CategoryProtectedError("Category 'other' cannot be deleted.")
 
         fallback_category = await self._load_fallback_category(excluded_category_id=category.id)
@@ -149,7 +157,10 @@ class CategoryService:
 
         update_result = await self.session.execute(
             update(Message)
-            .where(Message.category_id == category.id)
+            .where(
+                Message.user_id == self.user_id,
+                Message.category_id == category.id,
+            )
             .values(category_id=fallback_category.id)
         )
         moved_message_count = max(int(update_result.rowcount or 0), 0)
@@ -162,17 +173,26 @@ class CategoryService:
         )
 
     async def _load_category(self, *, category_id: int) -> Category | None:
-        return await self.session.get(Category, category_id)
+        return await self.session.scalar(
+            select(Category).where(
+                Category.user_id == self.user_id,
+                Category.id == category_id,
+            )
+        )
 
     async def _load_fallback_category(self, *, excluded_category_id: int) -> Category | None:
         statement = select(Category).where(
-            Category.slug == OTHER_CATEGORY_SLUG,
+            Category.user_id == self.user_id,
+            Category.system_key == OTHER_CATEGORY_SLUG,
             Category.id != excluded_category_id,
         )
         return await self.session.scalar(statement)
 
     async def _ensure_name_available(self, *, name: str, exclude_category_id: int | None) -> None:
-        statement = select(Category).where(func.lower(Category.name) == name.lower())
+        statement = select(Category).where(
+            Category.user_id == self.user_id,
+            Category.normalized_name == name.casefold(),
+        )
         if exclude_category_id is not None:
             statement = statement.where(Category.id != exclude_category_id)
         existing_category = await self.session.scalar(statement)
@@ -180,7 +200,10 @@ class CategoryService:
             raise CategoryConflictError(f"Category name '{name}' already exists.")
 
     async def _ensure_slug_available(self, *, slug: str, exclude_category_id: int | None) -> None:
-        statement = select(Category).where(Category.slug == slug)
+        statement = select(Category).where(
+            Category.user_id == self.user_id,
+            Category.slug == slug,
+        )
         if exclude_category_id is not None:
             statement = statement.where(Category.id != exclude_category_id)
         existing_category = await self.session.scalar(statement)
@@ -191,7 +214,9 @@ class CategoryService:
         if position is not None:
             return self._normalize_position(position)
 
-        max_position = await self.session.scalar(select(func.max(Category.position)))
+        max_position = await self.session.scalar(
+            select(func.max(Category.position)).where(Category.user_id == self.user_id)
+        )
         return int(max_position or 0) + 1
 
     async def _commit_with_conflict_handling(self) -> None:

@@ -1,239 +1,112 @@
 from __future__ import annotations
 
-import json
-from typing import Any
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from fastapi import BackgroundTasks
 
-from app.main import create_app
-from app.telegram.router import get_scan_service
-from app.telegram.scanner import ScanAlreadyRunningError, ScanProgress
-from app.telegram.service import TelegramClientNotConnectedError
+from app.telegram import router as router_module
+from app.telegram.router import _format_sse_event, scan_status, start_scan, stop_scan
 
 
-class _FakeScanService:
+def _job(*, state: str = "pending") -> SimpleNamespace:
+    return SimpleNamespace(
+        id="job-a",
+        user_id="user-a",
+        state=state,
+        stop_requested=state == "stopping",
+        messages_scanned=4,
+        pages_scanned=1,
+        page_size=25,
+        max_messages=10_000,
+        max_runtime_seconds=3_600,
+        last_message_id=99,
+        started_at=datetime.now(tz=UTC) if state != "pending" else None,
+        finished_at=None,
+        error=None,
+        completion_reason=None,
+    )
+
+
+class _FakeService:
     def __init__(self) -> None:
-        self.start_calls: list[int] = []
-        self.stop_calls = 0
-        self.status_calls = 0
-        self.status_sequence: list[ScanProgress] = []
-        self.start_error: Exception | None = None
-        self.start_progress = ScanProgress(is_running=True, page_size=100)
-        self.status_progress = ScanProgress(
-            is_running=False,
-            is_complete=True,
-            stop_requested=False,
-            messages_scanned=42,
-            pages_scanned=3,
-            page_size=100,
-            last_message_id=123,
-        )
-        self.stop_progress = ScanProgress(
-            is_running=True,
-            is_complete=False,
-            stop_requested=True,
-            messages_scanned=7,
-            pages_scanned=1,
-            page_size=25,
-            last_message_id=55,
-        )
+        self.job = _job()
+        self.started_with: int | None = None
 
-    async def start(self, *, page_size: int = 100) -> ScanProgress:
-        self.start_calls.append(page_size)
-        if self.start_error is not None:
-            raise self.start_error
-        return self.start_progress
+    async def start(self, *, page_size: int):
+        self.started_with = page_size
+        return self.job
 
-    async def status(self) -> ScanProgress:
-        self.status_calls += 1
-        if self.status_sequence:
-            self.status_progress = self.status_sequence.pop(0)
-        return self.status_progress
+    async def status(self):
+        return self.job
 
-    async def stop(self) -> ScanProgress:
-        self.stop_calls += 1
-        return self.stop_progress
-
-
-@pytest.fixture
-def scan_context() -> tuple[Any, _FakeScanService]:
-    service = _FakeScanService()
-    app = create_app(api_token=None)
-
-    async def override_scan_service() -> _FakeScanService:
-        return service
-
-    app.dependency_overrides[get_scan_service] = override_scan_service
-    yield app, service
-    app.dependency_overrides.clear()
+    async def stop(self):
+        self.job.state = "stopping"
+        self.job.stop_requested = True
+        return self.job
 
 
 @pytest.mark.asyncio
-async def test_start_scan_endpoint_starts_with_custom_page_size(
-    scan_context: tuple[Any, _FakeScanService],
+async def test_start_scan_returns_persisted_job_and_schedules_processing(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app, service = scan_context
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post("/api/scan/start?page_size=25")
+    service = _FakeService()
+    monkeypatch.setattr(router_module, "_service", lambda **_: service)
+    background = BackgroundTasks()
 
-    assert response.status_code == 202
-    assert response.json() == {
-        "is_running": True,
-        "is_complete": False,
-        "stop_requested": False,
-        "messages_scanned": 0,
-        "pages_scanned": 0,
-        "page_size": 100,
-        "last_message_id": None,
-        "started_at": None,
-        "finished_at": None,
-        "error": None,
-    }
-    assert service.start_calls == [25]
+    response = await start_scan(
+        background_tasks=background,
+        user=SimpleNamespace(id="user-a"),
+        session=object(),  # type: ignore[arg-type]
+        page_size=25,
+    )
+
+    assert response.job_id == "job-a"
+    assert response.state == "pending"
+    assert service.started_with == 25
+    assert len(background.tasks) == 1
 
 
 @pytest.mark.asyncio
-async def test_start_scan_endpoint_requires_connected_client(
-    scan_context: tuple[Any, _FakeScanService],
+async def test_start_scan_leaves_processing_to_worker_when_in_api_processing_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app, service = scan_context
-    service.start_error = TelegramClientNotConnectedError("Connect first")
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post("/api/scan/start")
+    service = _FakeService()
+    monkeypatch.setattr(router_module, "_service", lambda **_: service)
+    monkeypatch.setattr(
+        router_module,
+        "settings",
+        SimpleNamespace(process_scans_in_api=False),
+    )
+    background = BackgroundTasks()
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Connect first"
+    response = await start_scan(
+        background_tasks=background,
+        user=SimpleNamespace(id="user-a"),
+        session=object(),  # type: ignore[arg-type]
+        page_size=25,
+    )
+
+    assert response.job_id == "job-a"
+    assert background.tasks == []
 
 
 @pytest.mark.asyncio
-async def test_start_scan_endpoint_returns_conflict_when_scan_running(
-    scan_context: tuple[Any, _FakeScanService],
-) -> None:
-    app, service = scan_context
-    service.start_error = ScanAlreadyRunningError("A scan is already running.")
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post("/api/scan/start")
+async def test_scan_status_and_stop_are_service_backed(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = _FakeService()
+    monkeypatch.setattr(router_module, "_service", lambda **_: service)
+    user = SimpleNamespace(id="user-a")
 
-    assert response.status_code == 409
-    assert response.json()["detail"] == "A scan is already running."
+    current = await scan_status(user=user, session=object())  # type: ignore[arg-type]
+    stopped = await stop_scan(user=user, session=object())  # type: ignore[arg-type]
 
-
-@pytest.mark.asyncio
-async def test_scan_status_endpoint_returns_progress(
-    scan_context: tuple[Any, _FakeScanService],
-) -> None:
-    app, service = scan_context
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get("/api/scan/status")
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "is_running": False,
-        "is_complete": True,
-        "stop_requested": False,
-        "messages_scanned": 42,
-        "pages_scanned": 3,
-        "page_size": 100,
-        "last_message_id": 123,
-        "started_at": None,
-        "finished_at": None,
-        "error": None,
-    }
-    assert service.status_calls == 1
+    assert current.job_id == "job-a"
+    assert stopped.state == "stopping"
+    assert stopped.stop_requested is True
 
 
-@pytest.mark.asyncio
-async def test_stop_scan_endpoint_requests_graceful_stop(
-    scan_context: tuple[Any, _FakeScanService],
-) -> None:
-    app, service = scan_context
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post("/api/scan/stop")
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "is_running": True,
-        "is_complete": False,
-        "stop_requested": True,
-        "messages_scanned": 7,
-        "pages_scanned": 1,
-        "page_size": 25,
-        "last_message_id": 55,
-        "started_at": None,
-        "finished_at": None,
-        "error": None,
-    }
-    assert service.stop_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_scan_stream_endpoint_emits_status_updates(
-    scan_context: tuple[Any, _FakeScanService],
-) -> None:
-    app, service = scan_context
-    service.status_sequence = [
-        ScanProgress(
-            is_running=True,
-            is_complete=False,
-            stop_requested=False,
-            messages_scanned=4,
-            pages_scanned=1,
-            page_size=50,
-            last_message_id=999,
-        ),
-        ScanProgress(
-            is_running=False,
-            is_complete=True,
-            stop_requested=False,
-            messages_scanned=9,
-            pages_scanned=2,
-            page_size=50,
-            last_message_id=850,
-        ),
-    ]
-
-    transport = ASGITransport(app=app)
-    events: list[dict[str, Any]] = []
-    async with AsyncClient(transport=transport, base_url="http://testserver", timeout=5.0) as client:
-        response = await client.get("/api/scan/stream?max_events=2")
-
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/event-stream")
-    for line in response.text.splitlines():
-        if not line.startswith("data: "):
-            continue
-        events.append(json.loads(line[6:]))
-
-    assert events == [
-        {
-            "is_running": True,
-            "is_complete": False,
-            "stop_requested": False,
-            "messages_scanned": 4,
-            "pages_scanned": 1,
-            "page_size": 50,
-            "last_message_id": 999,
-            "started_at": None,
-            "finished_at": None,
-            "error": None,
-        },
-        {
-            "is_running": False,
-            "is_complete": True,
-            "stop_requested": False,
-            "messages_scanned": 9,
-            "pages_scanned": 2,
-            "page_size": 50,
-            "last_message_id": 850,
-            "started_at": None,
-            "finished_at": None,
-            "error": None,
-        },
-    ]
-    assert service.status_calls >= 2
+def test_format_sse_event() -> None:
+    assert _format_sse_event(event="status", data='{"state":"running"}') == (
+        'event: status\ndata: {"state":"running"}\n\n'
+    )

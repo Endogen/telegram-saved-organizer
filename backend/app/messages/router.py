@@ -5,7 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.accounts.dependencies import get_current_user
 from app.database import get_session
+from app.models import User
 from app.messages.schemas import (
     MessageBulkDeleteRequest,
     MessageBulkDeleteResponse,
@@ -22,27 +24,33 @@ from app.messages.service import (
     MessageNotFoundError,
     MessageService,
     MessageSort,
+)
+from app.telegram.client import (
     TelegramClientNotConnectedError,
     TelegramMessageDeleteError,
+    TelegramMessageProvenanceError,
 )
 
 router = APIRouter(prefix="/messages", tags=["messages"])
 
 
-async def get_message_service(session: AsyncSession = Depends(get_session)) -> MessageService:
+async def get_message_service(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+) -> MessageService:
     """Dependency provider for message service."""
 
-    return MessageService(session=session)
+    return MessageService(session=session, user_id=user.id)
 
 
 @router.get("", response_model=MessageListResponse)
 async def list_messages(
     page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=50, ge=1, le=10000),
+    per_page: int = Query(default=50, ge=1, le=200),
     sort: MessageSort = Query(default=MessageSort.DATE_DESC),
     category: str | None = Query(default=None, min_length=1),
-    tag: list[str] | None = Query(default=None),
-    search: str | None = Query(default=None),
+    tag: list[str] | None = Query(default=None, max_length=20),
+    search: str | None = Query(default=None, max_length=500),
     service: MessageService = Depends(get_message_service),
 ) -> MessageListResponse:
     try:
@@ -73,6 +81,11 @@ async def bulk_delete_messages(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except TelegramClientNotConnectedError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="telegram_not_connected") from exc
+    except TelegramMessageProvenanceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="telegram_connection_changed",
+        ) from exc
     except TelegramMessageDeleteError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except ValueError as exc:
@@ -151,6 +164,11 @@ async def delete_message(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except TelegramClientNotConnectedError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="telegram_not_connected") from exc
+    except TelegramMessageProvenanceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="telegram_connection_changed",
+        ) from exc
     except TelegramMessageDeleteError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     return MessageDeleteResponse()

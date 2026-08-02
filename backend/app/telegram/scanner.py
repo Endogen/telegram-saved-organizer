@@ -11,6 +11,15 @@ from typing import Any, Awaitable, Callable, Protocol
 URL_PATTERN = re.compile(r"(?:https?://|www\.)[^\s]+", re.IGNORECASE)
 SIMPLE_URL_TRAILING_PUNCTUATION = frozenset(".,!?;:\"'")
 URL_CLOSING_PAIRS = {")": "(", "]": "[", "}": "{"}
+SOURCE_EXHAUSTED = "source_exhausted"
+MESSAGE_LIMIT_REACHED = "message_limit_reached"
+RUNTIME_LIMIT_REACHED = "runtime_limit_reached"
+STOPPED_BY_USER = "stopped_by_user"
+SLICE_PAGE_LIMIT = "slice_page_limit"
+SLICE_TIME_LIMIT = "slice_time_limit"
+TERMINAL_COMPLETION_REASONS = frozenset(
+    (SOURCE_EXHAUSTED, MESSAGE_LIMIT_REACHED)
+)
 
 
 def _trim_url_punctuation(value: str) -> str:
@@ -84,9 +93,11 @@ class ScanProgress:
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error: str | None = None
+    completion_reason: str | None = None
 
 
 OnScanPage = Callable[[ScanPage], Awaitable[None]]
+ShouldStop = Callable[[], Awaitable[bool]]
 
 
 @dataclass(slots=True)
@@ -102,44 +113,113 @@ class SavedMessagesScanner:
         client: TelegramScannerClientProtocol,
         page_size: int = 100,
         on_page: OnScanPage | None = None,
+        should_stop: ShouldStop | None = None,
+        start_offset_id: int | None = None,
+        max_messages: int | None = None,
+        max_pages: int | None = None,
+        timeout_seconds: float | None = None,
     ) -> ScanProgress:
-        """Scan Saved Messages using paginated Telethon iteration."""
+        """Scan a resumable, optionally bounded Saved Messages slice."""
 
         if page_size <= 0:
             raise ValueError("page_size must be a positive integer.")
+        if max_messages is not None and max_messages <= 0:
+            raise ValueError("max_messages must be a positive integer.")
+        if max_pages is not None and max_pages <= 0:
+            raise ValueError("max_pages must be a positive integer.")
+        if timeout_seconds is not None and timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive.")
 
-        await self._begin_scan(page_size=page_size)
+        await self._begin_scan(page_size=page_size, start_offset_id=start_offset_id)
 
-        previous_offset_id = 0
+        previous_offset_id = start_offset_id or 0
+        deadline = (
+            asyncio.get_running_loop().time() + timeout_seconds
+            if timeout_seconds is not None
+            else None
+        )
+        completion_reason: str | None = None
 
         try:
             while True:
-                if await self._stop_requested():
+                if await self._stop_requested() or (
+                    should_stop is not None and await should_stop()
+                ):
+                    async with self._lock:
+                        self._progress = replace(self._progress, stop_requested=True)
+                    completion_reason = STOPPED_BY_USER
                     break
 
-                raw_page = await self._fetch_page(
-                    client=client,
-                    limit=page_size,
-                    offset_id=previous_offset_id,
-                )
+                progress = await self.get_progress()
+                if max_messages is not None and progress.messages_scanned >= max_messages:
+                    completion_reason = MESSAGE_LIMIT_REACHED
+                    break
+                if max_pages is not None and progress.pages_scanned >= max_pages:
+                    completion_reason = SLICE_PAGE_LIMIT
+                    break
+
+                page_capacity = page_size
+                if max_messages is not None:
+                    page_capacity = min(
+                        page_capacity,
+                        max_messages - progress.messages_scanned,
+                    )
+                fetch_limit = page_capacity + 1 if max_messages is not None else page_capacity
+
+                try:
+                    if deadline is None:
+                        raw_page = await self._fetch_page(
+                            client=client,
+                            limit=fetch_limit,
+                            offset_id=previous_offset_id,
+                        )
+                    else:
+                        remaining_seconds = deadline - asyncio.get_running_loop().time()
+                        if remaining_seconds <= 0:
+                            completion_reason = SLICE_TIME_LIMIT
+                            break
+                        async with asyncio.timeout(remaining_seconds):
+                            raw_page = await self._fetch_page(
+                                client=client,
+                                limit=fetch_limit,
+                                offset_id=previous_offset_id,
+                            )
+                except TimeoutError:
+                    completion_reason = SLICE_TIME_LIMIT
+                    break
                 if not raw_page:
+                    completion_reason = SOURCE_EXHAUSTED
                     break
 
-                page = self._build_page(raw_page=raw_page, page_size=page_size)
+                has_more = (
+                    len(raw_page) > page_capacity
+                    if max_messages is not None
+                    else len(raw_page) >= page_capacity
+                )
+                page = self._build_page(
+                    raw_page=raw_page[:page_capacity],
+                    page_size=page_capacity,
+                    has_more=has_more,
+                )
                 if on_page is not None:
                     await on_page(page)
 
                 await self._record_page(page=page)
 
                 if not page.has_more or page.next_offset_id is None:
+                    completion_reason = SOURCE_EXHAUSTED
                     break
                 if page.next_offset_id == previous_offset_id:
+                    completion_reason = SOURCE_EXHAUSTED
                     break
                 previous_offset_id = page.next_offset_id
 
-            return await self._finish_scan(error=None)
+            return await self._finish_scan(
+                error=None,
+                completion_reason=completion_reason or SOURCE_EXHAUSTED,
+            )
         except Exception as exc:
-            await self._finish_scan(error=str(exc))
+            await self._finish_scan(error=str(exc), completion_reason=None)
             raise
 
     async def request_stop(self) -> None:
@@ -154,7 +234,7 @@ class SavedMessagesScanner:
         async with self._lock:
             return self._progress
 
-    async def _begin_scan(self, *, page_size: int) -> None:
+    async def _begin_scan(self, *, page_size: int, start_offset_id: int | None) -> None:
         async with self._lock:
             if self._progress.is_running:
                 raise ScanAlreadyRunningError("A scan is already running.")
@@ -166,10 +246,11 @@ class SavedMessagesScanner:
                 messages_scanned=0,
                 pages_scanned=0,
                 page_size=page_size,
-                last_message_id=None,
+                last_message_id=start_offset_id,
                 started_at=datetime.now(tz=UTC),
                 finished_at=None,
                 error=None,
+                completion_reason=None,
             )
 
     async def _record_page(self, *, page: ScanPage) -> None:
@@ -181,14 +262,24 @@ class SavedMessagesScanner:
                 last_message_id=page.next_offset_id,
             )
 
-    async def _finish_scan(self, *, error: str | None) -> ScanProgress:
+    async def _finish_scan(
+        self,
+        *,
+        error: str | None,
+        completion_reason: str | None,
+    ) -> ScanProgress:
         async with self._lock:
             self._progress = replace(
                 self._progress,
                 is_running=False,
-                is_complete=error is None and not self._progress.stop_requested,
+                is_complete=(
+                    error is None
+                    and not self._progress.stop_requested
+                    and completion_reason in TERMINAL_COMPLETION_REASONS
+                ),
                 finished_at=datetime.now(tz=UTC),
                 error=error,
+                completion_reason=completion_reason,
             )
             return self._progress
 
@@ -209,11 +300,25 @@ class SavedMessagesScanner:
                 page.append(message)
         return page
 
-    def _build_page(self, *, raw_page: list[Any], page_size: int) -> ScanPage:
+    def _build_page(
+        self,
+        *,
+        raw_page: list[Any],
+        page_size: int,
+        has_more: bool | None = None,
+    ) -> ScanPage:
         messages = tuple(self._normalize_message(raw_message) for raw_message in raw_page)
         next_offset_id = self._minimum_message_id(raw_page)
-        has_more = len(raw_page) >= page_size and next_offset_id is not None
-        return ScanPage(messages=messages, has_more=has_more, next_offset_id=next_offset_id)
+        page_has_more = (
+            len(raw_page) >= page_size and next_offset_id is not None
+            if has_more is None
+            else has_more and next_offset_id is not None
+        )
+        return ScanPage(
+            messages=messages,
+            has_more=page_has_more,
+            next_offset_id=next_offset_id,
+        )
 
     def _normalize_message(self, raw_message: Any) -> ScannedMessage:
         telegram_id = self._required_telegram_id(raw_message)
@@ -230,7 +335,7 @@ class SavedMessagesScanner:
             url=self._extract_url(content),
             sender_name=self._extract_sender_name(raw_message),
             date=self._extract_date(raw_message),
-            raw_data=self._extract_raw_data(raw_message, telegram_id=telegram_id, content=content),
+            raw_data=self._extract_raw_data(telegram_id=telegram_id),
         )
 
     def _extract_media(self, raw_message: Any) -> tuple[str | None, str | None, int | None, str | None]:
@@ -283,32 +388,17 @@ class SavedMessagesScanner:
 
         return self._coerce_str(getattr(sender, "username", None))
 
-    def _extract_raw_data(
-        self,
-        raw_message: Any,
-        *,
-        telegram_id: int,
-        content: str | None,
-    ) -> dict[str, Any]:
-        raw_data_factory = getattr(raw_message, "to_dict", None)
-        if callable(raw_data_factory):
-            raw_data = raw_data_factory()
-            if isinstance(raw_data, dict):
-                return self._make_json_safe(raw_data)
-        return {"id": telegram_id, "message": content}
-
     @staticmethod
-    def _make_json_safe(obj: Any) -> Any:
-        """Recursively convert non-JSON-serializable types (datetime, bytes, etc.)."""
-        if isinstance(obj, dict):
-            return {k: SavedMessagesScanner._make_json_safe(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [SavedMessagesScanner._make_json_safe(v) for v in obj]
-        if isinstance(obj, datetime):
-            return obj.isoformat()
-        if isinstance(obj, bytes):
-            return obj.hex()
-        return obj
+    def _extract_raw_data(*, telegram_id: int) -> dict[str, Any]:
+        """Retain only the non-secret identifier needed for diagnostics.
+
+        Telethon's full ``to_dict`` payload includes access hashes, file
+        references, peer metadata, and duplicate message content. Persisting and
+        returning that object would expose substantially more Telegram account
+        data than the organizer needs.
+        """
+
+        return {"id": telegram_id}
 
     def _extract_url(self, content: str | None) -> str | None:
         if not content:

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fastapi import Depends
 from httpx import ASGITransport, AsyncClient
 
+from app.accounts.dependencies import get_current_user
 from app.main import create_app
 from app.messages.router import get_message_service
 from app.messages.service import (
@@ -18,6 +21,8 @@ from app.messages.service import (
     TelegramClientNotConnectedError,
     TelegramMessageDeleteError,
 )
+
+USER_ID = "00000000-0000-0000-0000-000000000001"
 
 
 @dataclass(slots=True)
@@ -166,14 +171,35 @@ def _build_message() -> _FakeMessage:
 @pytest.fixture
 def message_context() -> tuple[Any, _FakeMessageService]:
     service = _FakeMessageService()
-    app = create_app(api_token=None)
+    user = SimpleNamespace(id=USER_ID)
+    app = create_app(check_migrations=False)
 
-    async def override_message_service() -> _FakeMessageService:
+    async def override_current_user() -> Any:
+        return user
+
+    async def override_message_service(
+        current_user: Any = Depends(get_current_user),
+    ) -> _FakeMessageService:
+        assert current_user is user
         return service
 
+    app.dependency_overrides[get_current_user] = override_current_user
     app.dependency_overrides[get_message_service] = override_message_service
     yield app, service
     app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_messages_endpoint_requires_authenticated_user() -> None:
+    app = create_app(check_migrations=False)
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/api/messages")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "authentication_required"
+    assert response.headers["www-authenticate"] == "Bearer"
 
 
 @pytest.mark.asyncio
@@ -584,8 +610,10 @@ async def test_delete_message_endpoint_returns_bad_gateway_when_telegram_delete_
 @pytest.mark.asyncio
 async def test_get_message_service_dependency_returns_message_service() -> None:
     session = object()
+    user = SimpleNamespace(id=USER_ID)
 
-    service = await get_message_service(session=session)  # type: ignore[arg-type]
+    service = await get_message_service(session=session, user=user)  # type: ignore[arg-type]
 
     assert isinstance(service, MessageService)
     assert service.session is session
+    assert service.user_id == USER_ID

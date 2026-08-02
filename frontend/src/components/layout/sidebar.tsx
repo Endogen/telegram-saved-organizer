@@ -1,4 +1,4 @@
-import { type DragEvent, useEffect, useState } from "react";
+import { type DragEvent, useEffect, useRef, useState } from "react";
 import {
   Archive,
   Code2,
@@ -84,6 +84,60 @@ export function Sidebar({
   const totalMessageCount = categories.reduce((sum, category) => sum + category.message_count, 0);
   const [activeDrag, setActiveDrag] = useState<MessageDragStartDetail | null>(null);
   const [dropCategoryId, setDropCategoryId] = useState<number | null>(null);
+  const [isDesktop, setIsDesktop] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches,
+  );
+  const sidebarRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 768px)");
+    const syncDesktopState = () => setIsDesktop(media.matches);
+    syncDesktopState();
+    media.addEventListener("change", syncDesktopState);
+    return () => media.removeEventListener("change", syncDesktopState);
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen || isDesktop) {
+      return;
+    }
+
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    sidebarRef.current?.querySelector<HTMLElement>("a, button")?.focus();
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || sidebarRef.current === null) {
+        return;
+      }
+
+      const focusable = [...sidebarRef.current.querySelectorAll<HTMLElement>("a[href], button:not([disabled])")];
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (first === undefined || last === undefined) {
+        return;
+      }
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleEscape);
+      previouslyFocused?.focus();
+    };
+  }, [isDesktop, isOpen, onClose]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -170,6 +224,11 @@ export function Sidebar({
       </AnimatePresence>
 
       <aside
+        id="workspace-navigation"
+        ref={sidebarRef}
+        aria-label="Workspace navigation"
+        aria-hidden={!isDesktop && !isOpen}
+        inert={!isDesktop && !isOpen}
         className={cn(
           "fixed inset-y-0 left-0 z-40 flex w-72 -translate-x-full flex-col border-r border-[hsl(var(--border)/0.8)] bg-[hsl(var(--card)/0.95)] transition-transform duration-300 md:static md:z-0 md:w-64 md:translate-x-0 md:rounded-2xl md:border md:bg-[hsl(var(--card)/0.82)] md:shadow-sm md:backdrop-blur",
           isOpen ? "translate-x-0" : "-translate-x-full",

@@ -1,26 +1,34 @@
 # Telegram Saved Messages Organizer
 
-A local-first organizer for Telegram Saved Messages. The FastAPI backend authenticates with Telegram, scans Saved Messages into SQLite, and exposes category, tag, and message APIs. The React frontend provides the connection, scan, dashboard, and message-management flows.
+A multi-user web application for importing and organizing each account's own Telegram Saved Messages. The FastAPI API stores tenant-owned data in PostgreSQL or SQLite, the React UI provides account and Telegram onboarding, and a durable worker imports Saved Messages without sharing Telegram sessions between users.
 
-## Prerequisites
+## What is included
 
-- Python 3.12 and [uv](https://docs.astral.sh/uv/)
-- Node.js 22.22 or newer and npm
-- Telegram API credentials from `my.telegram.org`
+- Email/password accounts with Argon2id password hashing
+- Opaque, revocable server-side sessions with absolute and idle expiry
+- HttpOnly, `Secure`, same-site cookies and session-bound CSRF protection
+- Per-account categories, tags, messages, Telegram authorization, and scan jobs
+- Encrypted Telegram `StringSession`, phone, and verification challenge at rest
+- Active-session review/revocation, password rotation, and account deletion
+- Provider-aware GitHub, YouTube, X/Twitter, generic-link, and plain-text message rendering
+- Alembic migrations plus a durable scan worker suitable for multi-process deployment
 
-## Development
+## Local development
 
-Install and start the backend from one terminal:
+Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/), Node.js 22.22+, npm, and server Telegram API credentials from `my.telegram.org`.
+
+Start the API:
 
 ```bash
 cd backend
 uv sync --extra dev
+export TSO_TELEGRAM_API_ID=123456
+export TSO_TELEGRAM_API_HASH=your_api_hash
+uv run alembic upgrade head
 uv run uvicorn app.main:app --reload --port 8500
 ```
 
-The default database, Telegram session, and saved credentials live in `backend/data/`. To move them elsewhere, export `TSO_DATA_DIR` or copy `backend/.env.example` to `backend/.env` and start Uvicorn with `--env-file .env`.
-
-Install and start the frontend from a second terminal:
+Start the UI in another terminal:
 
 ```bash
 cd frontend
@@ -28,16 +36,47 @@ npm ci
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. Vite proxies `/api` requests to the backend on port 8500. Enter the Telegram API ID, API hash, and phone number on the Connect page, complete verification, then start a scan.
+Open `http://127.0.0.1:5173`, register an application account, then connect that account to Telegram. Development defaults to a private SQLite database in `backend/data/`; `TSO_DATA_DIR` changes that location. The generated development encryption key is stored with mode `0600` in that directory.
 
-On first start, the backend creates a private API token at `backend/data/api-token`. The browser exchanges this token for an HttpOnly, same-site session; it is never compiled into frontend code. Print the current token when the unlock screen asks for it:
+The API deliberately refuses to start if its database is not at the current Alembic revision. Run `uv run alembic upgrade head` after pulling schema changes.
 
-```bash
-cd backend
-uv run python -m app.api_access
-```
+## Public deployment
 
-Scripts and other non-browser clients can authenticate with `Authorization: Bearer <token>`. Set `TSO_API_TOKEN` to a fixed value of at least 32 characters when a generated token file is not suitable.
+The included Compose topology runs PostgreSQL, a one-shot migration service, two API processes, a dedicated durable scan worker, and Nginx for the built React app and same-origin `/api` proxy.
+
+1. Copy `.env.production.example` to `.env` and replace every placeholder.
+2. Terminate TLS in a reverse proxy on the same host in front of the loopback-bound `TSO_HTTP_PORT`.
+3. Preserve the original `Host`, forward the HTTPS scheme, overwrite `X-Forwarded-For` with the client chain, and set `TSO_PUBLIC_ORIGIN` to the exact external HTTPS origin.
+4. Start the stack with `docker compose up --build -d`.
+5. Confirm `https://your-host/api/health` returns `{"status":"ok"}`.
+
+The production config requires HTTPS, secure cookies, an explicit public origin, and a master encryption key. Keep both the PostgreSQL volume and `TSO_MASTER_KEY` backed up: losing the key makes stored Telegram sessions intentionally unrecoverable. Rotate the Telegram API hash and master key only with a planned credential migration; existing AES-GCM ciphertext is bound to the current key and tenant context.
+
+Registration can be closed with `TSO_ALLOW_REGISTRATION=false` after the intended accounts are created. The edge config rate-limits sign-in, registration, Telegram verification, and general API traffic. For a horizontally scaled deployment, use the same environment values for every API/worker replica and a shared PostgreSQL database.
+
+This branch introduces a new tenant schema and intentionally refuses to adopt the old single-user development database because those rows have no account owner. Export any data you need, then deploy this release with a fresh database; there is no automatic legacy converter.
+
+## Configuration
+
+| Variable | Purpose | Production behavior |
+| --- | --- | --- |
+| `TSO_DATABASE_URL` | SQLAlchemy async database URL | Set by Compose to PostgreSQL |
+| `TSO_MASTER_KEY` | Encryption root for Telegram secrets | Required, at least 43 characters |
+| `TSO_PUBLIC_ORIGIN` | Exact browser origin | Required HTTPS origin |
+| `TSO_ALLOWED_HOSTS` | Comma-separated accepted Host names | Defaults to public-origin host |
+| `TSO_COOKIE_SECURE` | Enables `Secure` and `__Host-` cookies | Must be true |
+| `TSO_ALLOW_REGISTRATION` | Enables public account creation | Defaults to true |
+| `TSO_SESSION_ABSOLUTE_SECONDS` | Maximum session lifetime | Defaults to 30 days |
+| `TSO_SESSION_IDLE_SECONDS` | Idle session lifetime | Defaults to 7 days |
+| `TSO_MAX_ACTIVE_SESSIONS` | Maximum concurrently active sessions per account | Defaults to 10 |
+| `TSO_TELEGRAM_API_ID/HASH` | Server-owned Telegram application credentials | Required to connect Telegram |
+| `TSO_PROCESS_SCANS_IN_API` | Runs scan jobs inside the API process | Defaults off in production; use worker |
+| `TSO_HTTP_BIND/TSO_HTTP_PORT` | Address and port exposed by the web container | Defaults to `127.0.0.1:8080` for a same-host TLS proxy |
+| `TSO_SCAN_MAX_MESSAGES` | Per-job message import ceiling, snapshotted at start | Defaults to 10,000 |
+| `TSO_SCAN_MAX_RUNTIME_SECONDS` | Per-job wall-clock runtime ceiling, snapshotted at first claim | Defaults to 3,600 |
+| `TSO_SCAN_SLICE_MAX_PAGES` | Maximum pages processed before yielding to another job | Defaults to 5 |
+| `TSO_SCAN_SLICE_SECONDS` | Maximum duration of one worker slice | Defaults to 30 seconds |
+| `TSO_SCAN_MAX_STREAMS_PER_USER` | Concurrent durable status streams per account | Defaults to 3 |
 
 ## Verification
 
@@ -45,11 +84,13 @@ Scripts and other non-browser clients can authenticate with `Authorization: Bear
 cd backend
 uv run ruff check app tests
 uv run pytest
+uv run alembic check
 uv build
 
 cd ../frontend
 npm test
 npm run build
-```
 
-The application stores the API token, Telegram credentials, and a Telethon session locally so it can reconnect. The backend enforces private file permissions, but the data directory should still be backed up and kept out of version control.
+cd ..
+docker compose config
+```

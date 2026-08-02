@@ -92,7 +92,7 @@ PositiveIdentifier = Annotated[int, Field(gt=0, strict=True)]
 class MessageBulkDeleteRequest(BaseModel):
     """Message id list for bulk delete operations."""
 
-    message_ids: list[PositiveIdentifier] = Field(min_length=1)
+    message_ids: list[PositiveIdentifier] = Field(min_length=1, max_length=200)
 
 
 class MessageBulkDeleteResponse(BaseModel):
@@ -104,7 +104,7 @@ class MessageBulkDeleteResponse(BaseModel):
 class MessageBulkMoveRequest(BaseModel):
     """Bulk category move request payload."""
 
-    message_ids: list[PositiveIdentifier] = Field(min_length=1)
+    message_ids: list[PositiveIdentifier] = Field(min_length=1, max_length=200)
     category_id: PositiveIdentifier
 
 

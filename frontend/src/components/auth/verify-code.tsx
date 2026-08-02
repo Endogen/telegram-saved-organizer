@@ -32,12 +32,11 @@ export function VerifyCode({ passwordRequired, isSubmitting, error, onSubmit }: 
     setValidationError(null);
 
     if (passwordRequired) {
-      const trimmedPassword = password.trim();
-      if (trimmedPassword.length === 0) {
+      if (password.trim().length === 0) {
         setValidationError("Two-factor password is required.");
         return;
       }
-      void onSubmit({ password: trimmedPassword });
+      void onSubmit({ password });
       return;
     }
 
@@ -51,7 +50,7 @@ export function VerifyCode({ passwordRequired, isSubmitting, error, onSubmit }: 
   }
 
   return (
-    <form className="space-y-4" onSubmit={handleSubmit}>
+    <form className="space-y-4" onSubmit={handleSubmit} noValidate>
       <div className="space-y-1">
         <label
           htmlFor={passwordRequired ? "telegram-password" : "telegram-verification-code"}
@@ -74,11 +73,19 @@ export function VerifyCode({ passwordRequired, isSubmitting, error, onSubmit }: 
           placeholder={passwordRequired ? "Your Telegram 2FA password" : "12345"}
           className={inputClassName()}
           disabled={isSubmitting}
+          inputMode={passwordRequired ? undefined : "numeric"}
+          aria-invalid={displayError ? true : undefined}
+          aria-describedby={displayError ? "telegram-verification-error" : undefined}
+          required
         />
       </div>
 
       {displayError ? (
-        <p className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">
+        <p
+          id="telegram-verification-error"
+          role="alert"
+          className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300"
+        >
           {displayError}
         </p>
       ) : null}

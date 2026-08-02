@@ -8,7 +8,9 @@ from sqlalchemy import delete, event, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import _configure_sqlite_connection, _secure_sqlite_database_file
-from app.models import Base, Category, Message, MessageTag, Tag
+from app.models import Base, Category, Message, MessageTag, Tag, User
+
+USER_ID = "00000000-0000-0000-0000-000000000001"
 
 
 @pytest.mark.asyncio
@@ -23,24 +25,42 @@ async def test_sqlite_foreign_keys_cascade_message_tag_rows() -> None:
 
         session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
         async with session_factory() as session:
+            user = User(
+                id=USER_ID,
+                email="owner@example.com",
+                normalized_email="owner@example.com",
+                display_name="Owner",
+                password_hash="test-password-hash",
+            )
             category = Category(
+                user_id=USER_ID,
                 name="Other",
+                normalized_name="other",
                 slug="other",
+                system_key="other",
                 icon="archive",
                 color="#64748B",
                 position=1,
                 is_default=True,
             )
-            tag = Tag(name="Important")
+            tag = Tag(
+                user_id=USER_ID,
+                name="Important",
+                normalized_name="important",
+            )
             message = Message(
+                user_id=USER_ID,
                 telegram_id=1001,
                 content="hello",
                 date=datetime.now(tz=UTC),
                 category=category,
                 raw_data={},
             )
-            message.tags.append(tag)
-            session.add(message)
+            session.add(user)
+            await session.flush()
+            session.add_all([category, tag, message])
+            await session.flush()
+            session.add(MessageTag(user_id=USER_ID, message_id=message.id, tag_id=tag.id))
             await session.commit()
 
             await session.execute(delete(Message))

@@ -5,7 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.accounts.dependencies import get_current_user
 from app.database import get_session
+from app.models import User
 from app.tags.schemas import (
     MessageTagsResponse,
     MessageTagsUpdateRequest,
@@ -24,10 +26,13 @@ from app.tags.service import (
 router = APIRouter(tags=["tags"])
 
 
-async def get_tag_service(session: AsyncSession = Depends(get_session)) -> TagService:
+async def get_tag_service(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+) -> TagService:
     """Dependency provider for tag service."""
 
-    return TagService(session=session)
+    return TagService(session=session, user_id=user.id)
 
 
 @router.get("/tags", response_model=list[TagResponse])
@@ -98,4 +103,3 @@ async def remove_tag_from_message(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return MessageTagsResponse(message_id=message_id, tags=[TagResponse.model_validate(tag) for tag in tags])
-

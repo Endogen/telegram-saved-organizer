@@ -1,164 +1,378 @@
 from __future__ import annotations
 
-from pathlib import Path
+import asyncio
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.telegram.client import TelegramClientCredentialsMismatchError, TelegramClientManager
+from app.security import SecretDecryptionError
+from app.telegram import client as client_module
+from app.models import Base, TelegramConnection, User
+from app.telegram.client import (
+    TelegramClientNotConnectedError,
+    TelegramMessageProvenanceError,
+    delete_saved_messages,
+    revoke_telegram_connection,
+    short_lived_client,
+)
 
 
-class _FakeTelethonClient:
-    def __init__(self, *, fail_connect: bool = False) -> None:
-        self.fail_connect = fail_connect
-        self.connect_calls = 0
-        self.disconnect_calls = 0
+class _FakeStringSession:
+    def save(self) -> str:
+        return "refreshed-session"
+
+
+class _FakeClient:
+    def __init__(self, _session: object, api_id: int, api_hash: str) -> None:
+        self.credentials = (api_id, api_hash)
+        self.session = _FakeStringSession()
         self.connected = False
-
-    def is_connected(self) -> bool:
-        return self.connected
+        self.disconnected = False
+        self.authorized = True
+        self.deleted: list[tuple[str, list[int]]] = []
+        self.logged_out = False
+        self.telegram_user_id = 123
 
     async def connect(self) -> None:
-        self.connect_calls += 1
-        if self.fail_connect:
-            raise RuntimeError("connect failed")
         self.connected = True
 
     async def disconnect(self) -> None:
-        self.disconnect_calls += 1
-        self.connected = False
+        self.disconnected = True
+
+    async def is_user_authorized(self) -> bool:
+        return self.authorized
+
+    async def get_me(self) -> SimpleNamespace:
+        return SimpleNamespace(id=self.telegram_user_id)
+
+    async def delete_messages(self, entity: str, message_ids: list[int]) -> None:
+        self.deleted.append((entity, message_ids))
+
+    async def log_out(self) -> None:
+        self.logged_out = True
 
 
-class _FakeClientFactory:
-    def __init__(self, *, fail_connect: bool = False) -> None:
-        self.fail_connect = fail_connect
-        self.calls: list[tuple[str, int, str]] = []
-        self.created_clients: list[_FakeTelethonClient] = []
+class _FakeSession:
+    def __init__(self, connection: object | None) -> None:
+        self.connection = connection
+        self.flush_calls = 0
+        self.commit_calls = 0
 
-    def __call__(self, session_path: str, api_id: int, api_hash: str) -> _FakeTelethonClient:
-        self.calls.append((session_path, api_id, api_hash))
-        client = _FakeTelethonClient(fail_connect=self.fail_connect)
-        self.created_clients.append(client)
-        return client
+    async def scalar(self, _statement: object) -> object | None:
+        return self.connection
 
+    async def flush(self) -> None:
+        self.flush_calls += 1
 
-@pytest.mark.asyncio
-async def test_connect_creates_and_reuses_cached_client(tmp_path: Path) -> None:
-    factory = _FakeClientFactory()
-    session_path = tmp_path / "telegram"
-    manager = TelegramClientManager(session_path=session_path, client_factory=factory)
+    async def commit(self) -> None:
+        self.commit_calls += 1
 
-    first_client = await manager.connect(api_id=1001, api_hash="hash")
-    second_client = await manager.connect(api_id=1001, api_hash="hash")
-
-    assert first_client is second_client
-    assert first_client.connect_calls == 1
-    assert manager.is_connected() is True
-    assert factory.calls == [(str(session_path), 1001, "hash")]
-
-
-@pytest.mark.asyncio
-async def test_connect_rejects_credential_switch_without_disconnect(tmp_path: Path) -> None:
-    factory = _FakeClientFactory()
-    manager = TelegramClientManager(session_path=tmp_path / "telegram", client_factory=factory)
-
-    await manager.connect(api_id=1001, api_hash="hash")
-
-    with pytest.raises(TelegramClientCredentialsMismatchError):
-        await manager.connect(api_id=2002, api_hash="other-hash")
-
-    assert len(factory.calls) == 1
+    async def execute(self, _statement: object) -> SimpleNamespace:
+        return SimpleNamespace(rowcount=1)
 
 
 @pytest.mark.asyncio
-async def test_disconnect_clears_cached_client_and_allows_reconnect(tmp_path: Path) -> None:
-    factory = _FakeClientFactory()
-    manager = TelegramClientManager(session_path=tmp_path / "telegram", client_factory=factory)
+async def test_short_lived_client_always_disconnects(monkeypatch: pytest.MonkeyPatch) -> None:
+    created: list[_FakeClient] = []
 
-    first_client = await manager.connect(api_id=1001, api_hash="hash")
-    await manager.disconnect()
-    second_client = await manager.connect(api_id=1001, api_hash="hash")
+    def factory(session: object, api_id: int, api_hash: str) -> _FakeClient:
+        created.append(_FakeClient(session, api_id, api_hash))
+        return created[-1]
 
-    assert first_client is not second_client
-    assert first_client.disconnect_calls == 1
-    assert second_client.connect_calls == 1
-    assert len(factory.calls) == 2
+    monkeypatch.setattr(client_module, "_telegram_api_credentials", lambda: (123, "server-hash"))
 
+    with pytest.raises(RuntimeError, match="boom"):
+        async with short_lived_client(session_string=None, client_factory=factory) as client:
+            assert client.connected is True
+            raise RuntimeError("boom")
 
-@pytest.mark.asyncio
-async def test_reset_session_removes_session_artifacts(tmp_path: Path) -> None:
-    session_path = tmp_path / "telegram"
-    session_file = tmp_path / "telegram.session"
-    session_journal = tmp_path / "telegram.session-journal"
-    session_file.write_text("session", encoding="utf-8")
-    session_journal.write_text("journal", encoding="utf-8")
-
-    manager = TelegramClientManager(session_path=session_path, client_factory=_FakeClientFactory())
-
-    assert manager.has_session() is True
-
-    await manager.reset_session()
-
-    assert manager.has_session() is False
-    assert not session_file.exists()
-    assert not session_journal.exists()
+    assert created[0].disconnected is True
+    assert created[0].credentials == (123, "server-hash")
 
 
 @pytest.mark.asyncio
-async def test_connect_restricts_existing_session_file_permissions(tmp_path: Path) -> None:
-    session_file = tmp_path / "telegram.session"
-    session_file.write_text("session", encoding="utf-8")
-    session_file.chmod(0o644)
-    manager = TelegramClientManager(
-        session_path=tmp_path / "telegram",
-        client_factory=_FakeClientFactory(),
+async def test_delete_saved_messages_is_user_scoped_and_refreshes_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = SimpleNamespace(
+        state="connected",
+        session_encrypted="encrypted-old",
+        password_required=False,
+        pending_phone_code_hash_encrypted=None,
+        pending_expires_at=None,
+        telegram_user_id=123,
+        generation=4,
+    )
+    session = _FakeSession(connection)
+    telegram_client = _FakeClient(object(), 1, "hash")
+
+    @asynccontextmanager
+    async def fake_client(**_: Any):
+        yield telegram_client
+
+    monkeypatch.setattr(client_module, "decrypt_secret", lambda value, *, context: "plain-session")
+    monkeypatch.setattr(client_module, "encrypt_secret", lambda value, *, context: f"encrypted:{value}")
+    monkeypatch.setattr(client_module, "short_lived_client", fake_client)
+
+    await delete_saved_messages(
+        user_id="user-a",
+        telegram_user_id=123,
+        connection_generation=4,
+        message_ids=[7, 7, 9],
+        session=session,  # type: ignore[arg-type]
     )
 
-    await manager.connect(api_id=1001, api_hash="hash")
-
-    assert session_file.stat().st_mode & 0o777 == 0o600
-
-
-@pytest.mark.asyncio
-async def test_connect_failure_does_not_cache_failed_client(tmp_path: Path) -> None:
-    factory = _FakeClientFactory(fail_connect=True)
-    manager = TelegramClientManager(session_path=tmp_path / "telegram", client_factory=factory)
-
-    with pytest.raises(RuntimeError, match="connect failed"):
-        await manager.connect(api_id=1001, api_hash="hash")
-    with pytest.raises(RuntimeError, match="connect failed"):
-        await manager.connect(api_id=1001, api_hash="hash")
-
-    assert len(factory.calls) == 2
-    assert factory.created_clients[0].disconnect_calls == 1
-    assert factory.created_clients[1].disconnect_calls == 1
+    assert telegram_client.deleted == [("me", [7, 9])]
+    assert connection.session_encrypted == "encrypted:refreshed-session"
+    assert session.flush_calls == 1
+    assert session.commit_calls == 0
 
 
 @pytest.mark.asyncio
-async def test_get_connected_client_returns_none_when_disconnected(tmp_path: Path) -> None:
-    manager = TelegramClientManager(session_path=tmp_path / "telegram", client_factory=_FakeClientFactory())
+async def test_delete_crypto_erases_a_corrupt_saved_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = SimpleNamespace(
+        state="connected",
+        session_encrypted="corrupt",
+        phone_encrypted="phone",
+        password_required=False,
+        pending_phone_code_hash_encrypted=None,
+        pending_expires_at=None,
+        telegram_user_id=123,
+        generation=4,
+    )
+    session = _FakeSession(connection)
+    monkeypatch.setattr(
+        client_module,
+        "decrypt_secret",
+        lambda value, *, context: (_ for _ in ()).throw(
+            SecretDecryptionError("corrupt")
+        ),
+    )
 
-    assert manager.get_connected_client() is None
+    with pytest.raises(TelegramClientNotConnectedError):
+        await delete_saved_messages(
+            user_id="user-a",
+            telegram_user_id=123,
+            connection_generation=4,
+            message_ids=[7],
+            session=session,  # type: ignore[arg-type]
+        )
 
-    connected_client = await manager.connect(api_id=1001, api_hash="hash")
-    assert manager.get_connected_client() is connected_client
-    connected_client.connected = False
-
-    assert manager.get_connected_client() is None
+    assert connection.state == "disconnected"
+    assert connection.telegram_user_id is None
+    assert connection.phone_encrypted is None
+    assert connection.session_encrypted is None
+    assert connection.generation == 5
+    assert session.commit_calls == 1
 
 
 @pytest.mark.asyncio
-async def test_reset_session_supports_explicit_session_suffix_path(tmp_path: Path) -> None:
-    session_path = tmp_path / "telegram.session"
-    session_journal = tmp_path / "telegram.session-journal"
-    session_path.write_text("session", encoding="utf-8")
-    session_journal.write_text("journal", encoding="utf-8")
+async def test_delete_saved_messages_rejects_session_with_wrong_telegram_principal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = SimpleNamespace(
+        state="connected",
+        session_encrypted="encrypted-old",
+        telegram_user_id=123,
+        generation=4,
+        password_required=False,
+        pending_phone_code_hash_encrypted=None,
+        pending_expires_at=None,
+    )
+    session = _FakeSession(connection)
+    telegram_client = _FakeClient(object(), 1, "hash")
+    telegram_client.telegram_user_id = 999
 
-    manager = TelegramClientManager(session_path=session_path, client_factory=_FakeClientFactory())
+    @asynccontextmanager
+    async def fake_client(**_: Any):
+        yield telegram_client
 
-    assert manager.has_session() is True
+    monkeypatch.setattr(client_module, "decrypt_secret", lambda value, *, context: "plain-session")
+    monkeypatch.setattr(client_module, "short_lived_client", fake_client)
 
-    await manager.reset_session()
+    with pytest.raises(TelegramMessageProvenanceError):
+        await delete_saved_messages(
+            user_id="user-a",
+            telegram_user_id=123,
+            connection_generation=4,
+            message_ids=[7],
+            session=session,  # type: ignore[arg-type]
+        )
+    assert telegram_client.deleted == []
+    assert connection.state == "disconnected"
+    assert connection.telegram_user_id is None
+    assert connection.generation == 5
+    assert connection.session_encrypted is None
+    assert session.commit_calls == 1
 
-    assert manager.has_session() is False
-    assert not session_path.exists()
-    assert not session_journal.exists()
+
+@pytest.mark.asyncio
+async def test_delete_saved_messages_downgrades_revoked_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = SimpleNamespace(
+        state="connected",
+        session_encrypted="encrypted-old",
+        password_required=True,
+        pending_phone_code_hash_encrypted="challenge",
+        pending_expires_at=object(),
+        telegram_user_id=123,
+        generation=4,
+    )
+    session = _FakeSession(connection)
+    telegram_client = _FakeClient(object(), 1, "hash")
+    telegram_client.authorized = False
+
+    @asynccontextmanager
+    async def fake_client(**_: Any):
+        yield telegram_client
+
+    monkeypatch.setattr(client_module, "decrypt_secret", lambda value, *, context: "plain-session")
+    monkeypatch.setattr(client_module, "short_lived_client", fake_client)
+
+    with pytest.raises(TelegramClientNotConnectedError):
+        await delete_saved_messages(
+            user_id="user-a",
+            telegram_user_id=123,
+            connection_generation=4,
+            message_ids=[7],
+            session=session,  # type: ignore[arg-type]
+        )
+
+    assert connection.state == "disconnected"
+    assert connection.password_required is False
+    assert connection.pending_phone_code_hash_encrypted is None
+    assert connection.telegram_user_id is None
+    assert connection.generation == 5
+    assert connection.session_encrypted is None
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_saved_messages_rejects_missing_user_connection() -> None:
+    session = _FakeSession(None)
+    with pytest.raises(TelegramMessageProvenanceError):
+        await delete_saved_messages(
+            user_id="user-a",
+            telegram_user_id=123,
+            connection_generation=4,
+            message_ids=[7],
+            session=session,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.asyncio
+async def test_delete_saved_messages_rejects_old_connection_generation() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session:
+            session.add(
+                User(
+                    id="user-a",
+                    email="user-a@example.com",
+                    normalized_email="user-a@example.com",
+                    display_name="User A",
+                    password_hash="hash",
+                )
+            )
+            session.add(
+                TelegramConnection(
+                    user_id="user-a",
+                    telegram_user_id=123,
+                    generation=5,
+                    state="connected",
+                    session_encrypted="current-session",
+                )
+            )
+            await session.commit()
+
+            with pytest.raises(TelegramMessageProvenanceError):
+                await delete_saved_messages(
+                    user_id="user-a",
+                    telegram_user_id=123,
+                    connection_generation=4,
+                    message_ids=[7],
+                    session=session,
+                )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_revoke_connection_crypto_erases_when_telegram_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = SimpleNamespace(
+        telegram_user_id=123,
+        state="connected",
+        phone_encrypted="phone",
+        session_encrypted="session",
+        password_required=True,
+        pending_phone_code_hash_encrypted="challenge",
+        pending_expires_at=object(),
+        generation=7,
+    )
+    session = _FakeSession(connection)
+    monkeypatch.setattr(
+        client_module,
+        "decrypt_secret",
+        lambda value, *, context: (_ for _ in ()).throw(ValueError("corrupt")),
+    )
+
+    await revoke_telegram_connection(user_id="user-a", session=session)  # type: ignore[arg-type]
+
+    assert connection.telegram_user_id is None
+    assert connection.phone_encrypted is None
+    assert connection.session_encrypted is None
+    assert connection.pending_phone_code_hash_encrypted is None
+    assert connection.state == "disconnected"
+    assert connection.generation == 8
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_revoke_connection_commits_before_bounded_remote_logout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = SimpleNamespace(
+        telegram_user_id=123,
+        state="connected",
+        phone_encrypted="phone",
+        session_encrypted="session",
+        password_required=False,
+        pending_phone_code_hash_encrypted=None,
+        pending_expires_at=None,
+        generation=7,
+    )
+    session = _FakeSession(connection)
+    logout_started = asyncio.Event()
+
+    class _HangingClient(_FakeClient):
+        async def log_out(self) -> None:
+            logout_started.set()
+            await asyncio.Event().wait()
+
+    telegram_client = _HangingClient(object(), 1, "hash")
+
+    @asynccontextmanager
+    async def fake_client(**_: Any):
+        yield telegram_client
+
+    monkeypatch.setattr(client_module, "decrypt_secret", lambda value, *, context: "plain-session")
+    monkeypatch.setattr(client_module, "short_lived_client", fake_client)
+    monkeypatch.setattr(client_module, "TELEGRAM_LOGOUT_TIMEOUT_SECONDS", 0.01)
+
+    await revoke_telegram_connection(user_id="user-a", session=session)  # type: ignore[arg-type]
+
+    assert logout_started.is_set()
+    assert session.commit_calls == 1
+    assert connection.session_encrypted is None
+    assert connection.state == "disconnected"

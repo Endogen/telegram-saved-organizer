@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -79,7 +80,7 @@ class _FakeTagService:
 @pytest.fixture
 def tag_context() -> tuple[Any, _FakeTagService]:
     service = _FakeTagService()
-    app = create_app(api_token=None)
+    app = create_app(check_migrations=False)
 
     async def override_tag_service() -> _FakeTagService:
         return service
@@ -337,8 +338,10 @@ async def test_remove_tag_from_message_endpoint_returns_bad_request_on_validatio
 @pytest.mark.asyncio
 async def test_get_tag_service_dependency_returns_tag_service() -> None:
     session = object()
+    user = SimpleNamespace(id="00000000-0000-0000-0000-000000000001")
 
-    service = await get_tag_service(session=session)  # type: ignore[arg-type]
+    service = await get_tag_service(session=session, user=user)  # type: ignore[arg-type]
 
     assert isinstance(service, TagService)
     assert service.session is session
+    assert service.user_id == user.id

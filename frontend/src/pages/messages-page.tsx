@@ -8,6 +8,7 @@ import {
   deleteMessage,
   listMessages,
   moveMessageToCategory,
+  TelegramConnectionChangedError,
   TelegramNotConnectedError,
 } from "@/api/messages";
 import { addTagsToMessage, createTag, listTags, removeTagFromMessage } from "@/api/tags";
@@ -25,116 +26,6 @@ import { MESSAGE_DROP_TO_CATEGORY_EVENT, readMessageDropToCategoryEvent } from "
 import type { CategoryWithCount } from "@/types/category";
 import type { MessageListItem, MessageTag } from "@/types/message";
 
-function isoHoursAgo(hours: number): string {
-  return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-}
-
-const sampleMessages: MessageListItem[] = [
-  {
-    id: 1,
-    telegram_id: 1401,
-    content:
-      "FastAPI async endpoint checklist: use AsyncSession dependencies, ASGITransport in tests, and avoid sync threadpool deps in this sandbox.",
-    media_type: null,
-    file_name: null,
-    file_size: null,
-    mime_type: null,
-    url: null,
-    sender_name: "Saved Messages",
-    date: isoHoursAgo(2),
-    category_id: 7,
-    raw_data: {},
-    created_at: isoHoursAgo(2),
-    updated_at: isoHoursAgo(2),
-    category: {
-      id: 7,
-      name: "Text",
-      slug: "text",
-      icon: "message-square",
-      color: "#6B7280",
-    },
-    tags: [
-      { id: 1, name: "backend", color: "#0EA5E9" },
-      { id: 2, name: "tests", color: "#10B981" },
-    ],
-  },
-  {
-    id: 2,
-    telegram_id: 1402,
-    content: "Telethon 1.42 release notes and migration tips.",
-    media_type: null,
-    file_name: null,
-    file_size: null,
-    mime_type: null,
-    url: "https://github.com/LonamiWebs/Telethon/releases",
-    sender_name: "Saved Messages",
-    date: isoHoursAgo(20),
-    category_id: 4,
-    raw_data: {},
-    created_at: isoHoursAgo(20),
-    updated_at: isoHoursAgo(20),
-    category: {
-      id: 4,
-      name: "Repositories",
-      slug: "repositories",
-      icon: "code",
-      color: "#4F46E5",
-    },
-    tags: [
-      { id: 3, name: "telegram", color: "#8B5CF6" },
-      { id: 4, name: "release", color: null },
-    ],
-  },
-  {
-    id: 3,
-    telegram_id: 1403,
-    content: null,
-    media_type: "audio/ogg",
-    file_name: "standup-notes.ogg",
-    file_size: 280194,
-    mime_type: "audio/ogg",
-    url: null,
-    sender_name: "Saved Messages",
-    date: isoHoursAgo(52),
-    category_id: 2,
-    raw_data: {},
-    created_at: isoHoursAgo(52),
-    updated_at: isoHoursAgo(52),
-    category: {
-      id: 2,
-      name: "Audio",
-      slug: "audio",
-      icon: "music",
-      color: "#2563EB",
-    },
-    tags: [{ id: 5, name: "meeting", color: "#F59E0B" }],
-  },
-  {
-    id: 4,
-    telegram_id: 1404,
-    content: "UI motion references for card grid enter/exit and drag affordances.",
-    media_type: "document",
-    file_name: "motion-notes.pdf",
-    file_size: 481023,
-    mime_type: "application/pdf",
-    url: "https://motion.dev/docs",
-    sender_name: "Saved Messages",
-    date: isoHoursAgo(130),
-    category_id: 6,
-    raw_data: {},
-    created_at: isoHoursAgo(130),
-    updated_at: isoHoursAgo(130),
-    category: {
-      id: 6,
-      name: "Documents",
-      slug: "documents",
-      icon: "file-text",
-      color: "#F59E0B",
-    },
-    tags: [],
-  },
-];
-
 function formatCategoryFilter(slug: string): string {
   return slug
     .split("-")
@@ -150,14 +41,6 @@ const sortOptions: { value: SortOption; label: string }[] = [
   { value: "category", label: "Category" },
   { value: "sender", label: "Sender" },
 ];
-
-function compareByDate(first: MessageListItem, second: MessageListItem): number {
-  const firstTimestamp = Date.parse(first.date);
-  const secondTimestamp = Date.parse(second.date);
-  const safeFirst = Number.isNaN(firstTimestamp) ? 0 : firstTimestamp;
-  const safeSecond = Number.isNaN(secondTimestamp) ? 0 : secondTimestamp;
-  return safeSecond - safeFirst;
-}
 
 function normalizeTagKey(name: string): string {
   return name.trim().toLowerCase();
@@ -220,38 +103,6 @@ function deriveCategoriesFromMessages(messages: MessageListItem[]): CategoryWith
   });
 }
 
-function createLocalTag(name: string, existingTags: MessageTag[]): MessageTag {
-  const maxId = existingTags.reduce((currentMax, tag) => Math.max(currentMax, tag.id), 0);
-  return { id: maxId + 1, name, color: null };
-}
-
-function localMoveMessage(
-  messages: MessageListItem[],
-  messageId: number,
-  targetCategory: CategoryWithCount,
-): MessageListItem[] {
-  const now = new Date().toISOString();
-
-  return messages.map((message) => {
-    if (message.id !== messageId) {
-      return message;
-    }
-
-    return {
-      ...message,
-      category_id: targetCategory.id,
-      category: {
-        id: targetCategory.id,
-        name: targetCategory.name,
-        slug: targetCategory.slug,
-        icon: targetCategory.icon,
-        color: targetCategory.color,
-      },
-      updated_at: now,
-    };
-  });
-}
-
 function localMoveMessages(
   messages: MessageListItem[],
   messageIds: number[],
@@ -280,46 +131,17 @@ function localMoveMessages(
   });
 }
 
-function localAddTag(messages: MessageListItem[], messageId: number, tag: MessageTag): MessageListItem[] {
-  const now = new Date().toISOString();
-
-  return messages.map((message) => {
-    if (message.id !== messageId) {
-      return message;
-    }
-    if (message.tags.some((currentTag) => currentTag.id === tag.id)) {
-      return message;
-    }
-
-    return { ...message, tags: [...message.tags, tag], updated_at: now };
-  });
-}
-
-function localRemoveTag(messages: MessageListItem[], messageId: number, tagId: number): MessageListItem[] {
-  const now = new Date().toISOString();
-
-  return messages.map((message) => {
-    if (message.id !== messageId) {
-      return message;
-    }
-
-    return {
-      ...message,
-      tags: message.tags.filter((tag) => tag.id !== tagId),
-      updated_at: now,
-    };
-  });
-}
-
 export function MessagesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [messages, setMessages] = useState<MessageListItem[]>([]);
   const [knownTags, setKnownTags] = useState<MessageTag[]>([]);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
-  const [isApiBackedData, setIsApiBackedData] = useState(false);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [totalMessages, setTotalMessages] = useState(0);
+  const [reloadRevision, setReloadRevision] = useState(0);
   const [pageError, setPageError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [selectedTagFilters, setSelectedTagFilters] = useState<string[]>([]);
   const [sortOption, setSortOption] = useState<SortOption>("date_desc");
   const [moveDialogMessageId, setMoveDialogMessageId] = useState<number | null>(null);
@@ -343,53 +165,74 @@ export function MessagesPage() {
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
 
   useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedSearchQuery(normalizedSearchQuery);
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [normalizedSearchQuery]);
+
+  useEffect(() => {
     let isCanceled = false;
 
-    async function hydrateFromApi() {
-      setIsInitialLoading(true);
-
+    async function hydrateTags() {
       try {
-        const messageResponse = await listMessages({ page: 1, per_page: 10000, sort: "date_desc" });
-        if (isCanceled) {
-          return;
-        }
-
-        setMessages(messageResponse.items);
-        setIsApiBackedData(true);
-        setStatusMessage(null);
-
-        try {
-          const apiTags = await listTags();
-          if (!isCanceled) {
-            setKnownTags(mergeTags(apiTags, deriveTagsFromMessages(messageResponse.items)));
-          }
-        } catch {
-          if (!isCanceled) {
-            setKnownTags(deriveTagsFromMessages(messageResponse.items));
-          }
-        }
+        const apiTags = await listTags();
+        if (!isCanceled) setKnownTags(apiTags);
       } catch {
-        if (isCanceled) {
-          return;
-        }
-
-        setMessages(sampleMessages);
-        setKnownTags(deriveTagsFromMessages(sampleMessages));
-        setIsApiBackedData(false);
-        setStatusMessage("API unavailable. Showing local sample messages with local-only actions.");
-      } finally {
-        if (!isCanceled) {
-          setIsInitialLoading(false);
-        }
+        // The message library remains usable when the optional tag catalogue
+        // cannot be loaded; tags present on the current page are still shown.
       }
     }
 
-    void hydrateFromApi();
+    void hydrateTags();
 
     return () => {
       isCanceled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let isCanceled = false;
+
+    async function hydrateMessages() {
+      setIsInitialLoading(true);
+      setLoadError(null);
+      try {
+        const messageResponse = await listMessages({
+          page: currentPage,
+          per_page: itemsPerPage,
+          sort: sortOption,
+          category: categoryFilter || undefined,
+          search: debouncedSearchQuery || undefined,
+          tag: selectedTagFilters.length > 0 ? selectedTagFilters : undefined,
+        });
+        if (isCanceled) return;
+        setMessages(messageResponse.items);
+        setTotalMessages(messageResponse.total);
+        setKnownTags((currentTags) => mergeTags(currentTags, deriveTagsFromMessages(messageResponse.items)));
+      } catch (error) {
+        if (isCanceled) return;
+        setMessages([]);
+        setTotalMessages(0);
+        setLoadError(toErrorMessage(error, "Unable to load your messages right now."));
+      } finally {
+        if (!isCanceled) setIsInitialLoading(false);
+      }
+    }
+
+    void hydrateMessages();
+    return () => {
+      isCanceled = true;
+    };
+  }, [
+    categoryFilter,
+    currentPage,
+    debouncedSearchQuery,
+    itemsPerPage,
+    reloadRevision,
+    selectedTagFilters,
+    sortOption,
+  ]);
 
   const actionCategories = useMemo(
     () => (fetchedCategories.length > 0 ? fetchedCategories : deriveCategoriesFromMessages(messages)),
@@ -438,64 +281,22 @@ export function MessagesPage() {
     }));
   }, [knownTags, messages]);
 
-  const filteredAndSorted = useMemo(() => {
-    const filtered = messages.filter((message) => {
-      const searchableContent = [
-        message.content ?? "",
-        message.url ?? "",
-        message.sender_name ?? "",
-        message.tags.map((tag) => tag.name).join(" "),
-      ]
-        .join(" ")
-        .toLowerCase();
-
-      const messageTags = new Set(message.tags.map((tag) => normalizeTagKey(tag.name)));
-      const matchesSearch = searchableContent.includes(normalizedSearchQuery);
-      const matchesCategory = categoryFilter.length === 0 || message.category.slug === categoryFilter;
-      const matchesTags =
-        selectedTagFilters.length === 0 || selectedTagFilters.every((tagFilter) => messageTags.has(tagFilter));
-
-      return matchesSearch && matchesCategory && matchesTags;
-    });
-
-    return filtered.sort((first, second) => {
-      if (sortOption === "date_desc") {
-        return compareByDate(first, second);
-      }
-
-      if (sortOption === "date_asc") {
-        return compareByDate(second, first);
-      }
-
-      if (sortOption === "category") {
-        const byCategory = first.category.name.localeCompare(second.category.name);
-        if (byCategory !== 0) {
-          return byCategory;
-        }
-        return compareByDate(first, second);
-      }
-
-      const firstSender = (first.sender_name ?? "").trim().toLowerCase();
-      const secondSender = (second.sender_name ?? "").trim().toLowerCase();
-      const bySender = firstSender.localeCompare(secondSender);
-      if (bySender !== 0) {
-        return bySender;
-      }
-      return compareByDate(first, second);
-    });
-  }, [categoryFilter, messages, normalizedSearchQuery, selectedTagFilters, sortOption]);
+  const filteredAndSorted = messages;
 
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
   }, [categoryFilter, normalizedSearchQuery, selectedTagFilters, sortOption]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredAndSorted.length / itemsPerPage));
+  const totalPages = Math.max(1, Math.ceil(totalMessages / itemsPerPage));
   const safePage = Math.min(currentPage, totalPages);
-  const paginatedMessages = useMemo(() => {
-    const startIndex = (safePage - 1) * itemsPerPage;
-    return filteredAndSorted.slice(startIndex, startIndex + itemsPerPage);
-  }, [filteredAndSorted, safePage, itemsPerPage]);
+  const paginatedMessages = messages;
+
+  useEffect(() => {
+    if (!isInitialLoading && currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, isInitialLoading, totalPages]);
 
   function goToPage(page: number) {
     const clamped = Math.max(1, Math.min(page, totalPages));
@@ -560,27 +361,16 @@ export function MessagesPage() {
     categoryFilter.length > 0 ||
     selectedTagFilters.length > 0 ||
     sortOption !== "date_desc";
-  const hasAnyMessages = messages.length > 0;
-  const hasResults = filteredAndSorted.length > 0;
+  const hasResults = messages.length > 0;
 
   const moveSingleMessageToCategory = useCallback(
     async (messageId: number, categoryId: number) => {
-      if (isApiBackedData) {
-        const updatedMessage = await moveMessageToCategory(messageId, categoryId);
-        setMessages((currentMessages) =>
-          currentMessages.map((message) => (message.id === messageId ? updatedMessage : message)),
-        );
-        return;
-      }
-
-      const targetCategory = actionCategories.find((category) => category.id === categoryId);
-      if (!targetCategory) {
-        throw new Error("Selected category was not found.");
-      }
-
-      setMessages((currentMessages) => localMoveMessage(currentMessages, messageId, targetCategory));
+      const updatedMessage = await moveMessageToCategory(messageId, categoryId);
+      setMessages((currentMessages) =>
+        currentMessages.map((message) => (message.id === messageId ? updatedMessage : message)),
+      );
     },
-    [actionCategories, isApiBackedData],
+    [],
   );
 
   useEffect(() => {
@@ -697,19 +487,11 @@ export function MessagesPage() {
     setIsTagSubmitting(true);
 
     try {
-      if (isApiBackedData) {
-        const updatedTags = await addTagsToMessage(messageId, [tagId]);
-        setKnownTags((currentTags) => mergeTags(currentTags, updatedTags));
-        setMessages((currentMessages) =>
-          currentMessages.map((message) => (message.id === messageId ? { ...message, tags: updatedTags } : message)),
-        );
-      } else {
-        const tag = knownTags.find((entry) => entry.id === tagId);
-        if (!tag) {
-          throw new Error("Selected tag was not found.");
-        }
-        setMessages((currentMessages) => localAddTag(currentMessages, messageId, tag));
-      }
+      const updatedTags = await addTagsToMessage(messageId, [tagId]);
+      setKnownTags((currentTags) => mergeTags(currentTags, updatedTags));
+      setMessages((currentMessages) =>
+        currentMessages.map((message) => (message.id === messageId ? { ...message, tags: updatedTags } : message)),
+      );
     } catch (error) {
       setTagDialogError(toErrorMessage(error, "Unable to add that tag."));
     } finally {
@@ -722,15 +504,11 @@ export function MessagesPage() {
     setIsTagSubmitting(true);
 
     try {
-      if (isApiBackedData) {
-        const updatedTags = await removeTagFromMessage(messageId, tagId);
-        setKnownTags((currentTags) => mergeTags(currentTags, updatedTags));
-        setMessages((currentMessages) =>
-          currentMessages.map((message) => (message.id === messageId ? { ...message, tags: updatedTags } : message)),
-        );
-      } else {
-        setMessages((currentMessages) => localRemoveTag(currentMessages, messageId, tagId));
-      }
+      const updatedTags = await removeTagFromMessage(messageId, tagId);
+      setKnownTags((currentTags) => mergeTags(currentTags, updatedTags));
+      setMessages((currentMessages) =>
+        currentMessages.map((message) => (message.id === messageId ? { ...message, tags: updatedTags } : message)),
+      );
     } catch (error) {
       setTagDialogError(toErrorMessage(error, "Unable to remove that tag."));
     } finally {
@@ -748,23 +526,14 @@ export function MessagesPage() {
     setIsTagSubmitting(true);
 
     try {
-      if (isApiBackedData) {
-        const created = await createTag({ name: normalizedName });
-        const updatedTags = await addTagsToMessage(activeTagMessage.id, [created.id]);
-        setKnownTags((currentTags) => mergeTags(currentTags, [created, ...updatedTags]));
-        setMessages((currentMessages) =>
-          currentMessages.map((message) =>
-            message.id === activeTagMessage.id ? { ...message, tags: updatedTags } : message,
-          ),
-        );
-      } else {
-        const existingTag = knownTags.find(
-          (tag) => normalizeTagKey(tag.name) === normalizeTagKey(normalizedName),
-        );
-        const tagToAttach = existingTag ?? createLocalTag(normalizedName, knownTags);
-        setKnownTags((currentTags) => mergeTags(currentTags, [tagToAttach]));
-        setMessages((currentMessages) => localAddTag(currentMessages, activeTagMessage.id, tagToAttach));
-      }
+      const created = await createTag({ name: normalizedName });
+      const updatedTags = await addTagsToMessage(activeTagMessage.id, [created.id]);
+      setKnownTags((currentTags) => mergeTags(currentTags, [created, ...updatedTags]));
+      setMessages((currentMessages) =>
+        currentMessages.map((message) =>
+          message.id === activeTagMessage.id ? { ...message, tags: updatedTags } : message,
+        ),
+      );
     } catch (error) {
       setTagDialogError(toErrorMessage(error, "Unable to create tag."));
     } finally {
@@ -784,13 +553,12 @@ export function MessagesPage() {
     setPendingDeleteMessageId(targetMessage.id);
 
     try {
-      if (isApiBackedData) {
-        await deleteMessage(targetMessage.id, localOnly);
-      }
+      await deleteMessage(targetMessage.id, localOnly);
 
       setMessages((currentMessages) =>
         currentMessages.filter((message) => message.id !== targetMessage.id),
       );
+      setTotalMessages((currentTotal) => Math.max(0, currentTotal - 1));
       setSelectedMessageIds((currentIds) =>
         currentIds.filter((messageId) => messageId !== targetMessage.id),
       );
@@ -804,9 +572,14 @@ export function MessagesPage() {
         setDetailDialogMessageId(null);
       }
     } catch (error) {
-      if (error instanceof TelegramNotConnectedError) {
+      if (
+        error instanceof TelegramNotConnectedError
+        || error instanceof TelegramConnectionChangedError
+      ) {
         const deleteLocally = window.confirm(
-          "Telegram is not connected. Delete this message locally only? It will remain in your Telegram Saved Messages.",
+          error instanceof TelegramConnectionChangedError
+            ? "This message was imported from a previous Telegram connection. Delete it locally only? No Telegram message will be changed."
+            : "Telegram is not connected. Delete this message locally only? It will remain in your Telegram Saved Messages.",
         );
         if (deleteLocally) {
           await handleDeleteMessage(targetMessage, true);
@@ -841,9 +614,7 @@ export function MessagesPage() {
     setBulkActionPending("move");
 
     try {
-      if (isApiBackedData) {
-        await bulkMoveMessages(targetMessageIds, bulkMoveCategoryId);
-      }
+      await bulkMoveMessages(targetMessageIds, bulkMoveCategoryId);
 
       setMessages((currentMessages) =>
         localMoveMessages(currentMessages, targetMessageIds, targetCategory),
@@ -877,13 +648,12 @@ export function MessagesPage() {
     setBulkActionPending("delete");
 
     try {
-      if (isApiBackedData) {
-        await bulkDeleteMessages(targetMessageIds, localOnly);
-      }
+      await bulkDeleteMessages(targetMessageIds, localOnly);
 
       setMessages((currentMessages) =>
         currentMessages.filter((message) => !targetIdSet.has(message.id)),
       );
+      setTotalMessages((currentTotal) => Math.max(0, currentTotal - targetMessageIds.length));
       setSelectedMessageIds([]);
 
       if (moveDialogMessageId !== null && targetIdSet.has(moveDialogMessageId)) {
@@ -896,9 +666,14 @@ export function MessagesPage() {
         setDetailDialogMessageId(null);
       }
     } catch (error) {
-      if (error instanceof TelegramNotConnectedError) {
+      if (
+        error instanceof TelegramNotConnectedError
+        || error instanceof TelegramConnectionChangedError
+      ) {
         const deleteLocally = window.confirm(
-          "Telegram is not connected. Delete selected messages locally only? They will remain in your Telegram Saved Messages.",
+          error instanceof TelegramConnectionChangedError
+            ? "Some selected messages belong to a previous Telegram connection. Delete them locally only? No Telegram messages will be changed."
+            : "Telegram is not connected. Delete selected messages locally only? They will remain in your Telegram Saved Messages.",
         );
         if (deleteLocally) {
           await handleBulkDelete(true);
@@ -920,8 +695,22 @@ export function MessagesPage() {
           Search by content, URL, sender, and tags. Layer filters to narrow down your Saved Messages quickly.
           {categoryFilter.length > 0 ? ` Active category: ${formatCategoryFilter(categoryFilter)}.` : ""}
         </p>
-        {statusMessage ? (
-          <StatePanel tone="warning" title="Running with local fallback data." description={statusMessage} className="mt-2 text-xs" />
+        {loadError ? (
+          <StatePanel
+            tone="error"
+            title="Messages could not be loaded."
+            description={loadError}
+            className="mt-2 text-xs"
+            action={(
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setReloadRevision((current) => current + 1)}
+              >
+                Try again
+              </Button>
+            )}
+          />
         ) : null}
         {pageError ? (
           <StatePanel tone="error" title="Message action failed." description={pageError} className="mt-2 text-xs" />
@@ -1046,10 +835,8 @@ export function MessagesPage() {
         <p className="text-sm text-[hsl(var(--muted-foreground))]">
           {isInitialLoading
             ? "Loading messages..."
-            : filteredAndSorted.length === messages.length
-              ? `${filteredAndSorted.length} messages`
-              : `${filteredAndSorted.length} of ${messages.length} messages`}
-          {!isInitialLoading && filteredAndSorted.length > itemsPerPage
+            : `${totalMessages} ${hasActiveFilters ? "matching " : ""}message${totalMessages === 1 ? "" : "s"}`}
+          {!isInitialLoading && totalMessages > itemsPerPage
             ? ` · Page ${safePage} of ${totalPages}`
             : ""}
         </p>
@@ -1078,7 +865,7 @@ export function MessagesPage() {
               size="sm"
               className="gap-1.5"
               onClick={activateBulkSelectionMode}
-              disabled={isInitialLoading || filteredAndSorted.length === 0}
+              disabled={isInitialLoading || messages.length === 0}
             >
               <CheckSquare2 className="size-3.5" />
               Bulk select
@@ -1090,7 +877,7 @@ export function MessagesPage() {
       {isBulkSelectionMode && !isInitialLoading ? (
         <BulkActions
           selectedCount={selectedMessageIds.length}
-          filteredCount={filteredAndSorted.length}
+          filteredCount={messages.length}
           categories={actionCategories}
           selectedCategoryId={bulkMoveCategoryId}
           isMoveSubmitting={bulkActionPending === "move"}
@@ -1135,7 +922,7 @@ export function MessagesPage() {
         />
       )}
 
-      {!isInitialLoading && totalPages > 1 ? (
+      {!isInitialLoading && loadError === null && totalPages > 1 ? (
         <div className="mt-5 flex items-center justify-center gap-2">
           <Button
             variant="outline"
@@ -1194,17 +981,17 @@ export function MessagesPage() {
         </div>
       ) : null}
 
-      {!isInitialLoading && !hasResults ? (
+      {!isInitialLoading && loadError === null && !hasResults ? (
         <StatePanel
           className="mt-5"
-          title={hasAnyMessages ? "No messages match these filters." : "No messages yet."}
+          title={hasActiveFilters ? "No messages match these filters." : "No messages yet."}
           description={
-            hasAnyMessages
+            hasActiveFilters
               ? "Adjust search or filter controls to broaden results."
               : "Connect Telegram and run a scan to import Saved Messages."
           }
           action={
-            hasAnyMessages && hasActiveFilters ? (
+            hasActiveFilters ? (
               <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={clearFilters}>
                 <X className="size-3.5" />
                 Clear filters

@@ -1,6 +1,5 @@
-"""Authentication package for Telegram connection endpoints."""
+"""Per-user Telegram connection package."""
 
-from app.auth.router import get_auth_service, router
 from app.auth.service import TelegramAuthService
 
-__all__ = ["TelegramAuthService", "get_auth_service", "router"]
+__all__ = ["TelegramAuthService"]

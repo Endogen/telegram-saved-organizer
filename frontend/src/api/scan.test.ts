@@ -11,21 +11,25 @@ function createResponse(payload: unknown, ok = true): Response {
 }
 
 const idleScanStatus: ScanStatus = {
-  is_running: false,
-  is_complete: false,
+  job_id: null,
+  state: "idle",
   stop_requested: false,
   messages_scanned: 0,
   pages_scanned: 0,
   page_size: 100,
+  max_messages: null,
+  max_runtime_seconds: null,
   last_message_id: null,
   started_at: null,
   finished_at: null,
   error: null,
+  completion_reason: null,
 };
 
 const runningScanStatus: ScanStatus = {
   ...idleScanStatus,
-  is_running: true,
+  job_id: "job-a",
+  state: "running",
   messages_scanned: 50,
   pages_scanned: 1,
   started_at: "2026-02-15T10:00:00.000Z",

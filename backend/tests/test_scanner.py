@@ -8,7 +8,14 @@ from typing import Any
 
 import pytest
 
-from app.telegram.scanner import ScanAlreadyRunningError, ScanPage, SavedMessagesScanner
+from app.telegram.scanner import (
+    MESSAGE_LIMIT_REACHED,
+    SLICE_PAGE_LIMIT,
+    SLICE_TIME_LIMIT,
+    ScanAlreadyRunningError,
+    ScanPage,
+    SavedMessagesScanner,
+)
 
 
 @dataclass(slots=True)
@@ -134,6 +141,107 @@ async def test_scanner_paginates_and_tracks_progress() -> None:
 
 
 @pytest.mark.asyncio
+async def test_scanner_resumes_cursor_and_yields_after_bounded_page_slice() -> None:
+    now = datetime.now(tz=UTC)
+    client = _FakeTelegramClient(
+        pages_by_offset={
+            99: [
+                _FakeMessage(id=5, date=now),
+                _FakeMessage(id=4, date=now),
+                _FakeMessage(id=3, date=now),
+            ],
+            4: [
+                _FakeMessage(id=3, date=now),
+                _FakeMessage(id=2, date=now),
+                _FakeMessage(id=1, date=now),
+            ],
+        }
+    )
+    seen: list[ScanPage] = []
+
+    async def on_page(page: ScanPage) -> None:
+        seen.append(page)
+
+    first = await SavedMessagesScanner().scan(
+        client=client,
+        page_size=2,
+        start_offset_id=99,
+        max_messages=10,
+        max_pages=1,
+        on_page=on_page,
+    )
+
+    assert first.is_complete is False
+    assert first.completion_reason == SLICE_PAGE_LIMIT
+    assert first.last_message_id == 4
+    assert [message.telegram_id for message in seen[0].messages] == [5, 4]
+    assert client.calls == [("me", 3, 99)]
+
+    second = await SavedMessagesScanner().scan(
+        client=client,
+        page_size=2,
+        start_offset_id=first.last_message_id,
+        max_messages=10,
+        max_pages=1,
+    )
+    assert second.last_message_id == 2
+    assert client.calls[-1] == ("me", 3, 4)
+
+
+@pytest.mark.asyncio
+async def test_scanner_enforces_exact_message_quota_with_lookahead() -> None:
+    now = datetime.now(tz=UTC)
+    client = _FakeTelegramClient(
+        pages_by_offset={
+            0: [
+                _FakeMessage(id=3, date=now),
+                _FakeMessage(id=2, date=now),
+                _FakeMessage(id=1, date=now),
+            ]
+        }
+    )
+    seen: list[ScanPage] = []
+
+    async def on_page(page: ScanPage) -> None:
+        seen.append(page)
+
+    progress = await SavedMessagesScanner().scan(
+        client=client,
+        page_size=10,
+        max_messages=2,
+        on_page=on_page,
+    )
+
+    assert progress.is_complete is True
+    assert progress.completion_reason == MESSAGE_LIMIT_REACHED
+    assert progress.messages_scanned == 2
+    assert [message.telegram_id for message in seen[0].messages] == [3, 2]
+    assert seen[0].has_more is True
+
+
+@pytest.mark.asyncio
+async def test_scanner_time_slice_cancels_a_long_page_fetch() -> None:
+    class _SlowClient:
+        def iter_messages(self, *_: object, **__: object):
+            async def messages():
+                await asyncio.Event().wait()
+                yield None
+
+            return messages()
+
+    progress = await SavedMessagesScanner().scan(
+        client=_SlowClient(),
+        page_size=10,
+        max_messages=100,
+        timeout_seconds=0.01,
+    )
+
+    assert progress.is_complete is False
+    assert progress.completion_reason == SLICE_TIME_LIMIT
+    assert progress.messages_scanned == 0
+
+
+@pytest.mark.asyncio
 async def test_scanner_respects_stop_request() -> None:
     scanner = SavedMessagesScanner()
     now = datetime.now(tz=UTC)
@@ -233,7 +341,7 @@ async def test_scanner_stops_when_offset_id_does_not_advance() -> None:
     assert client.calls == [("me", 2, 0)]
 
 
-def test_scanner_normalizes_voice_messages_with_text_sender_and_raw_data_fallback() -> None:
+def test_scanner_normalizes_voice_messages_with_text_sender_and_minimal_raw_data() -> None:
     scanner = SavedMessagesScanner()
     naive_date = datetime(2026, 1, 1, 12, 0, 0)
     normalized = scanner._normalize_message(
@@ -253,7 +361,7 @@ def test_scanner_normalizes_voice_messages_with_text_sender_and_raw_data_fallbac
     assert normalized.sender_name == "bot_name"
     assert normalized.url is None
     assert normalized.date.tzinfo == UTC
-    assert normalized.raw_data == {"id": 42, "message": "use text field"}
+    assert normalized.raw_data == {"id": 42}
 
 
 def test_scanner_normalizes_document_sender_name_and_date_fallbacks() -> None:

@@ -1,49 +1,64 @@
-"""API routes for Saved Messages scan lifecycle."""
+"""Authenticated routes for durable per-user Saved Messages scans."""
 
 from __future__ import annotations
 
 import asyncio
 import time
 from collections.abc import AsyncIterator
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.accounts.dependencies import get_current_user
+from app.config import settings
+from app.database import SessionLocal, get_session
+from app.telegram.client import TelegramClientNotConnectedError
 from app.telegram.scanner import ScanAlreadyRunningError
 from app.telegram.schemas import ScanStatusResponse
-from app.telegram.service import TelegramClientNotConnectedError, TelegramScanService
+from app.telegram.service import TelegramScanService, process_scan_queue
+from app.telegram.streams import (
+    STREAM_HEARTBEAT_SECONDS,
+    claim_scan_stream,
+    release_scan_stream,
+    renew_scan_stream,
+)
 
 router = APIRouter(prefix="/scan", tags=["scan"])
-scan_service = TelegramScanService()
 STREAM_POLL_INTERVAL_SECONDS = 0.5
 STREAM_KEEPALIVE_SECONDS = 15.0
 
 
-async def get_scan_service() -> TelegramScanService:
-    """Dependency provider for the scan service."""
-
-    return scan_service
+def _service(*, session: AsyncSession, user: Any) -> TelegramScanService:
+    return TelegramScanService(session=session, user_id=str(user.id))
 
 
 @router.post("/start", response_model=ScanStatusResponse, status_code=status.HTTP_202_ACCEPTED)
 async def start_scan(
+    background_tasks: BackgroundTasks,
+    user: Annotated[Any, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
     page_size: int = Query(default=100, ge=1, le=1000),
-    service: TelegramScanService = Depends(get_scan_service),
 ) -> ScanStatusResponse:
     try:
-        progress = await service.start(page_size=page_size)
+        job = await _service(session=session, user=user).start(page_size=page_size)
     except TelegramClientNotConnectedError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="telegram_not_connected") from exc
     except ScanAlreadyRunningError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-
-    return ScanStatusResponse.from_progress(progress)
+    if settings.process_scans_in_api:
+        background_tasks.add_task(process_scan_queue)
+    return ScanStatusResponse.from_job(job)
 
 
 @router.get("/status", response_model=ScanStatusResponse)
-async def scan_status(service: TelegramScanService = Depends(get_scan_service)) -> ScanStatusResponse:
-    progress = await service.status()
-    return ScanStatusResponse.from_progress(progress)
+async def scan_status(
+    user: Annotated[Any, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ScanStatusResponse:
+    job = await _service(session=session, user=user).status()
+    return ScanStatusResponse.from_job(job)
 
 
 def _format_sse_event(*, event: str, data: str) -> str:
@@ -53,34 +68,52 @@ def _format_sse_event(*, event: str, data: str) -> str:
 @router.get("/stream")
 async def scan_status_stream(
     request: Request,
+    user: Annotated[Any, Depends(get_current_user)],
     max_events: int | None = Query(default=None, ge=1, le=500),
-    service: TelegramScanService = Depends(get_scan_service),
 ) -> StreamingResponse:
+    user_id = str(user.id)
+    stream_lease = await claim_scan_stream(user_id=user_id)
+    if stream_lease is None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="scan_stream_limit_reached",
+            headers={"Retry-After": str(STREAM_HEARTBEAT_SECONDS)},
+        )
+
     async def event_stream() -> AsyncIterator[str]:
         last_payload: str | None = None
         last_emitted_at = time.monotonic()
         emitted_events = 0
+        next_heartbeat_at = time.monotonic() + STREAM_HEARTBEAT_SECONDS
 
-        while True:
-            if await request.is_disconnected():
-                break
-
-            progress = await service.status()
-            payload = ScanStatusResponse.from_progress(progress).model_dump_json()
-            now = time.monotonic()
-
-            if payload != last_payload:
-                last_payload = payload
-                last_emitted_at = now
-                yield _format_sse_event(event="status", data=payload)
-                emitted_events += 1
-                if max_events is not None and emitted_events >= max_events:
+        try:
+            while True:
+                if await request.is_disconnected():
                     break
-            elif now - last_emitted_at >= STREAM_KEEPALIVE_SECONDS:
-                last_emitted_at = now
-                yield ": keep-alive\n\n"
-
-            await asyncio.sleep(STREAM_POLL_INTERVAL_SECONDS)
+                now = time.monotonic()
+                if now >= next_heartbeat_at:
+                    if not await renew_scan_stream(lease=stream_lease):
+                        break
+                    next_heartbeat_at = now + STREAM_HEARTBEAT_SECONDS
+                async with SessionLocal() as stream_session:
+                    job = await TelegramScanService(
+                        session=stream_session,
+                        user_id=user_id,
+                    ).status()
+                payload = ScanStatusResponse.from_job(job).model_dump_json()
+                if payload != last_payload:
+                    last_payload = payload
+                    last_emitted_at = now
+                    yield _format_sse_event(event="status", data=payload)
+                    emitted_events += 1
+                    if max_events is not None and emitted_events >= max_events:
+                        break
+                elif now - last_emitted_at >= STREAM_KEEPALIVE_SECONDS:
+                    last_emitted_at = now
+                    yield ": keep-alive\n\n"
+                await asyncio.sleep(STREAM_POLL_INTERVAL_SECONDS)
+        finally:
+            await release_scan_stream(lease=stream_lease)
 
     return StreamingResponse(
         event_stream(),
@@ -94,6 +127,9 @@ async def scan_status_stream(
 
 
 @router.post("/stop", response_model=ScanStatusResponse)
-async def stop_scan(service: TelegramScanService = Depends(get_scan_service)) -> ScanStatusResponse:
-    progress = await service.stop()
-    return ScanStatusResponse.from_progress(progress)
+async def stop_scan(
+    user: Annotated[Any, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ScanStatusResponse:
+    job = await _service(session=session, user=user).stop()
+    return ScanStatusResponse.from_job(job)

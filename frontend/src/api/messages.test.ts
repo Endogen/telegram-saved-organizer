@@ -6,6 +6,7 @@ import {
   deleteMessage,
   listMessages,
   moveMessageToCategory,
+  TelegramConnectionChangedError,
 } from "@/api/messages";
 import type { MessageListItem, MessageListResponse } from "@/types/message";
 
@@ -45,9 +46,10 @@ function createListPayload(items: MessageListItem[]): MessageListResponse {
   };
 }
 
-function createResponse(payload: unknown, ok = true): Response {
+function createResponse(payload: unknown, ok = true, status = ok ? 200 : 400): Response {
   return {
     ok,
+    status,
     json: vi.fn().mockResolvedValue(payload),
   } as unknown as Response;
 }
@@ -84,6 +86,18 @@ describe("messages api client", () => {
     expect(result).toEqual(payload);
   });
 
+  it("clamps page size to the API maximum", async () => {
+    const payload = createListPayload([]);
+    fetchMock.mockResolvedValue(createResponse(payload));
+
+    await listMessages({ page: 1, per_page: 10_000 });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/messages?page=1&per_page=200",
+      { credentials: "same-origin" },
+    );
+  });
+
   it("throws when the list response shape is unexpected", async () => {
     fetchMock.mockResolvedValue(createResponse({ items: [] }));
 
@@ -96,6 +110,14 @@ describe("messages api client", () => {
 
     fetchMock.mockResolvedValueOnce(createResponse({}, false));
     await expect(listMessages()).rejects.toThrow("Message request failed.");
+  });
+
+  it("maps stale Telegram provenance to a safe local-delete error", async () => {
+    fetchMock.mockResolvedValue(
+      createResponse({ detail: "telegram_connection_changed" }, false, 409),
+    );
+
+    await expect(deleteMessage(9)).rejects.toBeInstanceOf(TelegramConnectionChangedError);
   });
 
   it("sends patch and delete requests for single-message actions", async () => {

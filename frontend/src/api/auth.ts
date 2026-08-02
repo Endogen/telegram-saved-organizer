@@ -1,46 +1,45 @@
 import type {
   ConnectTelegramPayload,
-  TelegramAuthStatus,
+  TelegramConnection,
   VerifyTelegramPayload,
 } from "@/types/auth";
 import { requestJson } from "@/api/client";
 
-const AUTH_BASE_PATH = "/api/auth";
+const CONNECTION_PATH = "/api/telegram/connection";
 
-async function requestAuthStatus(path: string, init?: RequestInit): Promise<TelegramAuthStatus> {
-  return requestJson<TelegramAuthStatus>(`${AUTH_BASE_PATH}${path}`, init, {
-    fallbackMessage: "Telegram auth request failed.",
+async function requestConnection(path = "", init?: RequestInit): Promise<TelegramConnection> {
+  return requestJson<TelegramConnection>(`${CONNECTION_PATH}${path}`, init, {
+    fallbackMessage: "Telegram connection request failed.",
   });
 }
 
-export async function fetchTelegramAuthStatus(): Promise<TelegramAuthStatus> {
-  return requestAuthStatus("/status");
+export async function fetchTelegramConnection(): Promise<TelegramConnection> {
+  return requestConnection();
 }
 
-export async function connectTelegram(payload: ConnectTelegramPayload): Promise<TelegramAuthStatus> {
-  return requestAuthStatus("/connect", {
+export async function connectTelegram(payload: ConnectTelegramPayload): Promise<TelegramConnection> {
+  return requestConnection("", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
 }
 
-export async function verifyTelegram(payload: VerifyTelegramPayload): Promise<TelegramAuthStatus> {
-  const body: VerifyTelegramPayload = {};
-  if (payload.code && payload.code.trim().length > 0) {
-    body.code = payload.code.trim();
-  }
-  if (payload.password && payload.password.trim().length > 0) {
-    body.password = payload.password.trim();
-  }
+export async function verifyTelegram(payload: VerifyTelegramPayload): Promise<TelegramConnection> {
+  const body: VerifyTelegramPayload = "password" in payload
+    ? { password: payload.password }
+    : { code: payload.code.trim() };
 
-  return requestAuthStatus("/verify", {
+  return requestConnection("/verify", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-export async function disconnectTelegram(): Promise<TelegramAuthStatus> {
-  return requestAuthStatus("/disconnect", { method: "POST" });
+export async function disconnectTelegram(): Promise<TelegramConnection> {
+  return requestConnection("", { method: "DELETE" });
 }
+
+/** @deprecated Use fetchTelegramConnection. */
+export const fetchTelegramAuthStatus = fetchTelegramConnection;

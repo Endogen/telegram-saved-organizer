@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/api/auth", () => ({
-  fetchTelegramAuthStatus: vi.fn(),
+  fetchTelegramConnection: vi.fn(),
   connectTelegram: vi.fn(),
   verifyTelegram: vi.fn(),
   disconnectTelegram: vi.fn(),
@@ -11,223 +12,250 @@ vi.mock("@/api/auth", () => ({
 import {
   connectTelegram,
   disconnectTelegram,
-  fetchTelegramAuthStatus,
+  fetchTelegramConnection,
   verifyTelegram,
 } from "@/api/auth";
+import { ApiRequestError } from "@/api/client";
 import { ConnectPage } from "@/pages/connect-page";
-import type { TelegramAuthStatus } from "@/types/auth";
+import type { TelegramConnection } from "@/types/auth";
 
-const disconnectedStatus: TelegramAuthStatus = {
-  connected: false,
-  authorized: false,
-  has_session: false,
-  verification_required: false,
-  password_required: false,
+const disconnected: TelegramConnection = { state: "disconnected" };
+const codeRequired: TelegramConnection = { state: "code_required", phone_masked: "+1 ••• ••• 1234" };
+const passwordRequired: TelegramConnection = { state: "password_required", phone_masked: "+1 ••• ••• 1234" };
+const connected: TelegramConnection = {
+  state: "connected",
+  account: {
+    display_name: "Ada Lovelace",
+    username: "ada",
+    phone_masked: "+1 ••• ••• 1234",
+  },
 };
 
-const verifyingStatus: TelegramAuthStatus = {
-  connected: true,
-  authorized: false,
-  has_session: true,
-  verification_required: true,
-  password_required: false,
-};
-
-const authorizedStatus: TelegramAuthStatus = {
-  connected: true,
-  authorized: true,
-  has_session: true,
-  verification_required: false,
-  password_required: false,
-};
-
-const passwordRequiredStatus: TelegramAuthStatus = {
-  ...verifyingStatus,
-  password_required: true,
-};
+function renderPage() {
+  return render(
+    <MemoryRouter>
+      <ConnectPage />
+    </MemoryRouter>,
+  );
+}
 
 describe("ConnectPage", () => {
   beforeEach(() => {
-    vi.mocked(fetchTelegramAuthStatus).mockResolvedValue(disconnectedStatus);
-    vi.mocked(connectTelegram).mockResolvedValue(verifyingStatus);
-    vi.mocked(verifyTelegram).mockResolvedValue(authorizedStatus);
-    vi.mocked(disconnectTelegram).mockResolvedValue(disconnectedStatus);
+    vi.mocked(fetchTelegramConnection).mockReset().mockResolvedValue(disconnected);
+    vi.mocked(connectTelegram).mockReset().mockResolvedValue(codeRequired);
+    vi.mocked(verifyTelegram).mockReset().mockResolvedValue(connected);
+    vi.mocked(disconnectTelegram).mockReset().mockResolvedValue(disconnected);
+    vi.stubGlobal("confirm", vi.fn(() => true));
   });
 
-  it("shows loading state then connect form when disconnected", async () => {
-    render(<ConnectPage />);
+  it("loads server state before rendering the disconnected form", async () => {
+    renderPage();
 
-    expect(screen.getByText("Loading Telegram auth status...")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading Telegram connection...");
 
     await waitFor(() => {
-      expect(screen.getByText("Not Connected")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Connect your account" })).toBeInTheDocument();
     });
 
-    expect(screen.getByLabelText("API ID")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start Connection" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Phone Number")).toBeInTheDocument();
+    expect(screen.queryByLabelText("API ID")).not.toBeInTheDocument();
+    expect(screen.getByText(/API credentials are configured securely by the server/)).toBeInTheDocument();
   });
 
-  it("shows authorized state", async () => {
-    vi.mocked(fetchTelegramAuthStatus).mockResolvedValue(authorizedStatus);
+  it("resumes a pending code challenge from server state on refresh", async () => {
+    vi.mocked(fetchTelegramConnection).mockResolvedValue(codeRequired);
 
-    render(<ConnectPage />);
+    renderPage();
 
-    await waitFor(() => {
-      expect(screen.getByText("Telegram session is authorized.")).toBeInTheDocument();
-    });
+    expect(await screen.findByLabelText("Verification Code")).toBeInTheDocument();
+    expect(screen.getByText(/\+1 ••• ••• 1234/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use a different number" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Telegram connection progress" })).toHaveTextContent("Verify");
+  });
 
+  it("renders the password challenge directly from server state", async () => {
+    vi.mocked(fetchTelegramConnection).mockResolvedValue(passwordRequired);
+
+    renderPage();
+
+    expect(await screen.findByLabelText("Two-Factor Password")).toBeInTheDocument();
+    expect(screen.getByText(/Telegram accepted the code/)).toBeInTheDocument();
+  });
+
+  it("renders connected account details and data-retention guidance", async () => {
+    vi.mocked(fetchTelegramConnection).mockResolvedValue(connected);
+
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "Ada Lovelace is ready" })).toBeInTheDocument();
+    expect(screen.getByText("@ada · +1 ••• ••• 1234")).toBeInTheDocument();
+    expect(screen.getByText(/does not remove messages already imported/)).toBeInTheDocument();
     expect(screen.getByText("Ready to scan")).toBeInTheDocument();
   });
 
-  it("shows verification form after connecting", async () => {
-    vi.mocked(fetchTelegramAuthStatus).mockResolvedValue(verifyingStatus);
+  it("completes the phone, code, and connected flow using response states", async () => {
+    renderPage();
 
-    render(<ConnectPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Verification Required")).toBeInTheDocument();
-    });
-
-    expect(screen.getByLabelText("Verification Code")).toBeInTheDocument();
-  });
-
-  it("shows password form when 2FA required", async () => {
-    vi.mocked(fetchTelegramAuthStatus).mockResolvedValue(passwordRequiredStatus);
-
-    render(<ConnectPage />);
+    const phone = await screen.findByLabelText("Phone Number");
+    fireEvent.change(phone, { target: { value: "+15550001234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue with Telegram" }));
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Two-Factor Password")).toBeInTheDocument();
-    });
-  });
-
-  it("completes connect → verify flow", async () => {
-    render(<ConnectPage />);
-
-    await waitFor(() => {
-      expect(screen.getByLabelText("API ID")).toBeInTheDocument();
+      expect(connectTelegram).toHaveBeenCalledWith({ phone: "+15550001234" });
     });
 
-    // Fill connect form
-    fireEvent.change(screen.getByLabelText("API ID"), { target: { value: "123456" } });
-    fireEvent.change(screen.getByLabelText("API Hash"), { target: { value: "abc" } });
-    fireEvent.change(screen.getByLabelText("Phone Number"), { target: { value: "+15550001234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Start Connection" }));
-
-    await waitFor(() => {
-      expect(screen.getByLabelText("Verification Code")).toBeInTheDocument();
-    });
-
-    // Verify code
-    fireEvent.change(screen.getByLabelText("Verification Code"), { target: { value: "12345" } });
+    const code = await screen.findByLabelText("Verification Code");
+    fireEvent.change(code, { target: { value: "12345" } });
     fireEvent.click(screen.getByRole("button", { name: "Verify Code" }));
 
-    await waitFor(() => {
-      expect(screen.getByText("Telegram session is authorized.")).toBeInTheDocument();
-    });
+    expect(await screen.findByRole("heading", { name: "Ada Lovelace is ready" })).toBeInTheDocument();
+    expect(verifyTelegram).toHaveBeenCalledWith({ code: "12345" });
   });
 
-  it("handles connect error", async () => {
-    vi.mocked(connectTelegram).mockRejectedValue(new Error("Invalid phone."));
-
-    render(<ConnectPage />);
-
-    await waitFor(() => {
-      expect(screen.getByLabelText("API ID")).toBeInTheDocument();
-    });
-
-    fireEvent.change(screen.getByLabelText("API ID"), { target: { value: "123" } });
-    fireEvent.change(screen.getByLabelText("API Hash"), { target: { value: "x" } });
-    fireEvent.change(screen.getByLabelText("Phone Number"), { target: { value: "+1555" } });
-    fireEvent.click(screen.getByRole("button", { name: "Start Connection" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("Invalid phone.")).toBeInTheDocument();
-    });
-  });
-
-  it("handles verify error and syncs status", async () => {
-    vi.mocked(fetchTelegramAuthStatus).mockResolvedValue(verifyingStatus);
+  it("keeps the current server state available after a verification error", async () => {
+    vi.mocked(fetchTelegramConnection).mockResolvedValue(codeRequired);
     vi.mocked(verifyTelegram).mockRejectedValue(new Error("Wrong code."));
 
-    render(<ConnectPage />);
+    renderPage();
 
-    await waitFor(() => {
-      expect(screen.getByLabelText("Verification Code")).toBeInTheDocument();
-    });
-
-    fireEvent.change(screen.getByLabelText("Verification Code"), { target: { value: "wrong" } });
+    const input = await screen.findByLabelText("Verification Code");
+    fireEvent.change(input, { target: { value: "wrong" } });
     fireEvent.click(screen.getByRole("button", { name: "Verify Code" }));
 
-    await waitFor(() => {
-      expect(screen.getByText("Wrong code.")).toBeInTheDocument();
-    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Wrong code.");
+    expect(screen.getByLabelText("Verification Code")).toHaveValue("wrong");
+    expect(fetchTelegramConnection).toHaveBeenCalledTimes(1);
   });
 
-  it("handles fetch status error", async () => {
-    vi.mocked(fetchTelegramAuthStatus).mockRejectedValue(new Error("Server down."));
+  it("shows connection errors without leaving the phone step", async () => {
+    vi.mocked(connectTelegram).mockRejectedValue(new Error("Invalid phone."));
 
-    render(<ConnectPage />);
+    renderPage();
 
-    await waitFor(() => {
-      expect(screen.getByText("Server down.")).toBeInTheDocument();
-    });
+    const phone = await screen.findByLabelText("Phone Number");
+    fireEvent.change(phone, { target: { value: "+1555" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue with Telegram" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Invalid phone.");
+    expect(screen.getByLabelText("Phone Number")).toHaveValue("+1555");
   });
 
-  it("handles disconnect", async () => {
-    vi.mocked(fetchTelegramAuthStatus).mockResolvedValue(authorizedStatus);
+  it("explains when a Telegram identity already belongs to another account", async () => {
+    vi.mocked(connectTelegram).mockRejectedValue(
+      new ApiRequestError(
+        "telegram_account_already_connected",
+        409,
+        "telegram_account_already_connected",
+      ),
+    );
 
-    render(<ConnectPage />);
+    renderPage();
 
-    await waitFor(() => {
-      expect(screen.getByText("Telegram session is authorized.")).toBeInTheDocument();
-    });
+    const phone = await screen.findByLabelText("Phone Number");
+    fireEvent.change(phone, { target: { value: "+15550001234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue with Telegram" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
-
-    await waitFor(() => {
-      expect(disconnectTelegram).toHaveBeenCalled();
-    });
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This Telegram account is already connected to another organizer account.",
+    );
   });
 
-  it("handles disconnect error", async () => {
-    vi.mocked(fetchTelegramAuthStatus).mockResolvedValue(authorizedStatus);
-    vi.mocked(disconnectTelegram).mockRejectedValue(new Error("Failed to disconnect."));
+  it("renders a friendly rate-limit message", async () => {
+    vi.mocked(connectTelegram).mockRejectedValue(
+      new ApiRequestError("too_many_requests", 429, "too_many_requests"),
+    );
 
-    render(<ConnectPage />);
+    renderPage();
 
-    await waitFor(() => {
-      expect(screen.getByText("Telegram session is authorized.")).toBeInTheDocument();
-    });
+    const phone = await screen.findByLabelText("Phone Number");
+    fireEvent.change(phone, { target: { value: "+15550001234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue with Telegram" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("Failed to disconnect.")).toBeInTheDocument();
-    });
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Too many Telegram sign-in attempts. Wait a moment and try again.",
+    );
   });
 
-  it("handles non-Error thrown objects", async () => {
-    vi.mocked(fetchTelegramAuthStatus).mockRejectedValue("string error");
+  it("offers retry when initial status loading fails", async () => {
+    vi.mocked(fetchTelegramConnection)
+      .mockRejectedValueOnce(new Error("Server down."))
+      .mockResolvedValueOnce(disconnected);
 
-    render(<ConnectPage />);
+    renderPage();
 
-    await waitFor(() => {
-      expect(screen.getByText("Request failed. Check backend logs and try again.")).toBeInTheDocument();
-    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Server down.");
+    expect(screen.queryByLabelText("Phone Number")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(await screen.findByLabelText("Phone Number")).toBeInTheDocument();
+    expect(fetchTelegramConnection).toHaveBeenCalledTimes(2);
   });
 
-  it("renders status chips", async () => {
-    vi.mocked(fetchTelegramAuthStatus).mockResolvedValue(authorizedStatus);
+  it("uses a safe fallback for non-Error failures", async () => {
+    vi.mocked(fetchTelegramConnection).mockRejectedValue("offline");
 
-    render(<ConnectPage />);
+    renderPage();
 
-    await waitFor(() => {
-      expect(screen.getByText("Connected to Telegram")).toBeInTheDocument();
-    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Request failed. Check your connection and try again.");
+  });
 
-    // "Authorized" appears both as a heading and as a status chip
-    expect(screen.getAllByText("Authorized").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText("Session found")).toBeInTheDocument();
+  it("confirms disconnect and explains that imported messages remain", async () => {
+    vi.mocked(fetchTelegramConnection).mockResolvedValue(connected);
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect Telegram" }));
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("messages already imported into the organizer will remain"));
+    await waitFor(() => expect(disconnectTelegram).toHaveBeenCalledTimes(1));
+    expect(await screen.findByLabelText("Phone Number")).toBeInTheDocument();
+  });
+
+  it("can cancel a pending challenge to use a different number", async () => {
+    vi.mocked(fetchTelegramConnection).mockResolvedValue(codeRequired);
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Use a different number" }));
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("use a different phone number"));
+    expect(await screen.findByLabelText("Phone Number")).toBeInTheDocument();
+  });
+
+  it("does not disconnect when confirmation is declined", async () => {
+    vi.mocked(fetchTelegramConnection).mockResolvedValue(connected);
+    vi.mocked(confirm).mockReturnValue(false);
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect Telegram" }));
+
+    expect(disconnectTelegram).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "Ada Lovelace is ready" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open scanner dashboard" })).toHaveAttribute("href", "/");
+  });
+
+  it("prevents overlapping connection submissions", async () => {
+    let resolveConnection: ((value: TelegramConnection) => void) | undefined;
+    vi.mocked(connectTelegram).mockImplementation(
+      () => new Promise((resolve) => {
+        resolveConnection = resolve;
+      }),
+    );
+
+    renderPage();
+
+    const phone = await screen.findByLabelText("Phone Number");
+    fireEvent.change(phone, { target: { value: "+15550001234" } });
+    const submit = screen.getByRole("button", { name: "Continue with Telegram" });
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+
+    expect(connectTelegram).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Sending code..." })).toBeDisabled();
+
+    resolveConnection?.(codeRequired);
+    expect(await screen.findByLabelText("Verification Code")).toBeInTheDocument();
   });
 });

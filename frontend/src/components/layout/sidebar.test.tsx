@@ -90,6 +90,22 @@ describe("Sidebar", () => {
     expect(screen.getByText("API unavailable")).toBeInTheDocument();
   });
 
+  it("keeps a closed mobile navigation out of the accessibility tree", () => {
+    renderSidebar({ isOpen: false });
+
+    const navigation = screen.getByRole("complementary", { hidden: true });
+    expect(navigation).toHaveAttribute("aria-hidden", "true");
+    expect(navigation).toHaveAttribute("inert");
+  });
+
+  it("closes an open mobile navigation with Escape and locks background scrolling", () => {
+    const props = renderSidebar();
+
+    expect(document.body).toHaveStyle({ overflow: "hidden" });
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("emits drop events when a dragged message is dropped onto another category", () => {
     const onDropEvent = vi.fn<(event: Event) => void>();
     const onDragEndEvent = vi.fn<(event: Event) => void>();

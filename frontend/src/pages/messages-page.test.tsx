@@ -8,6 +8,7 @@ import {
   deleteMessage,
   listMessages,
   moveMessageToCategory,
+  TelegramConnectionChangedError,
   TelegramNotConnectedError,
 } from "@/api/messages";
 import {
@@ -22,6 +23,7 @@ import type { CategoryWithCount } from "@/types/category";
 import type { MessageListItem, MessageTag } from "@/types/message";
 
 vi.mock("@/api/messages", () => ({
+  TelegramConnectionChangedError: class TelegramConnectionChangedError extends Error {},
   TelegramNotConnectedError: class TelegramNotConnectedError extends Error {},
   listMessages: vi.fn(),
   moveMessageToCategory: vi.fn(),
@@ -169,6 +171,47 @@ const knownTagsFixture: MessageTag[] = [
   { id: 13, name: "meeting", color: null },
 ];
 
+function mockMessageServer(items: MessageListItem[] = messagesFixture) {
+  vi.mocked(listMessages).mockImplementation(async (query = {}) => {
+    const search = query.search?.trim().toLowerCase() ?? "";
+    const category = query.category?.trim().toLowerCase() ?? "";
+    const tags = (query.tag ?? []).map((tag) => tag.trim().toLowerCase());
+    const filtered = items.filter((message) => {
+      const searchable = [
+        message.content ?? "",
+        message.url ?? "",
+        message.sender_name ?? "",
+        ...message.tags.map((tag) => tag.name),
+      ].join(" ").toLowerCase();
+      const messageTags = new Set(message.tags.map((tag) => tag.name.toLowerCase()));
+      return (
+        (search.length === 0 || searchable.includes(search))
+        && (category.length === 0 || message.category.slug === category)
+        && tags.every((tag) => messageTags.has(tag))
+      );
+    });
+    filtered.sort((first, second) => {
+      if (query.sort === "date_asc") return Date.parse(first.date) - Date.parse(second.date);
+      if (query.sort === "category") {
+        return first.category.name.localeCompare(second.category.name) || Date.parse(second.date) - Date.parse(first.date);
+      }
+      if (query.sort === "sender") {
+        return (first.sender_name ?? "").localeCompare(second.sender_name ?? "") || Date.parse(second.date) - Date.parse(first.date);
+      }
+      return Date.parse(second.date) - Date.parse(first.date);
+    });
+    const page = query.page ?? 1;
+    const perPage = query.per_page ?? 50;
+    const start = (page - 1) * perPage;
+    return {
+      items: filtered.slice(start, start + perPage),
+      total: filtered.length,
+      page,
+      per_page: perPage,
+    };
+  });
+}
+
 function renderMessagesPage(initialEntry = "/messages") {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
@@ -179,7 +222,7 @@ function renderMessagesPage(initialEntry = "/messages") {
   );
 }
 
-describe("MessagesPage fallback", () => {
+describe("MessagesPage loading errors", () => {
   beforeEach(() => {
     vi.mocked(listMessages).mockRejectedValue(new Error("API down"));
     vi.mocked(listTags).mockRejectedValue(new Error("API down"));
@@ -191,15 +234,15 @@ describe("MessagesPage fallback", () => {
     });
   });
 
-  it("shows fallback data when API is unavailable", async () => {
+  it("shows a retryable error without displaying fabricated account data", async () => {
     renderMessagesPage();
 
     await waitFor(() => {
-      expect(screen.getByText("Running with local fallback data.")).toBeInTheDocument();
+      expect(screen.getByText("Messages could not be loaded.")).toBeInTheDocument();
     });
 
-    // Should show sample messages
-    expect(screen.getByText("4 messages")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(screen.queryByText("FastAPI async endpoint checklist", { exact: false })).not.toBeInTheDocument();
   });
 });
 
@@ -233,12 +276,7 @@ describe("MessagesPage empty state", () => {
 
 describe("MessagesPage filters", () => {
   beforeEach(() => {
-    vi.mocked(listMessages).mockResolvedValue({
-      items: messagesFixture,
-      total: messagesFixture.length,
-      page: 1,
-      per_page: 200,
-    });
+    mockMessageServer();
     vi.mocked(listTags).mockResolvedValue(knownTagsFixture);
     vi.mocked(useCategories).mockReturnValue({
       categories: categoriesFixture,
@@ -263,39 +301,41 @@ describe("MessagesPage filters", () => {
       target: { value: "react" },
     });
 
-    expect(screen.getByText("1 of 3 messages")).toBeInTheDocument();
-    expect(screen.getByText("React animation reference")).toBeInTheDocument();
     await waitFor(() => {
+      expect(screen.getByText("1 matching message")).toBeInTheDocument();
+      expect(screen.getByText("React animation reference")).toBeInTheDocument();
       expect(screen.queryByText("Backend checklist")).not.toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
 
-    expect(screen.getByText("3 messages")).toBeInTheDocument();
-    expect(screen.getByText("Backend checklist")).toBeInTheDocument();
-    expect(screen.getByText("React animation reference")).toBeInTheDocument();
-    expect(screen.getByText("Weekly standup audio")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("3 messages")).toBeInTheDocument();
+      expect(screen.getByText("Backend checklist")).toBeInTheDocument();
+      expect(screen.getByText("React animation reference")).toBeInTheDocument();
+      expect(screen.getByText("Weekly standup audio")).toBeInTheDocument();
+    });
   });
 
   it("applies category and tag filters from controls", async () => {
     renderMessagesPage("/messages?category=links");
-    await screen.findByText("1 of 3 messages");
+    await screen.findByText("1 matching message");
 
     expect(screen.getByText("React animation reference")).toBeInTheDocument();
     expect(screen.queryByText("Backend checklist")).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByRole("combobox", { name: "Category" }), { target: { value: "" } });
-    expect(screen.getByText("3 messages")).toBeInTheDocument();
+    expect(await screen.findByText("3 messages")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /#frontend/i }));
-    expect(screen.getByText("2 of 3 messages")).toBeInTheDocument();
+    expect(await screen.findByText("2 matching messages")).toBeInTheDocument();
     expect(screen.getByText("React animation reference")).toBeInTheDocument();
     expect(screen.getByText("Weekly standup audio")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /#meeting/i }));
-    expect(screen.getByText("1 of 3 messages")).toBeInTheDocument();
-    expect(screen.getByText("Weekly standup audio")).toBeInTheDocument();
     await waitFor(() => {
+      expect(screen.getByText("1 matching message")).toBeInTheDocument();
+      expect(screen.getByText("Weekly standup audio")).toBeInTheDocument();
       expect(screen.queryByText("React animation reference")).not.toBeInTheDocument();
     });
   });
@@ -318,12 +358,7 @@ describe("MessagesPage filters", () => {
 describe("MessagesPage actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(listMessages).mockResolvedValue({
-      items: messagesFixture,
-      total: messagesFixture.length,
-      page: 1,
-      per_page: 200,
-    });
+    mockMessageServer();
     vi.mocked(listTags).mockResolvedValue(knownTagsFixture);
     vi.mocked(useCategories).mockReturnValue({
       categories: categoriesFixture,
@@ -429,6 +464,27 @@ describe("MessagesPage actions", () => {
       expect(deleteMessage).toHaveBeenNthCalledWith(2, 101, true);
     });
     expect(screen.getByText("2 messages")).toBeInTheDocument();
+  });
+
+  it("offers a safe local-only delete for a message from a previous connection", async () => {
+    vi.mocked(deleteMessage)
+      .mockRejectedValueOnce(new TelegramConnectionChangedError())
+      .mockResolvedValueOnce();
+
+    renderMessagesPage();
+    await screen.findByText("3 messages");
+
+    const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
+    fireEvent.click(menuButtons[0]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete message" }));
+
+    await waitFor(() => {
+      expect(deleteMessage).toHaveBeenNthCalledWith(1, 101, false);
+      expect(deleteMessage).toHaveBeenNthCalledWith(2, 101, true);
+    });
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("previous Telegram connection"),
+    );
   });
 
   it("cancels delete when user declines confirmation", async () => {
@@ -687,7 +743,7 @@ describe("MessagesPage actions", () => {
       target: { value: "zzzznonexistent" },
     });
 
-    expect(screen.getByText("No messages match these filters.")).toBeInTheDocument();
+    expect(await screen.findByText("No messages match these filters.")).toBeInTheDocument();
   });
 
   it("sorts by date ascending and category", async () => {

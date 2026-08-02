@@ -36,7 +36,7 @@ class TagDeleteResponse(BaseModel):
 class MessageTagsUpdateRequest(BaseModel):
     """Request payload for adding tags to a message."""
 
-    tag_ids: list[PositiveIdentifier] = Field(min_length=1)
+    tag_ids: list[PositiveIdentifier] = Field(min_length=1, max_length=100)
 
 
 class MessageTagsResponse(BaseModel):
@@ -44,4 +44,3 @@ class MessageTagsResponse(BaseModel):
 
     message_id: PositiveIdentifier
     tags: list[TagResponse]
-

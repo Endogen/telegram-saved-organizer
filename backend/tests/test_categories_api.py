@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
+from fastapi import Depends
 from httpx import ASGITransport, AsyncClient
 
+from app.accounts.dependencies import get_current_user
 from app.categories.router import get_category_service
 from app.categories.service import (
     CategoryConflictError,
@@ -16,6 +18,10 @@ from app.categories.service import (
     CategoryWithCount,
 )
 from app.main import create_app
+from app.models import User
+
+
+USER_ID = "00000000-0000-4000-8000-000000000001"
 
 
 @dataclass(slots=True)
@@ -98,14 +104,32 @@ def _build_category() -> _FakeCategory:
     )
 
 
+def _build_user() -> User:
+    return User(
+        id=USER_ID,
+        email="owner@example.com",
+        normalized_email="owner@example.com",
+        display_name="Owner",
+        password_hash="test-password-hash",
+    )
+
+
 @pytest.fixture
 def category_context() -> tuple[Any, _FakeCategoryService]:
     service = _FakeCategoryService()
-    app = create_app(api_token=None)
+    user = _build_user()
+    app = create_app(check_migrations=False)
 
-    async def override_category_service() -> _FakeCategoryService:
+    async def override_current_user() -> User:
+        return user
+
+    async def override_category_service(
+        authenticated_user: Annotated[User, Depends(get_current_user)],
+    ) -> _FakeCategoryService:
+        assert authenticated_user.id == USER_ID
         return service
 
+    app.dependency_overrides[get_current_user] = override_current_user
     app.dependency_overrides[get_category_service] = override_category_service
     yield app, service
     app.dependency_overrides.clear()
@@ -339,8 +363,10 @@ async def test_delete_category_endpoint_returns_not_found(
 @pytest.mark.asyncio
 async def test_get_category_service_dependency_returns_category_service() -> None:
     session = object()
+    user = _build_user()
 
-    service = await get_category_service(session=session)  # type: ignore[arg-type]
+    service = await get_category_service(session=session, user=user)  # type: ignore[arg-type]
 
     assert isinstance(service, CategoryService)
     assert service.session is session
+    assert service.user_id == USER_ID

@@ -3,10 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   connectTelegram,
   disconnectTelegram,
-  fetchTelegramAuthStatus,
+  fetchTelegramConnection,
   verifyTelegram,
 } from "@/api/auth";
-import type { TelegramAuthStatus } from "@/types/auth";
+import type { TelegramConnection } from "@/types/auth";
 
 function createResponse(payload: unknown, ok = true): Response {
   return {
@@ -15,31 +15,11 @@ function createResponse(payload: unknown, ok = true): Response {
   } as unknown as Response;
 }
 
-const connectedStatus: TelegramAuthStatus = {
-  connected: true,
-  authorized: false,
-  has_session: true,
-  verification_required: true,
-  password_required: false,
-};
+const codeRequired: TelegramConnection = { state: "code_required" };
+const connected: TelegramConnection = { state: "connected" };
+const disconnected: TelegramConnection = { state: "disconnected" };
 
-const authorizedStatus: TelegramAuthStatus = {
-  connected: true,
-  authorized: true,
-  has_session: true,
-  verification_required: false,
-  password_required: false,
-};
-
-const disconnectedStatus: TelegramAuthStatus = {
-  connected: false,
-  authorized: false,
-  has_session: false,
-  verification_required: false,
-  password_required: false,
-};
-
-describe("auth api client", () => {
+describe("Telegram connection API client", () => {
   const fetchMock = vi.fn();
 
   beforeEach(() => {
@@ -51,124 +31,79 @@ describe("auth api client", () => {
     vi.unstubAllGlobals();
   });
 
-  it("fetches auth status", async () => {
-    fetchMock.mockResolvedValue(createResponse(connectedStatus));
+  it("fetches the current connection state", async () => {
+    fetchMock.mockResolvedValue(createResponse(codeRequired));
 
-    const result = await fetchTelegramAuthStatus();
-    expect(fetchMock).toHaveBeenCalledWith("/api/auth/status", { credentials: "same-origin" });
-    expect(result).toEqual(connectedStatus);
+    const result = await fetchTelegramConnection();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/telegram/connection", { credentials: "same-origin" });
+    expect(result).toEqual(codeRequired);
   });
 
-  it("sends connect request with payload", async () => {
-    fetchMock.mockResolvedValue(createResponse(connectedStatus));
+  it("starts a connection with only the phone number", async () => {
+    fetchMock.mockResolvedValue(createResponse(codeRequired));
 
-    const result = await connectTelegram({
-      api_id: 123456,
-      api_hash: "abc123",
-      phone: "+15550001234",
-    });
+    const result = await connectTelegram({ phone: "+15550001234" });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/auth/connect",
+      "/api/telegram/connection",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({
-          api_id: 123456,
-          api_hash: "abc123",
-          phone: "+15550001234",
-        }),
+        body: JSON.stringify({ phone: "+15550001234" }),
       }),
     );
-    expect(result).toEqual(connectedStatus);
+    expect(result).toEqual(codeRequired);
   });
 
-  it("sends verify request with code", async () => {
-    fetchMock.mockResolvedValue(createResponse(authorizedStatus));
+  it("trims and sends a verification code", async () => {
+    fetchMock.mockResolvedValue(createResponse(connected));
 
     const result = await verifyTelegram({ code: "  12345  " });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/auth/verify",
+      "/api/telegram/connection/verify",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ code: "12345" }),
       }),
     );
-    expect(result).toEqual(authorizedStatus);
+    expect(result).toEqual(connected);
   });
 
-  it("sends verify request with password", async () => {
-    fetchMock.mockResolvedValue(createResponse(authorizedStatus));
+  it("preserves the verification password exactly", async () => {
+    fetchMock.mockResolvedValue(createResponse(connected));
 
-    const result = await verifyTelegram({ password: "  secret  " });
+    const result = await verifyTelegram({ password: "  secret phrase  " });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/auth/verify",
+      "/api/telegram/connection/verify",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ password: "secret" }),
+        body: JSON.stringify({ password: "  secret phrase  " }),
       }),
     );
-    expect(result).toEqual(authorizedStatus);
+    expect(result).toEqual(connected);
   });
 
-  it("sends verify request with empty fields trimmed away", async () => {
-    fetchMock.mockResolvedValue(createResponse(authorizedStatus));
-
-    await verifyTelegram({ code: "   ", password: "" });
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/auth/verify",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({}),
-      }),
-    );
-  });
-
-  it("sends disconnect request", async () => {
-    fetchMock.mockResolvedValue(createResponse(disconnectedStatus));
+  it("disconnects with DELETE", async () => {
+    fetchMock.mockResolvedValue(createResponse(disconnected));
 
     const result = await disconnectTelegram();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/auth/disconnect",
-      expect.objectContaining({ method: "POST" }),
+      "/api/telegram/connection",
+      expect.objectContaining({ method: "DELETE" }),
     );
-    expect(result).toEqual(disconnectedStatus);
+    expect(result).toEqual(disconnected);
   });
 
-  it("throws on error responses with detail", async () => {
-    fetchMock.mockResolvedValue(
-      createResponse({ detail: "Invalid phone number." }, false),
-    );
+  it("surfaces API details and uses the connection fallback", async () => {
+    fetchMock.mockResolvedValueOnce(createResponse({ detail: "Invalid phone number." }, false));
 
-    await expect(connectTelegram({ api_id: 1, api_hash: "x", phone: "y" })).rejects.toThrow(
-      "Invalid phone number.",
-    );
-  });
+    await expect(connectTelegram({ phone: "x" })).rejects.toThrow("Invalid phone number.");
 
-  it("throws fallback message when detail is missing", async () => {
-    fetchMock.mockResolvedValue(createResponse({}, false));
+    fetchMock.mockResolvedValueOnce(createResponse({}, false));
 
-    await expect(fetchTelegramAuthStatus()).rejects.toThrow(
-      "Telegram auth request failed.",
-    );
-  });
-
-  it("throws fallback when detail is non-string", async () => {
-    fetchMock.mockResolvedValue(createResponse({ detail: 42 }, false));
-
-    await expect(fetchTelegramAuthStatus()).rejects.toThrow(
-      "Telegram auth request failed.",
-    );
-  });
-
-  it("handles null payload for toErrorMessage", async () => {
-    fetchMock.mockResolvedValue(createResponse(null, false));
-
-    await expect(fetchTelegramAuthStatus()).rejects.toThrow(
-      "Telegram auth request failed.",
-    );
+    await expect(fetchTelegramConnection()).rejects.toThrow("Telegram connection request failed.");
   });
 });

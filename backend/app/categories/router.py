@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.accounts.dependencies import get_current_user
 from app.categories.schemas import (
     CategoryCreateRequest,
     CategoryDeleteResponse,
@@ -19,14 +20,18 @@ from app.categories.service import (
     CategoryService,
 )
 from app.database import get_session
+from app.models import User
 
 router = APIRouter(prefix="/categories", tags=["categories"])
 
 
-async def get_category_service(session: AsyncSession = Depends(get_session)) -> CategoryService:
+async def get_category_service(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+) -> CategoryService:
     """Dependency provider for category service."""
 
-    return CategoryService(session=session)
+    return CategoryService(session=session, user_id=user.id)
 
 
 @router.get("", response_model=list[CategoryWithCountResponse])
@@ -83,4 +88,3 @@ async def delete_category(
     except CategoryProtectedError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return CategoryDeleteResponse.from_result(result)
-

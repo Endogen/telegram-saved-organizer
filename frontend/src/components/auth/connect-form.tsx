@@ -14,8 +14,6 @@ function inputClassName(): string {
 }
 
 export function ConnectForm({ isSubmitting, error, onSubmit }: ConnectFormProps) {
-  const [apiId, setApiId] = useState("");
-  const [apiHash, setApiHash] = useState("");
   const [phone, setPhone] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
 
@@ -25,18 +23,6 @@ export function ConnectForm({ isSubmitting, error, onSubmit }: ConnectFormProps)
     event.preventDefault();
     setValidationError(null);
 
-    const parsedApiId = Number.parseInt(apiId.trim(), 10);
-    if (!Number.isInteger(parsedApiId) || parsedApiId <= 0) {
-      setValidationError("API ID must be a positive integer.");
-      return;
-    }
-
-    const trimmedApiHash = apiHash.trim();
-    if (trimmedApiHash.length === 0) {
-      setValidationError("API hash is required.");
-      return;
-    }
-
     const trimmedPhone = phone.trim();
     if (trimmedPhone.length < 3) {
       setValidationError("Phone number looks too short.");
@@ -44,53 +30,12 @@ export function ConnectForm({ isSubmitting, error, onSubmit }: ConnectFormProps)
     }
 
     void onSubmit({
-      api_id: parsedApiId,
-      api_hash: trimmedApiHash,
       phone: trimmedPhone,
     });
   }
 
   return (
-    <form className="space-y-4" onSubmit={handleSubmit}>
-      <div className="space-y-1">
-        <label
-          htmlFor="telegram-api-id"
-          className="text-xs font-semibold uppercase tracking-[0.14em] text-[hsl(var(--muted-foreground))]"
-        >
-          API ID
-        </label>
-        <input
-          id="telegram-api-id"
-          type="text"
-          inputMode="numeric"
-          autoComplete="off"
-          value={apiId}
-          onChange={(event) => setApiId(event.target.value)}
-          placeholder="123456"
-          className={inputClassName()}
-          disabled={isSubmitting}
-        />
-      </div>
-
-      <div className="space-y-1">
-        <label
-          htmlFor="telegram-api-hash"
-          className="text-xs font-semibold uppercase tracking-[0.14em] text-[hsl(var(--muted-foreground))]"
-        >
-          API Hash
-        </label>
-        <input
-          id="telegram-api-hash"
-          type="text"
-          autoComplete="off"
-          value={apiHash}
-          onChange={(event) => setApiHash(event.target.value)}
-          placeholder="telegram-api-hash"
-          className={inputClassName()}
-          disabled={isSubmitting}
-        />
-      </div>
-
+    <form className="space-y-4" onSubmit={handleSubmit} noValidate>
       <div className="space-y-1">
         <label
           htmlFor="telegram-phone"
@@ -107,17 +52,27 @@ export function ConnectForm({ isSubmitting, error, onSubmit }: ConnectFormProps)
           placeholder="+1 555 000 0000"
           className={inputClassName()}
           disabled={isSubmitting}
+          aria-invalid={displayError ? true : undefined}
+          aria-describedby={displayError ? "telegram-phone-error" : "telegram-phone-help"}
+          required
         />
+        <p id="telegram-phone-help" className="text-xs text-[hsl(var(--muted-foreground))]">
+          Include the country calling code. Telegram will send a sign-in code to this account.
+        </p>
       </div>
 
       {displayError ? (
-        <p className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">
+        <p
+          id="telegram-phone-error"
+          role="alert"
+          className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300"
+        >
           {displayError}
         </p>
       ) : null}
 
       <Button className="w-full sm:w-auto" type="submit" disabled={isSubmitting}>
-        {isSubmitting ? "Sending code..." : "Start Connection"}
+        {isSubmitting ? "Sending code..." : "Continue with Telegram"}
       </Button>
     </form>
   );

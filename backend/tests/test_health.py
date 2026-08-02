@@ -6,7 +6,7 @@ from app.main import create_app
 
 @pytest.mark.asyncio
 async def test_health_endpoint_returns_ok() -> None:
-    transport = ASGITransport(app=create_app())
+    transport = ASGITransport(app=create_app(check_migrations=False))
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.get("/api/health")
 
@@ -15,31 +15,15 @@ async def test_health_endpoint_returns_ok() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unsafe_requests_enforce_browser_same_origin() -> None:
-    app = create_app()
-
-    @app.post("/unsafe-probe")
-    async def unsafe_probe() -> dict[str, bool]:
-        return {"accepted": True}
-
-    transport = ASGITransport(app=app)
+async def test_api_responses_include_defensive_security_headers() -> None:
+    transport = ASGITransport(app=create_app(check_migrations=False))
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        cross_origin = await client.post(
-            "/unsafe-probe",
-            headers={"Origin": "https://attacker.example"},
-        )
-        same_origin = await client.post(
-            "/unsafe-probe",
-            headers={"Origin": "http://testserver"},
-        )
-        non_browser = await client.post("/unsafe-probe")
-        cross_origin_read = await client.get(
-            "/api/health",
-            headers={"Origin": "https://attacker.example"},
-        )
+        response = await client.get("/api/health")
 
-    assert cross_origin.status_code == 403
-    assert cross_origin.json() == {"detail": "cross_origin_request_blocked"}
-    assert same_origin.status_code == 200
-    assert non_browser.status_code == 200
-    assert cross_origin_read.status_code == 200
+    assert response.status_code == 200
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "same-origin"
+    assert response.headers["cross-origin-resource-policy"] == "same-origin"
+    assert response.headers["content-security-policy"] == "default-src 'none'; frame-ancestors 'none'"
+    assert response.headers["cache-control"] == "no-store"

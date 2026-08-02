@@ -1,52 +1,51 @@
-"""Pydantic schemas for Telegram auth endpoints."""
+"""Pydantic schemas for per-user Telegram connection endpoints."""
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, model_validator
+from enum import StrEnum
 
-from app.auth.service import AuthStatus
-
-
-class ConnectRequest(BaseModel):
-    """Payload for starting Telegram auth with SMS/Telegram code delivery."""
-
-    api_id: int = Field(gt=0)
-    api_hash: str = Field(min_length=1)
-    phone: str = Field(min_length=3)
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-class VerifyRequest(BaseModel):
-    """Payload for verifying a Telegram auth challenge."""
+class TelegramConnectionState(StrEnum):
+    DISCONNECTED = "disconnected"
+    CODE_REQUIRED = "code_required"
+    PASSWORD_REQUIRED = "password_required"
+    CONNECTED = "connected"
 
-    code: str | None = None
-    password: str | None = None
+
+class TelegramConnectionRequest(BaseModel):
+    """Start Telegram authentication using the server-owned API credentials."""
+
+    phone: str = Field(min_length=3, max_length=64)
+
+    @field_validator("phone")
+    @classmethod
+    def normalize_phone(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 3:
+            raise ValueError("Phone number must contain at least three characters.")
+        return normalized
+
+
+class TelegramVerifyRequest(BaseModel):
+    """Complete a Telegram challenge without persisting the supplied secret."""
+
+    code: str | None = Field(default=None, max_length=32)
+    password: str | None = Field(default=None, max_length=512)
 
     @model_validator(mode="after")
-    def validate_code_or_password(self) -> "VerifyRequest":
+    def validate_one_credential(self) -> "TelegramVerifyRequest":
         code = (self.code or "").strip()
-        password = (self.password or "").strip()
-        if not code and not password:
-            raise ValueError("Either code or password must be provided.")
+        password = self.password if self.password not in {None, ""} else None
+        if bool(code) == bool(password):
+            raise ValueError("Provide exactly one of code or password.")
         self.code = code or None
-        self.password = password or None
+        self.password = password
         return self
 
 
-class AuthStatusResponse(BaseModel):
-    """Current Telegram auth status."""
+class TelegramConnectionResponse(BaseModel):
+    """Durable state of the current user's Telegram connection."""
 
-    connected: bool
-    authorized: bool
-    has_session: bool
-    verification_required: bool
-    password_required: bool
-
-    @classmethod
-    def from_status(cls, status: AuthStatus) -> "AuthStatusResponse":
-        return cls(
-            connected=status.connected,
-            authorized=status.authorized,
-            has_session=status.has_session,
-            verification_required=status.verification_required,
-            password_required=status.password_required,
-        )
+    state: TelegramConnectionState

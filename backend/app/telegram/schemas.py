@@ -1,39 +1,69 @@
-"""Pydantic models for scan endpoints."""
+"""Pydantic models for durable per-user scan endpoints."""
 
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 
 from pydantic import BaseModel
 
-from app.telegram.scanner import ScanProgress
+from app.models import ScanJob
+
+
+class ScanState(StrEnum):
+    IDLE = "idle"
+    PENDING = "pending"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ScanCompletionReason(StrEnum):
+    SOURCE_EXHAUSTED = "source_exhausted"
+    MESSAGE_LIMIT_REACHED = "message_limit_reached"
+    RUNTIME_LIMIT_REACHED = "runtime_limit_reached"
+    STOPPED_BY_USER = "stopped_by_user"
 
 
 class ScanStatusResponse(BaseModel):
-    """Current Saved Messages scan state."""
+    """Latest durable scan state for the authenticated user."""
 
-    is_running: bool
-    is_complete: bool
-    stop_requested: bool
-    messages_scanned: int
-    pages_scanned: int
-    page_size: int
-    last_message_id: int | None
-    started_at: datetime | None
-    finished_at: datetime | None
-    error: str | None
+    job_id: str | None = None
+    state: ScanState = ScanState.IDLE
+    stop_requested: bool = False
+    messages_scanned: int = 0
+    pages_scanned: int = 0
+    page_size: int = 100
+    max_messages: int | None = None
+    max_runtime_seconds: int | None = None
+    last_message_id: int | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error: str | None = None
+    completion_reason: ScanCompletionReason | None = None
 
     @classmethod
-    def from_progress(cls, progress: ScanProgress) -> "ScanStatusResponse":
+    def from_job(cls, job: ScanJob | None) -> "ScanStatusResponse":
+        if job is None:
+            return cls()
         return cls(
-            is_running=progress.is_running,
-            is_complete=progress.is_complete,
-            stop_requested=progress.stop_requested,
-            messages_scanned=progress.messages_scanned,
-            pages_scanned=progress.pages_scanned,
-            page_size=progress.page_size,
-            last_message_id=progress.last_message_id,
-            started_at=progress.started_at,
-            finished_at=progress.finished_at,
-            error=progress.error,
+            job_id=job.id,
+            state=ScanState(job.state),
+            stop_requested=job.stop_requested,
+            messages_scanned=job.messages_scanned,
+            pages_scanned=job.pages_scanned,
+            page_size=job.page_size,
+            max_messages=job.max_messages,
+            max_runtime_seconds=job.max_runtime_seconds,
+            last_message_id=job.last_message_id,
+            started_at=job.started_at,
+            finished_at=job.finished_at,
+            error=job.error,
+            completion_reason=(
+                ScanCompletionReason(job.completion_reason)
+                if job.completion_reason is not None
+                else None
+            ),
         )

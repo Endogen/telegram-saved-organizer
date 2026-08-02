@@ -6,13 +6,28 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Mapping, Protocol, Sequence
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from telethon.errors import RPCError
 
 from app.models import Category, Message, MessageTag, Tag
-from app.telegram.client import telegram_client_manager
+from app.telegram.client import (
+    TelegramClientNotConnectedError,
+    TelegramMessageDeleteError,
+    TelegramMessageProvenanceError,
+    delete_saved_messages,
+)
+
+__all__ = [
+    "CategoryNotFoundError",
+    "MessageListResult",
+    "MessageNotFoundError",
+    "MessageService",
+    "MessageSort",
+    "TelegramClientNotConnectedError",
+    "TelegramMessageDeleteError",
+    "TelegramMessageProvenanceError",
+]
 
 
 class MessageNotFoundError(RuntimeError):
@@ -23,24 +38,18 @@ class CategoryNotFoundError(RuntimeError):
     """Raised when a category does not exist."""
 
 
-class TelegramClientNotConnectedError(RuntimeError):
-    """Raised when Telegram deletion is attempted without an active connection."""
+class TelegramMessageDeleter(Protocol):
+    """Delete Saved Messages through the authenticated user's Telegram connection."""
 
-
-class TelegramMessageDeleteError(RuntimeError):
-    """Raised when Telegram message deletion fails."""
-
-
-class TelegramDeleteClientProtocol(Protocol):
-    """Telethon client methods used for message deletion."""
-
-    async def delete_messages(self, entity: str, message_ids: Sequence[int] | int) -> Any: ...
-
-
-class TelegramDeleteManagerProtocol(Protocol):
-    """Telegram manager methods used for message deletion."""
-
-    def get_connected_client(self) -> TelegramDeleteClientProtocol | None: ...
+    async def __call__(
+        self,
+        *,
+        user_id: str,
+        telegram_user_id: int,
+        connection_generation: int,
+        message_ids: Sequence[int],
+        session: AsyncSession,
+    ) -> None: ...
 
 
 class MessageSort(StrEnum):
@@ -48,6 +57,8 @@ class MessageSort(StrEnum):
 
     DATE_DESC = "date_desc"
     DATE_ASC = "date_asc"
+    CATEGORY = "category"
+    SENDER = "sender"
 
 
 @dataclass(slots=True, frozen=True)
@@ -65,7 +76,8 @@ class MessageService:
     """CRUD operations for cached Telegram messages."""
 
     session: AsyncSession
-    manager: TelegramDeleteManagerProtocol = telegram_client_manager
+    user_id: str
+    telegram_delete: TelegramMessageDeleter = delete_saved_messages
 
     async def list_messages(
         self,
@@ -83,6 +95,8 @@ class MessageService:
             raise ValueError("page must be greater than zero.")
         if per_page <= 0:
             raise ValueError("per_page must be greater than zero.")
+        if per_page > 200:
+            raise ValueError("per_page must not exceed 200.")
 
         normalized_category_slug = category_slug.strip() if category_slug is not None else None
         if normalized_category_slug == "":
@@ -91,40 +105,86 @@ class MessageService:
         normalized_search = search.strip() if search is not None else None
         if normalized_search == "":
             normalized_search = None
+        if normalized_search is not None and len(normalized_search) > 500:
+            raise ValueError("search must not exceed 500 characters.")
 
         normalized_tag_names = tuple(
-            dict.fromkeys(tag_name.strip() for tag_name in (tag_names or ()) if tag_name.strip())
+            dict.fromkeys(
+                tag_name.strip().casefold()
+                for tag_name in (tag_names or ())
+                if tag_name.strip()
+            )
         )
+        if len(normalized_tag_names) > 20:
+            raise ValueError("tag_names must not contain more than 20 values.")
+        if any(len(tag_name) > 100 for tag_name in normalized_tag_names):
+            raise ValueError("tag names must not exceed 100 characters.")
 
-        order_by = Message.date.desc() if sort == MessageSort.DATE_DESC else Message.date.asc()
         offset = (page - 1) * per_page
 
-        filtered_statement = select(Message)
+        filtered_statement = select(Message).where(Message.user_id == self.user_id)
         if normalized_category_slug is not None:
             filtered_statement = filtered_statement.where(
-                Message.category.has(Category.slug == normalized_category_slug)
+                Message.category.has(
+                    (Category.user_id == self.user_id)
+                    & (Category.slug == normalized_category_slug)
+                )
             )
-        if normalized_tag_names:
+        for tag_name in normalized_tag_names:
             filtered_statement = filtered_statement.where(
-                Message.tags.any(Tag.name.in_(normalized_tag_names))
+                Message.tags.any(
+                    (Tag.user_id == self.user_id)
+                    & (func.lower(Tag.name) == tag_name)
+                )
             )
         if normalized_search is not None:
-            search_pattern = f"%{normalized_search}%"
+            escaped_search = (
+                normalized_search.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            search_pattern = f"%{escaped_search}%"
             filtered_statement = filtered_statement.where(
                 or_(
-                    Message.content.ilike(search_pattern),
-                    Message.url.ilike(search_pattern),
-                    Message.sender_name.ilike(search_pattern),
+                    Message.content.ilike(search_pattern, escape="\\"),
+                    Message.url.ilike(search_pattern, escape="\\"),
+                    Message.sender_name.ilike(search_pattern, escape="\\"),
+                    Message.tags.any(
+                        and_(
+                            Tag.user_id == self.user_id,
+                            Tag.name.ilike(search_pattern, escape="\\"),
+                        )
+                    ),
                 )
             )
 
         total_statement = select(func.count()).select_from(filtered_statement.order_by(None).subquery())
         total = await self.session.scalar(total_statement)
 
+        if sort == MessageSort.CATEGORY:
+            filtered_statement = filtered_statement.join(
+                Category,
+                and_(
+                    Category.user_id == Message.user_id,
+                    Category.id == Message.category_id,
+                ),
+            )
+            ordering = (func.lower(Category.name).asc(), Message.date.desc(), Message.id.desc())
+        elif sort == MessageSort.SENDER:
+            ordering = (
+                func.lower(func.coalesce(Message.sender_name, "")).asc(),
+                Message.date.desc(),
+                Message.id.desc(),
+            )
+        elif sort == MessageSort.DATE_ASC:
+            ordering = (Message.date.asc(), Message.id.asc())
+        else:
+            ordering = (Message.date.desc(), Message.id.desc())
+
         messages_statement = (
             filtered_statement
             .options(selectinload(Message.category), selectinload(Message.tags))
-            .order_by(order_by)
+            .order_by(*ordering)
             .offset(offset)
             .limit(per_page)
         )
@@ -179,7 +239,7 @@ class MessageService:
 
         message = await self.get_message(message_id=message_id)
         if not local_only:
-            await self._delete_telegram_messages(telegram_message_ids=(message.telegram_id,))
+            await self._delete_telegram_messages(messages=(message,))
         await self.session.delete(message)
         await self.session.commit()
 
@@ -189,9 +249,7 @@ class MessageService:
         normalized_message_ids = self._normalize_message_ids(message_ids=message_ids)
         messages = await self._load_messages_by_ids(message_ids=normalized_message_ids)
         if not local_only:
-            await self._delete_telegram_messages(
-                telegram_message_ids=tuple(message.telegram_id for message in messages),
-            )
+            await self._delete_telegram_messages(messages=messages)
 
         for message in messages:
             await self.session.delete(message)
@@ -202,12 +260,14 @@ class MessageService:
     async def clear_all_messages(self) -> int:
         """Delete all messages from local storage only (does not touch Telegram)."""
 
-        count_statement = select(func.count()).select_from(Message)
+        count_statement = (
+            select(func.count())
+            .select_from(Message)
+            .where(Message.user_id == self.user_id)
+        )
         total = await self.session.scalar(count_statement)
-        # This also removes legacy orphans created before SQLite foreign-key
-        # enforcement was enabled. Bulk ORM deletes do not clean secondary rows.
-        await self.session.execute(delete(MessageTag))
-        await self.session.execute(delete(Message))
+        await self.session.execute(delete(MessageTag).where(MessageTag.user_id == self.user_id))
+        await self.session.execute(delete(Message).where(Message.user_id == self.user_id))
         await self.session.commit()
         return int(total or 0)
 
@@ -231,7 +291,10 @@ class MessageService:
         statement = (
             select(Message)
             .options(selectinload(Message.category), selectinload(Message.tags))
-            .where(Message.id == message_id)
+            .where(
+                Message.user_id == self.user_id,
+                Message.id == message_id,
+            )
         )
         return await self.session.scalar(statement)
 
@@ -239,7 +302,10 @@ class MessageService:
         statement = (
             select(Message)
             .options(selectinload(Message.category), selectinload(Message.tags))
-            .where(Message.id.in_(message_ids))
+            .where(
+                Message.user_id == self.user_id,
+                Message.id.in_(message_ids),
+            )
         )
         message_rows = await self.session.scalars(statement)
         message_by_id = {message.id: message for message in message_rows}
@@ -251,29 +317,41 @@ class MessageService:
         return [message_by_id[message_id] for message_id in message_ids]
 
     async def _ensure_category_exists(self, *, category_id: int) -> None:
-        category = await self.session.get(Category, category_id)
+        category = await self.session.scalar(
+            select(Category).where(
+                Category.user_id == self.user_id,
+                Category.id == category_id,
+            )
+        )
         if category is None:
             raise CategoryNotFoundError(f"Category {category_id} was not found.")
 
-    async def _delete_telegram_messages(self, *, telegram_message_ids: Sequence[int]) -> None:
-        client = self.manager.get_connected_client()
-        if client is None:
-            raise TelegramClientNotConnectedError(
-                "Telegram client is not connected. Connect first before deleting messages."
+    async def _delete_telegram_messages(self, *, messages: Sequence[Message]) -> None:
+        provenances = {
+            (message.telegram_user_id, message.connection_generation) for message in messages
+        }
+        if len(provenances) != 1:
+            raise TelegramMessageProvenanceError(
+                "Messages from different Telegram connections cannot be deleted together."
             )
-
-        try:
-            await client.delete_messages("me", list(telegram_message_ids))
-        except RPCError as exc:
-            raise TelegramMessageDeleteError(
-                "Telegram rejected message deletion request."
-            ) from exc
-        except Exception as exc:
-            raise TelegramMessageDeleteError("Failed to delete message(s) on Telegram.") from exc
+        telegram_user_id, connection_generation = next(iter(provenances))
+        if telegram_user_id is None or connection_generation is None:
+            raise TelegramMessageProvenanceError(
+                "Legacy messages without Telegram provenance can only be deleted locally."
+            )
+        await self.telegram_delete(
+            user_id=self.user_id,
+            telegram_user_id=telegram_user_id,
+            connection_generation=connection_generation,
+            message_ids=tuple(message.telegram_id for message in messages),
+            session=self.session,
+        )
 
     def _normalize_message_ids(self, *, message_ids: Sequence[int]) -> tuple[int, ...]:
         if not message_ids:
             raise ValueError("message_ids must contain at least one id.")
+        if len(message_ids) > 200:
+            raise ValueError("message_ids must not contain more than 200 ids.")
 
         normalized_ids: list[int] = []
         seen_ids: set[int] = set()

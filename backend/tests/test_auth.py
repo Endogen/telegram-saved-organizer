@@ -1,412 +1,297 @@
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
-from pathlib import Path
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
-from telethon.errors import PhoneCodeInvalidError, SessionPasswordNeededError
 
-from app.auth import service as auth_service_module
-from app.auth.schemas import VerifyRequest
-from app.auth.router import get_auth_service
-from app.auth.service import TelegramAuthService, VerificationCodeRequiredError, _save_credentials
-from app.main import create_app
-from app.telegram.client import TelegramClientCredentialsMismatchError
+from app.auth import service as service_module
+from app.auth.schemas import TelegramConnectionState, TelegramVerifyRequest
+from app.auth.router import router
+from app.auth.service import TelegramAuthService
+from app.security import SecretDecryptionError
 
 
-@dataclass(slots=True)
-class _SentCode:
-    phone_code_hash: str | None
+class _FakeSession:
+    def __init__(self, connection: object | None) -> None:
+        self.connection = connection
+        self.added: list[object] = []
+        self.execute_calls: list[object] = []
+        self.commit_calls = 0
+
+    async def scalar(self, _statement: object) -> object | None:
+        if "WHERE telegram_connections.telegram_user_id" in str(_statement):
+            return None
+        return self.connection
+
+    def add(self, value: object) -> None:
+        self.added.append(value)
+        self.connection = value
+
+    async def flush(self) -> None:
+        return None
+
+    async def execute(self, _statement: object) -> SimpleNamespace:
+        self.execute_calls.append(_statement)
+        return SimpleNamespace(rowcount=0)
+
+    async def commit(self) -> None:
+        self.commit_calls += 1
+
+    async def rollback(self) -> None:
+        return None
 
 
-class _FakeTelethonClient:
-    def __init__(self) -> None:
-        self.authorized = False
-        self.code_hash: str | None = "hash-123"
-        self.send_code_calls: list[str] = []
-        self.sign_in_calls: list[dict[str, Any]] = []
-        self.send_code_error: Exception | None = None
-        self.require_password_on_code = False
-        self.authorize_on_code = True
-        self.authorize_on_password = True
+class _ClientSession:
+    def save(self) -> str:
+        return "saved-string-session"
 
-    async def send_code_request(self, phone: str) -> _SentCode:
-        if self.send_code_error is not None:
-            raise self.send_code_error
-        self.send_code_calls.append(phone)
-        return _SentCode(phone_code_hash=self.code_hash)
 
-    async def sign_in(
-        self,
-        *,
-        phone: str | None = None,
-        code: str | None = None,
-        phone_code_hash: str | None = None,
-        password: str | None = None,
-    ) -> None:
-        self.sign_in_calls.append(
-            {
-                "phone": phone,
-                "code": code,
-                "phone_code_hash": phone_code_hash,
-                "password": password,
-            }
-        )
-        if password:
-            if self.authorize_on_password:
-                self.authorized = True
-            return
-        if self.require_password_on_code:
-            raise SessionPasswordNeededError(request=None)
-        if code == "00000":
-            raise PhoneCodeInvalidError(request=None)
-        if self.authorize_on_code:
-            self.authorized = True
+class _FakeClient:
+    def __init__(self, *, authorized: bool = False) -> None:
+        self.session = _ClientSession()
+        self.authorized = authorized
+        self.sent_phone: str | None = None
+        self.sign_in_kwargs: dict[str, Any] | None = None
+        self.telegram_user_id = 123
+        self.logged_out = False
 
     async def is_user_authorized(self) -> bool:
         return self.authorized
 
+    async def send_code_request(self, phone: str) -> object:
+        self.sent_phone = phone
+        return SimpleNamespace(phone_code_hash="code-hash")
 
-class _FakeTelegramManager:
-    def __init__(self) -> None:
-        self.client = _FakeTelethonClient()
-        self.connected = False
-        self.session = False
-        self.connect_calls: list[tuple[int, str]] = []
-        self.reset_calls = 0
-        self.raise_mismatch = False
+    async def sign_in(self, **kwargs: Any) -> None:
+        self.sign_in_kwargs = kwargs
+        self.authorized = True
 
-    async def connect(self, *, api_id: int, api_hash: str) -> _FakeTelethonClient:
-        if self.raise_mismatch:
-            raise TelegramClientCredentialsMismatchError("Credentials mismatch")
-        self.connect_calls.append((api_id, api_hash))
-        self.connected = True
-        self.session = True
-        return self.client
+    async def get_me(self) -> SimpleNamespace:
+        return SimpleNamespace(id=self.telegram_user_id)
 
-    async def reset_session(self) -> None:
-        self.reset_calls += 1
-        self.connected = False
-        self.session = False
-        self.client.authorized = False
-
-    def is_connected(self) -> bool:
-        return self.connected
-
-    def has_session(self) -> bool:
-        return self.session
-
-    def get_connected_client(self) -> _FakeTelethonClient | None:
-        return self.client if self.connected else None
+    async def log_out(self) -> None:
+        self.logged_out = True
 
 
-@pytest.fixture
-def auth_context() -> tuple[Any, _FakeTelegramManager]:
-    manager = _FakeTelegramManager()
-    service = TelegramAuthService(manager=manager)
-    app = create_app(api_token=None)
-
-    async def override_auth_service() -> TelegramAuthService:
-        return service
-
-    app.dependency_overrides[get_auth_service] = override_auth_service
-    yield app, manager
-    app.dependency_overrides.clear()
-
-
-@pytest.mark.asyncio
-async def test_connect_endpoint_starts_verification_flow(
-    auth_context: tuple[Any, _FakeTelegramManager],
-) -> None:
-    app, manager = auth_context
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post(
-            "/api/auth/connect",
-            json={"api_id": 12345, "api_hash": "abc123", "phone": "+15550001111"},
-        )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "connected": True,
-        "authorized": False,
-        "has_session": True,
-        "verification_required": True,
+def _connection(**overrides: Any) -> SimpleNamespace:
+    values = {
+        "user_id": "user-a",
+        "telegram_user_id": None,
+        "phone_encrypted": None,
+        "session_encrypted": None,
+        "state": "disconnected",
+        "pending_phone_code_hash_encrypted": None,
+        "pending_expires_at": None,
         "password_required": False,
+        "generation": 0,
     }
-    assert manager.client.send_code_calls == ["+15550001111"]
-    assert manager.connect_calls == [(12345, "abc123")]
+    values.update(overrides)
+    return SimpleNamespace(**values)
 
 
-@pytest.mark.asyncio
-async def test_connect_endpoint_returns_authorized_if_user_already_signed_in(
-    auth_context: tuple[Any, _FakeTelegramManager],
-) -> None:
-    app, manager = auth_context
-    manager.client.authorized = True
-    transport = ASGITransport(app=app)
+def test_verify_schema_accepts_exactly_one_ephemeral_secret() -> None:
+    assert TelegramVerifyRequest(code=" 12345 ").code == "12345"
+    assert TelegramVerifyRequest(password="  keep whitespace  ").password == "  keep whitespace  "
+    with pytest.raises(ValidationError):
+        TelegramVerifyRequest()
+    with pytest.raises(ValidationError):
+        TelegramVerifyRequest(code="123", password="secret")
 
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post(
-            "/api/auth/connect",
-            json={"api_id": 12345, "api_hash": "abc123", "phone": "+15550001111"},
-        )
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "connected": True,
-        "authorized": True,
-        "has_session": True,
-        "verification_required": False,
-        "password_required": False,
+def test_connection_router_exposes_the_user_scoped_contract() -> None:
+    operations = {
+        (route.path, next(iter(route.methods or set())))
+        for route in router.routes
     }
-    assert manager.client.send_code_calls == []
+    assert ("/telegram/connection", "GET") in operations
+    assert ("/telegram/connection", "POST") in operations
+    assert ("/telegram/connection", "DELETE") in operations
+    assert ("/telegram/connection/verify", "POST") in operations
 
 
 @pytest.mark.asyncio
-async def test_connect_endpoint_returns_bad_request_for_rpc_error(
-    auth_context: tuple[Any, _FakeTelegramManager],
-) -> None:
-    app, manager = auth_context
-    manager.client.send_code_error = PhoneCodeInvalidError(request=None)
-    transport = ASGITransport(app=app)
-
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post(
-            "/api/auth/connect",
-            json={"api_id": 12345, "api_hash": "abc123", "phone": "+15550001111"},
-        )
-
-    assert response.status_code == 400
-    assert "phone code" in response.json()["detail"].lower()
-
-
-@pytest.mark.asyncio
-async def test_verify_endpoint_completes_authorization(
-    auth_context: tuple[Any, _FakeTelegramManager],
-) -> None:
-    app, manager = auth_context
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        connect_response = await client.post(
-            "/api/auth/connect",
-            json={"api_id": 12345, "api_hash": "abc123", "phone": "+15550001111"},
-        )
-        verify_response = await client.post("/api/auth/verify", json={"code": "12345"})
-
-    assert connect_response.status_code == 200
-    assert verify_response.status_code == 200
-    assert verify_response.json()["authorized"] is True
-    assert verify_response.json()["verification_required"] is False
-    assert manager.client.sign_in_calls == [
-        {
-            "phone": "+15550001111",
-            "code": "12345",
-            "phone_code_hash": "hash-123",
-            "password": None,
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_verify_endpoint_returns_bad_request_for_rpc_error(
-    auth_context: tuple[Any, _FakeTelegramManager],
-) -> None:
-    app, _ = auth_context
-    transport = ASGITransport(app=app)
-
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        await client.post(
-            "/api/auth/connect",
-            json={"api_id": 12345, "api_hash": "abc123", "phone": "+15550001111"},
-        )
-        response = await client.post("/api/auth/verify", json={"code": "00000"})
-
-    assert response.status_code == 400
-    assert "phone code" in response.json()["detail"].lower()
-
-
-@pytest.mark.asyncio
-async def test_verify_endpoint_requires_connect_first(
-    auth_context: tuple[Any, _FakeTelegramManager],
-) -> None:
-    app, _ = auth_context
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post("/api/auth/verify", json={"code": "12345"})
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Telegram verification has not been started."
-
-
-@pytest.mark.asyncio
-async def test_verify_endpoint_handles_password_required_flow(
-    auth_context: tuple[Any, _FakeTelegramManager],
-) -> None:
-    app, manager = auth_context
-    manager.client.require_password_on_code = True
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        await client.post(
-            "/api/auth/connect",
-            json={"api_id": 12345, "api_hash": "abc123", "phone": "+15550001111"},
-        )
-        verify_response = await client.post("/api/auth/verify", json={"code": "12345"})
-        status_response = await client.get("/api/auth/status")
-        password_verify_response = await client.post(
-            "/api/auth/verify", json={"password": "super-secret-password"}
-        )
-
-    assert verify_response.status_code == 401
-    assert status_response.status_code == 200
-    assert status_response.json()["password_required"] is True
-    assert password_verify_response.status_code == 200
-    assert password_verify_response.json()["authorized"] is True
-
-
-@pytest.mark.asyncio
-async def test_verify_endpoint_maps_validation_error_for_empty_payload(
-    auth_context: tuple[Any, _FakeTelegramManager],
-) -> None:
-    app, _ = auth_context
-    transport = ASGITransport(app=app)
-
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post("/api/auth/verify", json={})
-
-    assert response.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_connect_endpoint_returns_conflict_for_credential_mismatch(
-    auth_context: tuple[Any, _FakeTelegramManager],
-) -> None:
-    app, manager = auth_context
-    manager.raise_mismatch = True
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post(
-            "/api/auth/connect",
-            json={"api_id": 12345, "api_hash": "abc123", "phone": "+15550001111"},
-        )
-
-    assert response.status_code == 409
-    assert response.json()["detail"] == "Credentials mismatch"
-
-
-@pytest.mark.asyncio
-async def test_disconnect_endpoint_clears_session_state(
-    auth_context: tuple[Any, _FakeTelegramManager],
-) -> None:
-    app, manager = auth_context
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        await client.post(
-            "/api/auth/connect",
-            json={"api_id": 12345, "api_hash": "abc123", "phone": "+15550001111"},
-        )
-        response = await client.post("/api/auth/disconnect")
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "connected": False,
-        "authorized": False,
-        "has_session": False,
-        "verification_required": False,
-        "password_required": False,
-    }
-    assert manager.reset_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_start_connection_raises_when_phone_code_hash_missing() -> None:
-    manager = _FakeTelegramManager()
-    manager.client.code_hash = None
-    service = TelegramAuthService(manager=manager)
-
-    with pytest.raises(RuntimeError, match="phone_code_hash"):
-        await service.start_connection(api_id=12345, api_hash="abc123", phone="+15550001111")
-
-
-@pytest.mark.asyncio
-async def test_verify_requires_code_or_password_when_pending() -> None:
-    manager = _FakeTelegramManager()
-    service = TelegramAuthService(manager=manager)
-
-    await service.start_connection(api_id=12345, api_hash="abc123", phone="+15550001111")
-
-    with pytest.raises(VerificationCodeRequiredError, match="Verification code is required."):
-        await service.verify()
-
-
-@pytest.mark.asyncio
-async def test_verify_returns_not_authorized_when_telegram_rejects_sign_in() -> None:
-    manager = _FakeTelegramManager()
-    manager.client.authorize_on_code = False
-    service = TelegramAuthService(manager=manager)
-
-    await service.start_connection(api_id=12345, api_hash="abc123", phone="+15550001111")
-    status = await service.verify(code="12345")
-
-    assert status.authorized is False
-    assert status.verification_required is True
-    assert status.password_required is False
-
-
-@pytest.mark.asyncio
-async def test_status_does_not_treat_unauthorized_saved_session_as_authorized() -> None:
-    manager = _FakeTelegramManager()
-    manager.connected = True
-    manager.session = True
-    manager.client.authorized = False
-    service = TelegramAuthService(manager=manager)
-
-    status = await service.status()
-
-    assert status.connected is True
-    assert status.has_session is True
-    assert status.authorized is False
-
-
-@pytest.mark.asyncio
-async def test_status_reports_connected_authorized_session() -> None:
-    manager = _FakeTelegramManager()
-    manager.connected = True
-    manager.session = True
-    manager.client.authorized = True
-    service = TelegramAuthService(manager=manager)
-
-    status = await service.status()
-
-    assert status.connected is True
-    assert status.has_session is True
-    assert status.authorized is True
-
-
-def test_verify_request_model_rejects_blank_code_and_password() -> None:
-    with pytest.raises(ValidationError, match="Either code or password must be provided."):
-        VerifyRequest(code=" ", password=" ")
-
-
-def test_save_credentials_restricts_file_permissions(
-    tmp_path: Path,
+async def test_status_maps_persisted_pending_state_without_network(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    credentials_file = tmp_path / "credentials.json"
-    credentials_file.write_text("stale", encoding="utf-8")
-    credentials_file.chmod(0o644)
-    monkeypatch.setattr(auth_service_module, "CREDENTIALS_FILE", credentials_file)
+    monkeypatch.setattr(
+        service_module,
+        "decrypt_secret",
+        lambda value, *, context: "session",
+    )
+    session = _FakeSession(
+        _connection(
+            state="pending",
+            session_encrypted="cipher",
+            pending_expires_at=datetime.now(tz=UTC) + timedelta(minutes=5),
+            password_required=True,
+        )
+    )
+    service = TelegramAuthService(session=session, user_id="user-a")  # type: ignore[arg-type]
+    assert await service.status() is TelegramConnectionState.PASSWORD_REQUIRED
 
-    _save_credentials(api_id=12345, api_hash="abc123", phone="+15550001111")
 
-    assert credentials_file.stat().st_mode & 0o777 == 0o600
-    assert json.loads(credentials_file.read_text(encoding="utf-8")) == {
-        "api_id": 12345,
-        "api_hash": "abc123",
-        "phone": "+15550001111",
+@pytest.mark.asyncio
+async def test_status_crypto_erases_an_expired_challenge() -> None:
+    connection = _connection(
+        state="pending",
+        phone_encrypted="phone-cipher",
+        session_encrypted="session-cipher",
+        pending_phone_code_hash_encrypted="hash-cipher",
+        pending_expires_at=datetime.now(tz=UTC) - timedelta(seconds=1),
+        password_required=True,
+    )
+    session = _FakeSession(connection)
+
+    state = await TelegramAuthService(session=session, user_id="user-a").status()  # type: ignore[arg-type]
+
+    assert state is TelegramConnectionState.DISCONNECTED
+    assert connection.state == "disconnected"
+    assert connection.phone_encrypted is None
+    assert connection.session_encrypted is None
+    assert connection.pending_phone_code_hash_encrypted is None
+    assert connection.pending_expires_at is None
+    assert connection.password_required is False
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_status_invalidates_corrupt_connection_ciphertext(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _connection(
+        state="connected",
+        telegram_user_id=123,
+        phone_encrypted="phone-cipher",
+        session_encrypted="corrupt-session",
+        generation=4,
+    )
+    session = _FakeSession(connection)
+    monkeypatch.setattr(
+        service_module,
+        "decrypt_secret",
+        lambda value, *, context: (_ for _ in ()).throw(
+            SecretDecryptionError("corrupt")
+        ),
+    )
+
+    state = await TelegramAuthService(session=session, user_id="user-a").status()  # type: ignore[arg-type]
+
+    assert state is TelegramConnectionState.DISCONNECTED
+    assert connection.state == "error"
+    assert connection.telegram_user_id is None
+    assert connection.phone_encrypted is None
+    assert connection.session_encrypted is None
+    assert connection.generation == 5
+    assert len(session.execute_calls) == 1
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_start_persists_only_encrypted_challenge_material(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _connection()
+    session = _FakeSession(connection)
+    client = _FakeClient()
+
+    @asynccontextmanager
+    async def fake_client(**_: Any):
+        yield client
+
+    monkeypatch.setattr(service_module, "short_lived_client", fake_client)
+    monkeypatch.setattr(
+        service_module,
+        "encrypt_secret",
+        lambda value, *, context: f"cipher:{context}:{value}",
+    )
+
+    state = await TelegramAuthService(session=session, user_id="user-a").start(phone=" +49123 ")  # type: ignore[arg-type]
+
+    assert state is TelegramConnectionState.CODE_REQUIRED
+    assert connection.state == "pending"
+    assert connection.phone_encrypted.endswith(":+49123")
+    assert connection.pending_phone_code_hash_encrypted.endswith(":code-hash")
+    assert connection.session_encrypted.endswith(":saved-string-session")
+    assert connection.generation == 1
+    assert "+49123" not in vars(connection).values()
+    assert "code-hash" not in vars(connection).values()
+
+
+@pytest.mark.asyncio
+async def test_starting_new_challenge_clears_old_principal_and_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _connection(
+        telegram_user_id=999,
+        session_encrypted="old-session",
+        state="connected",
+        generation=7,
+    )
+    session = _FakeSession(connection)
+    client = _FakeClient(authorized=False)
+
+    @asynccontextmanager
+    async def fake_client(**_: Any):
+        yield client
+
+    monkeypatch.setattr(service_module, "short_lived_client", fake_client)
+    monkeypatch.setattr(service_module, "decrypt_secret", lambda value, *, context: "session")
+    monkeypatch.setattr(service_module, "encrypt_secret", lambda value, *, context: f"cipher:{value}")
+
+    state = await TelegramAuthService(session=session, user_id="user-a").start(  # type: ignore[arg-type]
+        phone="+49123"
+    )
+
+    assert state is TelegramConnectionState.CODE_REQUIRED
+    assert connection.telegram_user_id is None
+    assert connection.generation == 8
+    assert len(session.execute_calls) == 1
+    assert "scan_jobs" in str(session.execute_calls[0])
+
+
+@pytest.mark.asyncio
+async def test_verify_uses_ephemeral_code_and_clears_challenge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _connection(
+        state="pending",
+        phone_encrypted="phone-cipher",
+        session_encrypted="session-cipher",
+        pending_phone_code_hash_encrypted="hash-cipher",
+        pending_expires_at=datetime.now(tz=UTC) + timedelta(minutes=5),
+    )
+    session = _FakeSession(connection)
+    client = _FakeClient()
+
+    @asynccontextmanager
+    async def fake_client(**_: Any):
+        yield client
+
+    plaintext = {
+        "phone-cipher": "+49123",
+        "session-cipher": "session-string",
+        "hash-cipher": "phone-code-hash",
     }
+    monkeypatch.setattr(service_module, "short_lived_client", fake_client)
+    monkeypatch.setattr(service_module, "decrypt_secret", lambda value, *, context: plaintext[value])
+    monkeypatch.setattr(service_module, "encrypt_secret", lambda value, *, context: f"cipher:{value}")
+
+    state = await TelegramAuthService(session=session, user_id="user-a").verify(  # type: ignore[arg-type]
+        code="12345",
+        password=None,
+    )
+
+    assert state is TelegramConnectionState.CONNECTED
+    assert client.sign_in_kwargs == {
+        "phone": "+49123",
+        "code": "12345",
+        "phone_code_hash": "phone-code-hash",
+    }
+    assert connection.pending_phone_code_hash_encrypted is None
+    assert connection.pending_expires_at is None
+    assert connection.state == "connected"
+    assert connection.telegram_user_id == 123

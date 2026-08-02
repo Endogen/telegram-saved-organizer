@@ -38,4 +38,15 @@ describe("useUiStore", () => {
     setSearchQuery("");
     expect(useUiStore.getState().searchQuery).toBe("");
   });
+
+  it("resets account-specific UI state", () => {
+    const { setSearchQuery, setSidebarOpen, reset } = useUiStore.getState();
+    setSearchQuery("private search");
+    setSidebarOpen(true);
+
+    reset();
+
+    expect(useUiStore.getState().searchQuery).toBe("");
+    expect(useUiStore.getState().isSidebarOpen).toBe(false);
+  });
 });

@@ -51,12 +51,15 @@ DEFAULT_CATEGORIES: tuple[DefaultCategorySeed, ...] = (
 )
 
 
-async def seed_default_categories(session: AsyncSession) -> list[Category]:
-    """Insert built-in categories that are not already present."""
+async def seed_default_categories(session: AsyncSession, *, user_id: str) -> list[Category]:
+    """Insert a user's built-in categories that are not already present."""
 
     default_slugs = [seed.slug for seed in DEFAULT_CATEGORIES]
     existing_categories = await session.scalars(
-        select(Category).where(Category.slug.in_(default_slugs))
+        select(Category).where(
+            Category.user_id == user_id,
+            Category.slug.in_(default_slugs),
+        )
     )
     existing_slugs = {category.slug for category in existing_categories}
 
@@ -66,8 +69,11 @@ async def seed_default_categories(session: AsyncSession) -> list[Category]:
             continue
         created_categories.append(
             Category(
+                user_id=user_id,
                 name=seed.name,
+                normalized_name=seed.name.casefold(),
                 slug=seed.slug,
+                system_key=seed.slug,
                 icon=seed.icon,
                 color=seed.color,
                 position=seed.position,
@@ -77,6 +83,9 @@ async def seed_default_categories(session: AsyncSession) -> list[Category]:
 
     if created_categories:
         session.add_all(created_categories)
-        await session.commit()
+        # Transaction ownership belongs to the caller. In particular, account
+        # creation and its initial tenant data must either both persist or both
+        # roll back.
+        await session.flush()
 
     return created_categories

@@ -4,99 +4,62 @@ import { describe, expect, it, vi } from "vitest";
 import { ConnectForm } from "@/components/auth/connect-form";
 
 describe("ConnectForm", () => {
-  it("renders all input fields and submit button", () => {
+  it("asks only for the Telegram phone number", () => {
     render(<ConnectForm isSubmitting={false} error={null} onSubmit={vi.fn()} />);
 
-    expect(screen.getByLabelText("API ID")).toBeInTheDocument();
-    expect(screen.getByLabelText("API Hash")).toBeInTheDocument();
-    expect(screen.getByLabelText("Phone Number")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start Connection" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Phone Number")).toHaveAttribute("autocomplete", "tel");
+    expect(screen.queryByLabelText("API ID")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("API Hash")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue with Telegram" })).toBeInTheDocument();
   });
 
-  it("shows submitting state", () => {
+  it("shows the pending state and disables the input", () => {
     render(<ConnectForm isSubmitting error={null} onSubmit={vi.fn()} />);
 
-    expect(screen.getByRole("button", { name: "Sending code..." })).toBeInTheDocument();
-    expect(screen.getByLabelText("API ID")).toBeDisabled();
-    expect(screen.getByLabelText("API Hash")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Sending code..." })).toBeDisabled();
     expect(screen.getByLabelText("Phone Number")).toBeDisabled();
   });
 
-  it("displays server error", () => {
-    render(<ConnectForm isSubmitting={false} error="Invalid credentials." onSubmit={vi.fn()} />);
+  it("exposes a server error as an accessible field error", () => {
+    render(<ConnectForm isSubmitting={false} error="Invalid phone number." onSubmit={vi.fn()} />);
 
-    expect(screen.getByText("Invalid credentials.")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Invalid phone number.");
+    expect(screen.getByLabelText("Phone Number")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("Phone Number")).toHaveAttribute("aria-describedby", "telegram-phone-error");
   });
 
-  it("validates API ID must be a positive integer", () => {
+  it("validates that the phone number is long enough", () => {
     const onSubmit = vi.fn();
     render(<ConnectForm isSubmitting={false} error={null} onSubmit={onSubmit} />);
 
-    fireEvent.change(screen.getByLabelText("API ID"), { target: { value: "abc" } });
-    fireEvent.change(screen.getByLabelText("API Hash"), { target: { value: "hash123" } });
-    fireEvent.change(screen.getByLabelText("Phone Number"), { target: { value: "+15550001234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Start Connection" }));
-
-    expect(screen.getByText("API ID must be a positive integer.")).toBeInTheDocument();
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it("validates API hash is required", () => {
-    const onSubmit = vi.fn();
-    render(<ConnectForm isSubmitting={false} error={null} onSubmit={onSubmit} />);
-
-    fireEvent.change(screen.getByLabelText("API ID"), { target: { value: "123" } });
-    fireEvent.change(screen.getByLabelText("API Hash"), { target: { value: "  " } });
-    fireEvent.change(screen.getByLabelText("Phone Number"), { target: { value: "+15550001234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Start Connection" }));
-
-    expect(screen.getByText("API hash is required.")).toBeInTheDocument();
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it("validates phone number minimum length", () => {
-    const onSubmit = vi.fn();
-    render(<ConnectForm isSubmitting={false} error={null} onSubmit={onSubmit} />);
-
-    fireEvent.change(screen.getByLabelText("API ID"), { target: { value: "123" } });
-    fireEvent.change(screen.getByLabelText("API Hash"), { target: { value: "hash" } });
     fireEvent.change(screen.getByLabelText("Phone Number"), { target: { value: "12" } });
-    fireEvent.click(screen.getByRole("button", { name: "Start Connection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue with Telegram" }));
 
-    expect(screen.getByText("Phone number looks too short.")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Phone number looks too short.");
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("submits valid form data", () => {
+  it("trims and submits a valid phone number", () => {
     const onSubmit = vi.fn();
     render(<ConnectForm isSubmitting={false} error={null} onSubmit={onSubmit} />);
 
-    fireEvent.change(screen.getByLabelText("API ID"), { target: { value: "123456" } });
-    fireEvent.change(screen.getByLabelText("API Hash"), { target: { value: "abcdef" } });
-    fireEvent.change(screen.getByLabelText("Phone Number"), { target: { value: "+15550001234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Start Connection" }));
+    fireEvent.change(screen.getByLabelText("Phone Number"), { target: { value: "  +15550001234  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue with Telegram" }));
 
-    expect(onSubmit).toHaveBeenCalledWith({
-      api_id: 123456,
-      api_hash: "abcdef",
-      phone: "+15550001234",
-    });
+    expect(onSubmit).toHaveBeenCalledWith({ phone: "+15550001234" });
   });
 
-  it("clears validation error on new submit attempt", () => {
+  it("clears a local validation error on the next valid submission", () => {
     const onSubmit = vi.fn();
     render(<ConnectForm isSubmitting={false} error={null} onSubmit={onSubmit} />);
 
-    // Trigger validation error
-    fireEvent.click(screen.getByRole("button", { name: "Start Connection" }));
-    expect(screen.getByText("API ID must be a positive integer.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Continue with Telegram" }));
+    expect(screen.getByRole("alert")).toBeInTheDocument();
 
-    // Fill valid data and submit
-    fireEvent.change(screen.getByLabelText("API ID"), { target: { value: "123" } });
-    fireEvent.change(screen.getByLabelText("API Hash"), { target: { value: "hash" } });
     fireEvent.change(screen.getByLabelText("Phone Number"), { target: { value: "+1555" } });
-    fireEvent.click(screen.getByRole("button", { name: "Start Connection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue with Telegram" }));
 
-    expect(onSubmit).toHaveBeenCalled();
+    expect(onSubmit).toHaveBeenCalledWith({ phone: "+1555" });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

@@ -6,12 +6,11 @@ import re
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.models import Message, Tag
+from app.models import Message, MessageTag, Tag
 
 HEX_COLOR_PATTERN = re.compile(r"^#[0-9A-F]{6}$")
 
@@ -37,11 +36,16 @@ class TagService:
     """CRUD operations for tags and message-tag associations."""
 
     session: AsyncSession
+    user_id: str
 
     async def list_tags(self) -> list[Tag]:
         """Return all tags ordered by name."""
 
-        statement = select(Tag).order_by(func.lower(Tag.name).asc(), Tag.id.asc())
+        statement = (
+            select(Tag)
+            .where(Tag.user_id == self.user_id)
+            .order_by(Tag.normalized_name.asc(), Tag.id.asc())
+        )
         tag_rows = await self.session.scalars(statement)
         return list(tag_rows)
 
@@ -52,7 +56,12 @@ class TagService:
         normalized_color = self._normalize_color(color)
         await self._ensure_name_available(name=normalized_name, exclude_tag_id=None)
 
-        tag = Tag(name=normalized_name, color=normalized_color)
+        tag = Tag(
+            user_id=self.user_id,
+            name=normalized_name,
+            normalized_name=normalized_name.casefold(),
+            color=normalized_color,
+        )
         self.session.add(tag)
         await self._commit_with_conflict_handling()
         return tag
@@ -79,13 +88,26 @@ class TagService:
             raise MessageNotFoundError(f"Message {normalized_message_id} was not found.")
 
         tags = await self._load_tags_by_ids(tag_ids=normalized_tag_ids)
-        existing_tag_ids = {tag.id for tag in message.tags}
+        existing_tag_ids = set(
+            await self.session.scalars(
+                select(MessageTag.tag_id).where(
+                    MessageTag.user_id == self.user_id,
+                    MessageTag.message_id == normalized_message_id,
+                )
+            )
+        )
         for tag in tags:
             if tag.id not in existing_tag_ids:
-                message.tags.append(tag)
+                self.session.add(
+                    MessageTag(
+                        user_id=self.user_id,
+                        message_id=normalized_message_id,
+                        tag_id=tag.id,
+                    )
+                )
 
         await self._commit_with_conflict_handling()
-        return sorted(message.tags, key=lambda item: item.id)
+        return await self._load_message_tags(message_id=normalized_message_id)
 
     async def remove_tag_from_message(self, *, message_id: int, tag_id: int) -> list[Tag]:
         """Remove a tag from a message."""
@@ -101,24 +123,66 @@ class TagService:
         if tag is None:
             raise TagNotFoundError(f"Tag {normalized_tag_id} was not found.")
 
-        if not any(existing_tag.id == normalized_tag_id for existing_tag in message.tags):
+        assignment = await self.session.scalar(
+            select(MessageTag).where(
+                MessageTag.user_id == self.user_id,
+                MessageTag.message_id == normalized_message_id,
+                MessageTag.tag_id == normalized_tag_id,
+            )
+        )
+        if assignment is None:
             raise TagAssignmentNotFoundError(
                 f"Tag {normalized_tag_id} is not assigned to message {normalized_message_id}."
             )
 
-        message.tags = [existing_tag for existing_tag in message.tags if existing_tag.id != normalized_tag_id]
+        await self.session.execute(
+            delete(MessageTag).where(
+                MessageTag.user_id == self.user_id,
+                MessageTag.message_id == normalized_message_id,
+                MessageTag.tag_id == normalized_tag_id,
+            )
+        )
         await self._commit_with_conflict_handling()
-        return sorted(message.tags, key=lambda item: item.id)
+        return await self._load_message_tags(message_id=normalized_message_id)
 
     async def _load_message(self, *, message_id: int) -> Message | None:
-        statement = select(Message).options(selectinload(Message.tags)).where(Message.id == message_id)
+        statement = (
+            select(Message)
+            .where(
+                Message.user_id == self.user_id,
+                Message.id == message_id,
+            )
+        )
         return await self.session.scalar(statement)
 
+    async def _load_message_tags(self, *, message_id: int) -> list[Tag]:
+        statement = (
+            select(Tag)
+            .join(
+                MessageTag,
+                (MessageTag.user_id == Tag.user_id) & (MessageTag.tag_id == Tag.id),
+            )
+            .where(
+                MessageTag.user_id == self.user_id,
+                MessageTag.message_id == message_id,
+            )
+            .order_by(Tag.id.asc())
+        )
+        return list(await self.session.scalars(statement))
+
     async def _load_tag(self, *, tag_id: int) -> Tag | None:
-        return await self.session.get(Tag, tag_id)
+        return await self.session.scalar(
+            select(Tag).where(
+                Tag.user_id == self.user_id,
+                Tag.id == tag_id,
+            )
+        )
 
     async def _load_tags_by_ids(self, *, tag_ids: Sequence[int]) -> list[Tag]:
-        statement = select(Tag).where(Tag.id.in_(tag_ids))
+        statement = select(Tag).where(
+            Tag.user_id == self.user_id,
+            Tag.id.in_(tag_ids),
+        )
         tag_rows = await self.session.scalars(statement)
         tag_by_id = {tag.id: tag for tag in tag_rows}
 
@@ -129,7 +193,10 @@ class TagService:
         return [tag_by_id[tag_id] for tag_id in tag_ids]
 
     async def _ensure_name_available(self, *, name: str, exclude_tag_id: int | None) -> None:
-        statement = select(Tag).where(func.lower(Tag.name) == name.lower())
+        statement = select(Tag).where(
+            Tag.user_id == self.user_id,
+            Tag.normalized_name == name.casefold(),
+        )
         if exclude_tag_id is not None:
             statement = statement.where(Tag.id != exclude_tag_id)
         existing_tag = await self.session.scalar(statement)
@@ -166,6 +233,8 @@ class TagService:
     def _normalize_tag_ids(self, *, tag_ids: Sequence[int]) -> tuple[int, ...]:
         if not tag_ids:
             raise ValueError("tag_ids must contain at least one id.")
+        if len(tag_ids) > 100:
+            raise ValueError("tag_ids must not contain more than 100 ids.")
 
         normalized_ids: list[int] = []
         seen_ids: set[int] = set()
@@ -189,4 +258,3 @@ class TagService:
 
         missing_list = ", ".join(str(tag_id) for tag_id in missing_ids)
         return f"Tags {missing_list} were not found."
-

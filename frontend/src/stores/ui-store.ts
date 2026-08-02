@@ -6,6 +6,7 @@ type UiState = {
   setSidebarOpen: (isOpen: boolean) => void;
   toggleSidebar: () => void;
   setSearchQuery: (query: string) => void;
+  reset: () => void;
 };
 
 export const useUiStore = create<UiState>()((set) => ({
@@ -14,4 +15,5 @@ export const useUiStore = create<UiState>()((set) => ({
   setSidebarOpen: (isOpen) => set({ isSidebarOpen: isOpen }),
   toggleSidebar: () => set((state) => ({ isSidebarOpen: !state.isSidebarOpen })),
   setSearchQuery: (query) => set({ searchQuery: query }),
+  reset: () => set({ isSidebarOpen: false, searchQuery: "" }),
 }));

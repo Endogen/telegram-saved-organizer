@@ -12,20 +12,43 @@ const POLL_INTERVAL_IDLE_MS = 8000;
 const POLL_INTERVAL_STREAM_BACKSTOP_MS = 12000;
 
 const INITIAL_SCAN_STATUS: ScanStatus = {
-  is_running: false,
-  is_complete: false,
+  job_id: null,
+  state: "idle",
   stop_requested: false,
   messages_scanned: 0,
   pages_scanned: 0,
   page_size: 100,
+  max_messages: null,
+  max_runtime_seconds: null,
   last_message_id: null,
   started_at: null,
   finished_at: null,
   error: null,
+  completion_reason: null,
 };
 
 type RefreshMode = "initial" | "manual" | "poll";
 type StreamConnectionState = "unsupported" | "connecting" | "connected" | "fallback";
+
+function isActiveScan(status: ScanStatus): boolean {
+  return status.state === "pending" || status.state === "running" || status.state === "stopping";
+}
+
+function completionReasonLabel(status: ScanStatus): string | null {
+  if (status.completion_reason === "source_exhausted") {
+    return "All available Saved Messages were imported.";
+  }
+  if (status.completion_reason === "message_limit_reached") {
+    return `The server message limit${status.max_messages === null ? "" : ` of ${status.max_messages}`} was reached.`;
+  }
+  if (status.completion_reason === "runtime_limit_reached") {
+    return `The server runtime limit${status.max_runtime_seconds === null ? "" : ` of ${status.max_runtime_seconds} seconds`} was reached.`;
+  }
+  if (status.completion_reason === "stopped_by_user") {
+    return "The scan was stopped by request.";
+  }
+  return null;
+}
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -115,7 +138,7 @@ export function ScanProgress() {
     try {
       const nextStatus = await fetchScanStatus();
       setStatus(nextStatus);
-      if (nextStatus.is_running || mode === "initial" || mode === "manual") {
+      if (isActiveScan(nextStatus) || mode === "initial" || mode === "manual") {
         setPageSizeInput(String(nextStatus.page_size));
       }
       setNow(Date.now());
@@ -148,7 +171,7 @@ export function ScanProgress() {
         setStatus((prev) => {
           // Only sync page size from server when scan is active (input is disabled anyway)
           // or on the very first status update — avoid overwriting user input while idle.
-          if (nextStatus.is_running || prev === INITIAL_SCAN_STATUS) {
+          if (isActiveScan(nextStatus) || prev === INITIAL_SCAN_STATUS) {
             setPageSizeInput(String(nextStatus.page_size));
           }
           return nextStatus;
@@ -185,7 +208,7 @@ export function ScanProgress() {
       const delay =
         streamConnectionState === "connected"
           ? POLL_INTERVAL_STREAM_BACKSTOP_MS
-          : status.is_running
+          : isActiveScan(status)
             ? POLL_INTERVAL_ACTIVE_MS
             : POLL_INTERVAL_IDLE_MS;
       timeoutId = window.setTimeout(async () => {
@@ -202,10 +225,10 @@ export function ScanProgress() {
         window.clearTimeout(timeoutId);
       }
     };
-  }, [refreshStatus, status.is_running, streamConnectionState]);
+  }, [refreshStatus, status, streamConnectionState]);
 
   useEffect(() => {
-    if (!status.is_running) {
+    if (!isActiveScan(status)) {
       return;
     }
 
@@ -216,7 +239,7 @@ export function ScanProgress() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [status.is_running]);
+  }, [status]);
 
   const handleStartScan = useCallback(async () => {
     setRequestError(null);
@@ -291,30 +314,33 @@ export function ScanProgress() {
     if (status.error) {
       return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
     }
-    if (status.is_running) {
+    if (isActiveScan(status)) {
       return "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300";
     }
-    if (status.is_complete) {
+    if (status.state === "completed") {
       return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
     }
     return "border-[hsl(var(--border))] bg-[hsl(var(--background)/0.75)] text-[hsl(var(--muted-foreground))]";
-  }, [status.error, status.is_complete, status.is_running]);
+  }, [status]);
 
   const statusLabel = useMemo(() => {
     if (status.error) {
       return "Scan failed";
     }
-    if (status.is_running && status.stop_requested) {
+    if (status.state === "stopping" || (isActiveScan(status) && status.stop_requested)) {
       return "Stopping scan";
     }
-    if (status.is_running) {
+    if (isActiveScan(status)) {
       return "Scanning Saved Messages";
     }
-    if (status.is_complete) {
+    if (status.state === "completed") {
       return "Scan complete";
     }
+    if (status.state === "cancelled") {
+      return "Scan stopped";
+    }
     return "Ready to scan";
-  }, [status.error, status.is_complete, status.is_running, status.stop_requested]);
+  }, [status]);
 
   const streamStatusLabel = useMemo(() => {
     if (streamConnectionState === "connected") {
@@ -340,9 +366,11 @@ export function ScanProgress() {
   }, [streamConnectionState]);
 
   const duration = formatDuration(status.started_at, status.finished_at, now);
+  const completionMessage = completionReasonLabel(status);
+  const scanIsActive = isActiveScan(status);
   const isBusy = isInitialLoading || isStarting || isStopping;
-  const canStart = !isBusy && !status.is_running;
-  const canStop = !isBusy && status.is_running && !status.stop_requested;
+  const canStart = !isBusy && !scanIsActive;
+  const canStop = !isBusy && scanIsActive && !status.stop_requested;
 
   return (
     <section className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.94)] p-4 shadow-sm md:p-5">
@@ -372,7 +400,7 @@ export function ScanProgress() {
               value={pageSizeInput}
               onChange={(event) => setPageSizeInput(event.target.value)}
               onBlur={() => setPageSizeInput((current) => String(clampPageSize(Number.parseInt(current, 10))))}
-              disabled={status.is_running || isStarting}
+              disabled={scanIsActive || isStarting}
               className="h-7 w-24 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2 text-sm text-[hsl(var(--foreground))] outline-none ring-[hsl(var(--ring))] transition focus:ring-2"
             />
           </label>
@@ -402,7 +430,7 @@ export function ScanProgress() {
             variant="outline"
             size="sm"
             onClick={() => void handleClearAndRescan()}
-            disabled={status.is_running || isStarting || isStopping || isClearing}
+            disabled={scanIsActive || isStarting || isStopping || isClearing}
             className="gap-1.5"
           >
             {isClearing ? <LoaderCircle className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
@@ -421,7 +449,7 @@ export function ScanProgress() {
           <div className={`mt-4 rounded-lg border px-3 py-2 text-sm font-medium ${statusTone}`}>{statusLabel}</div>
 
           <div className="mt-3 h-2 overflow-hidden rounded-full bg-[hsl(var(--muted))]">
-            {status.is_running ? (
+            {scanIsActive ? (
               <motion.div
                 className="h-full w-1/3 rounded-full bg-[hsl(var(--primary))]"
                 initial={{ x: "-30%" }}
@@ -430,7 +458,7 @@ export function ScanProgress() {
               />
             ) : status.error ? (
               <motion.div initial={{ width: 0 }} animate={{ width: "100%" }} className="h-full bg-amber-400" />
-            ) : status.is_complete ? (
+            ) : status.state === "completed" ? (
               <div className="h-full w-full bg-emerald-500" />
             ) : (
               <div className="h-full w-0" />
@@ -473,6 +501,22 @@ export function ScanProgress() {
               </p>
               <p className="mt-1 text-lg font-semibold text-[hsl(var(--foreground))]">{status.last_message_id ?? "—"}</p>
             </article>
+
+            <article className="rounded-lg border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--background)/0.7)] px-3 py-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[hsl(var(--muted-foreground))]">
+                Message Limit
+              </p>
+              <p className="mt-1 text-lg font-semibold text-[hsl(var(--foreground))]">{status.max_messages ?? "—"}</p>
+            </article>
+
+            <article className="rounded-lg border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--background)/0.7)] px-3 py-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[hsl(var(--muted-foreground))]">
+                Runtime Limit
+              </p>
+              <p className="mt-1 text-lg font-semibold text-[hsl(var(--foreground))]">
+                {status.max_runtime_seconds === null ? "—" : `${status.max_runtime_seconds}s`}
+              </p>
+            </article>
           </div>
         </>
       )}
@@ -494,10 +538,10 @@ export function ScanProgress() {
         ) : null}
       </AnimatePresence>
 
-      {!status.error && !requestError && status.is_complete ? (
+      {!status.error && !requestError && completionMessage ? (
         <div className="mt-4 inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
           <CheckCircle2 className="size-3.5" />
-          Scan finished successfully
+          {completionMessage}
         </div>
       ) : null}
     </section>

@@ -14,16 +14,19 @@ import { DashboardPage } from "@/pages/dashboard-page";
 import type { ScanStatus } from "@/types/scan";
 
 const idleScanStatus: ScanStatus = {
-  is_running: false,
-  is_complete: false,
+  job_id: null,
+  state: "idle",
   stop_requested: false,
   messages_scanned: 0,
   pages_scanned: 0,
   page_size: 100,
+  max_messages: null,
+  max_runtime_seconds: null,
   last_message_id: null,
   started_at: null,
   finished_at: null,
   error: null,
+  completion_reason: null,
 };
 
 describe("DashboardPage", () => {
