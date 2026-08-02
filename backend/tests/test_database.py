@@ -11,11 +11,22 @@ from app import database as database_module
 from app.database import (
     _configure_sqlite_connection,
     _secure_sqlite_database_file,
+    build_engine,
     database_is_ready,
 )
 from app.models import Base, Category, Message, MessageTag, Tag, User
 
 USER_ID = "00000000-0000-0000-0000-000000000001"
+
+
+@pytest.mark.asyncio
+async def test_application_engines_hide_bound_parameters() -> None:
+    test_engine = build_engine("sqlite+aiosqlite:///:memory:")
+
+    try:
+        assert test_engine.sync_engine.hide_parameters is True
+    finally:
+        await test_engine.dispose()
 
 
 @pytest.mark.asyncio

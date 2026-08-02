@@ -1,4 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render as renderTestingLibrary, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 
 import { TagInputDialog } from "@/components/tags/tag-input";
@@ -36,6 +38,10 @@ function createMessage(overrides: Partial<MessageListItem> = {}): MessageListIte
     tags: [{ id: 1, name: "frontend", color: "#0EA5E9" }],
     ...overrides,
   };
+}
+
+function render(element: ReactElement) {
+  return renderTestingLibrary(<MemoryRouter>{element}</MemoryRouter>);
 }
 
 describe("TagInputDialog", () => {
@@ -92,12 +98,33 @@ describe("TagInputDialog", () => {
       />,
     );
 
-    expect(screen.getByText("Manage tags")).toBeInTheDocument();
+    expect(screen.getByText("Tags for this message")).toBeInTheDocument();
     // Attached tag (frontend) with remove button
     expect(screen.getByText("#frontend")).toBeInTheDocument();
     // Available tags (not attached)
     expect(screen.getByText("+ #backend")).toBeInTheDocument();
     expect(screen.getByText("+ #urgent")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Manage all tags" })).toHaveAttribute("href", "/settings/tags");
+  });
+
+  it("keeps long tag catalogues reachable within a short viewport", () => {
+    render(
+      <TagInputDialog
+        open
+        message={createMessage()}
+        availableTags={availableTags}
+        isSubmitting={false}
+        errorMessage={null}
+        onClose={vi.fn()}
+        onAddTag={vi.fn()}
+        onRemoveTag={vi.fn()}
+        onCreateTag={vi.fn()}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveClass("max-h-[calc(100dvh-2rem)]", "overflow-y-auto", "overscroll-contain");
+    expect(dialog.parentElement).toHaveClass("overflow-y-auto");
   });
 
   it("calls onRemoveTag when attached tag is clicked", () => {
@@ -320,6 +347,27 @@ describe("TagInputDialog", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes before opening the full tag manager", () => {
+    const onClose = vi.fn();
+
+    render(
+      <TagInputDialog
+        open
+        message={createMessage()}
+        availableTags={availableTags}
+        isSubmitting={false}
+        errorMessage={null}
+        onClose={onClose}
+        onAddTag={vi.fn()}
+        onRemoveTag={vi.fn()}
+        onCreateTag={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "Manage all tags" }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 

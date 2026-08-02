@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { FolderInput } from "lucide-react";
+import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { ModalPortal } from "@/components/ui/modal-portal";
@@ -107,6 +108,17 @@ export function MoveDialog({
               ))}
             </select>
           </label>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[hsl(var(--muted-foreground))]">
+            <span>Missing a destination?</span>
+            <Link
+              to="/settings/categories"
+              onClick={onClose}
+              className="font-semibold text-[hsl(var(--primary))] underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+            >
+              Manage categories
+            </Link>
+          </div>
 
           {errorMessage ? (
             <p role="alert" className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">{errorMessage}</p>

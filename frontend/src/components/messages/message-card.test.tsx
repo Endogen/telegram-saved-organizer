@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { MessageCard } from "@/components/messages/message-card";
@@ -64,6 +64,35 @@ describe("MessageCard", () => {
     expect(screen.getByText("#work")).toBeInTheDocument();
   });
 
+  it("uses custom colors only as decorative accents so label text keeps semantic contrast", () => {
+    render(
+      <MessageCard
+        message={createMessage({
+          category: {
+            id: 4,
+            name: "Bright category",
+            slug: "bright-category",
+            icon: "link",
+            color: "#FFFFFF",
+          },
+          tags: [{ id: 1, name: "bright-tag", color: "#FFFFFF" }],
+        })}
+        onOpenDetailRequest={vi.fn()}
+        onMoveRequest={vi.fn()}
+        onTagRequest={vi.fn()}
+        onDeleteRequest={vi.fn()}
+      />,
+    );
+
+    const categoryLabel = screen.getByText("Bright category").closest("span");
+    const tagLabel = screen.getByText("#bright-tag").closest("li");
+    expect(categoryLabel).toHaveClass("text-[hsl(var(--foreground))]");
+    expect(categoryLabel).not.toHaveStyle({ color: "#FFFFFF" });
+    expect(tagLabel).toHaveClass("text-[hsl(var(--foreground))]");
+    expect(tagLabel).not.toHaveStyle({ color: "#FFFFFF" });
+    expect(tagLabel?.querySelector('[aria-hidden="true"]')).toHaveStyle({ backgroundColor: "#FFFFFF" });
+  });
+
   it("invokes action callbacks from the card controls", () => {
     const message = createMessage();
     const onOpenDetailRequest = vi.fn();
@@ -93,7 +122,7 @@ describe("MessageCard", () => {
     expect(onMoveRequest).toHaveBeenCalledWith(message);
 
     fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Manage tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
     expect(onTagRequest).toHaveBeenCalledWith(message);
 
     fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
@@ -136,5 +165,35 @@ describe("MessageCard", () => {
     expect(onDeleteRequest).not.toHaveBeenCalled();
 
     expect(screen.getByText(message.category.name).closest("article")).toHaveAttribute("draggable", "false");
+  });
+
+  it("supports keyboard navigation and restores focus to the action trigger", async () => {
+    render(
+      <MessageCard
+        message={createMessage()}
+        onOpenDetailRequest={vi.fn()}
+        onMoveRequest={vi.fn()}
+        onTagRequest={vi.fn()}
+        onDeleteRequest={vi.fn()}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Message actions" });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+
+    const firstItem = screen.getByRole("menuitem", { name: "View details" });
+    await waitFor(() => expect(firstItem).toHaveFocus());
+    expect(trigger).toHaveAttribute("aria-controls", screen.getByRole("menu").id);
+
+    fireEvent.keyDown(firstItem, { key: "ArrowDown" });
+    expect(screen.getByRole("menuitem", { name: "Move to category" })).toHaveFocus();
+
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "End" });
+    expect(screen.getByRole("menuitem", { name: "Delete message" })).toHaveFocus();
+
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 });

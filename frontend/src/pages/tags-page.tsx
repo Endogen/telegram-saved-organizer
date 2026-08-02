@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { LoaderCircle, Pencil, Tag, TagIcon, Trash2 } from "lucide-react";
 import { Link } from "react-router";
 
@@ -7,6 +7,7 @@ import { DeleteConfirmationDialog } from "@/components/organization/delete-confi
 import { TagFormDialog, type TagFormInput } from "@/components/organization/tag-form-dialog";
 import { Button } from "@/components/ui/button";
 import { StatePanel } from "@/components/ui/state-panel";
+import { subscribeToOrganizationChanges } from "@/lib/organization-events";
 
 function toErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -35,18 +36,33 @@ export function TagsPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const loadRevisionRef = useRef(0);
+  const hasLoadedTagsRef = useRef(false);
 
-  const loadTags = useCallback(async (signal?: AbortSignal) => {
-    setIsLoading(true);
-    setLoadError(null);
+  const loadTags = useCallback(async (signal?: AbortSignal, background = false) => {
+    const revision = ++loadRevisionRef.current;
+    if (!background) {
+      setIsLoading(true);
+      setLoadError(null);
+    }
     try {
-      setTags(await listManagedTags(signal));
+      const nextTags = await listManagedTags(signal);
+      if (signal?.aborted || revision !== loadRevisionRef.current) {
+        return;
+      }
+      hasLoadedTagsRef.current = true;
+      setTags(nextTags);
+      setLoadError(null);
     } catch (error) {
-      if (!signal?.aborted) {
+      if (
+        !signal?.aborted
+        && revision === loadRevisionRef.current
+        && (!background || !hasLoadedTagsRef.current)
+      ) {
         setLoadError(toErrorMessage(error, "Could not load your tags."));
       }
     } finally {
-      if (!signal?.aborted) {
+      if (!signal?.aborted && revision === loadRevisionRef.current) {
         setIsLoading(false);
       }
     }
@@ -55,7 +71,14 @@ export function TagsPage() {
   useEffect(() => {
     const controller = new AbortController();
     void loadTags(controller.signal);
-    return () => controller.abort();
+    const unsubscribe = subscribeToOrganizationChanges("tags", () => {
+      void loadTags(undefined, true);
+    });
+    return () => {
+      controller.abort();
+      loadRevisionRef.current += 1;
+      unsubscribe();
+    };
   }, [loadTags]);
 
   function openCreateDialog() {
@@ -194,14 +217,12 @@ export function TagsPage() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <span
-                    className="inline-flex max-w-full items-center gap-2 rounded-full border px-3 py-1 text-sm font-semibold"
+                    className="inline-flex max-w-full items-center gap-2 rounded-full border bg-[hsl(var(--muted))] px-3 py-1 text-sm font-semibold text-[hsl(var(--foreground))]"
                     style={{
-                      color: tag.color ?? "hsl(var(--foreground))",
                       borderColor: withAlpha(tag.color, "55") ?? "hsl(var(--border))",
-                      backgroundColor: withAlpha(tag.color, "14") ?? "hsl(var(--muted))",
                     }}
                   >
-                    <Tag className="size-3.5 shrink-0" />
+                    <Tag className="size-3.5 shrink-0" style={{ color: tag.color ?? "hsl(var(--muted-foreground))" }} />
                     <span className="truncate">#{tag.name}</span>
                   </span>
                   <p className="mt-2 text-sm text-[hsl(var(--muted-foreground))]">{messageCountLabel(tag.message_count)}</p>

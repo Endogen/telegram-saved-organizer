@@ -173,13 +173,17 @@ export function MessageDetail({
 
               <div className="mt-3 flex flex-wrap gap-2">
                 <span
-                  className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold"
+                  aria-label={`Category: ${message.category.name}`}
+                  className="inline-flex items-center gap-1.5 rounded-full border bg-[hsl(var(--muted))] px-2.5 py-1 text-xs font-semibold text-[hsl(var(--foreground))]"
                   style={{
-                    color: message.category.color,
                     borderColor: withAlpha(message.category.color, "66") ?? "hsl(var(--border))",
-                    backgroundColor: withAlpha(message.category.color, "1A") ?? "hsl(var(--muted))",
                   }}
                 >
+                  <span
+                    aria-hidden="true"
+                    className="size-2 rounded-full"
+                    style={{ backgroundColor: message.category.color }}
+                  />
                   {message.category.name}
                 </span>
                 {message.sender_name ? (
@@ -313,13 +317,17 @@ export function MessageDetail({
                     {message.tags.map((tag) => (
                       <li
                         key={tag.id}
-                        className="rounded-full border px-2.5 py-1 text-xs font-medium"
+                        aria-label={`Tag: ${tag.name}`}
+                        className="inline-flex items-center gap-1.5 rounded-full border bg-[hsl(var(--muted))] px-2.5 py-1 text-xs font-medium text-[hsl(var(--foreground))]"
                         style={{
-                          color: tag.color ?? "hsl(var(--muted-foreground))",
                           borderColor: withAlpha(tag.color, "66") ?? "hsl(var(--border))",
-                          backgroundColor: withAlpha(tag.color, "14") ?? "hsl(var(--muted))",
                         }}
                       >
+                        <span
+                          aria-hidden="true"
+                          className="size-1.5 rounded-full"
+                          style={{ backgroundColor: tag.color ?? "hsl(var(--muted-foreground))" }}
+                        />
                         #{tag.name}
                       </li>
                     ))}

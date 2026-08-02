@@ -117,6 +117,19 @@ describe("AccountSettingsPage", () => {
     expect(changePassword).not.toHaveBeenCalled();
   });
 
+  it("rejects a new password beyond the backend's UTF-8 byte limit", async () => {
+    render(<AccountSettingsPage />);
+    await screen.findByRole("heading", { name: "Account settings" });
+
+    fireEvent.change(screen.getByLabelText("Current password"), { target: { value: "current password" } });
+    fireEvent.change(screen.getByLabelText("New password"), { target: { value: "🙂".repeat(33) } });
+    fireEvent.change(screen.getByLabelText("Confirm new password"), { target: { value: "🙂".repeat(33) } });
+    fireEvent.click(screen.getByRole("button", { name: "Change password" }));
+
+    expect(screen.getByText("Password must not exceed 128 bytes.")).toBeInTheDocument();
+    expect(changePassword).not.toHaveBeenCalled();
+  });
+
   it("shows a human reauthentication error without signing the user out", async () => {
     vi.mocked(changePassword).mockRejectedValue(
       new ApiRequestError("invalid_password", 403, "invalid_password"),
@@ -153,6 +166,21 @@ describe("AccountSettingsPage", () => {
       confirmation: "DELETE",
     }));
     expect(logout).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves focus into account deletion and restores it when cancelled", async () => {
+    render(<AccountSettingsPage />);
+    await screen.findByRole("heading", { name: "Account settings" });
+
+    const deleteTrigger = screen.getByRole("button", { name: "Delete account" });
+    deleteTrigger.focus();
+    fireEvent.click(deleteTrigger);
+    await waitFor(() => expect(screen.getByLabelText("Current password for deletion")).toHaveFocus());
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Delete account" })).toHaveFocus();
+    });
   });
 
   it("does not report deletion as failed when the removed session makes logout fail", async () => {

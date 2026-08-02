@@ -1,11 +1,17 @@
 import type { MessageTag } from "@/types/message";
 import { requestJson as requestApiJson } from "@/api/client";
+import { notifyOrganizationChanged } from "@/lib/organization-events";
 
 const TAGS_BASE_PATH = "/api";
 
 type MessageTagsResponse = {
   message_id: number;
   tags: MessageTag[];
+};
+
+export type BulkTagResult = {
+  updated_count: number;
+  assignment_count: number;
 };
 
 type CreateTagRequest = {
@@ -45,11 +51,13 @@ export async function createTag(payload: CreateTagRequest): Promise<MessageTag> 
     throw new Error("Tag name is required.");
   }
 
-  return requestJson<MessageTag>("/tags", {
+  const tag = await requestJson<MessageTag>("/tags", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name: normalizedName, color: payload.color ?? null }),
   });
+  notifyOrganizationChanged("tags");
+  return tag;
 }
 
 export async function updateTag(tagId: number, payload: CreateTagRequest): Promise<MessageTag> {
@@ -58,17 +66,20 @@ export async function updateTag(tagId: number, payload: CreateTagRequest): Promi
     throw new Error("Tag name is required.");
   }
 
-  return requestJson<MessageTag>(`/tags/${tagId}`, {
+  const tag = await requestJson<MessageTag>(`/tags/${tagId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name: normalizedName, color: payload.color ?? null }),
   });
+  notifyOrganizationChanged("tags");
+  return tag;
 }
 
 export async function deleteTag(tagId: number): Promise<void> {
   await requestJson<DeleteTagResponse>(`/tags/${tagId}`, {
     method: "DELETE",
   });
+  notifyOrganizationChanged("tags");
 }
 
 export async function addTagsToMessage(messageId: number, tagIds: number[]): Promise<MessageTag[]> {
@@ -83,7 +94,34 @@ export async function addTagsToMessage(messageId: number, tagIds: number[]): Pro
     body: JSON.stringify({ tag_ids: uniqueTagIds }),
   });
 
+  notifyOrganizationChanged("tags");
   return payload.tags;
+}
+
+export async function bulkAddTagsToMessages(
+  messageIds: number[],
+  tagIds: number[],
+): Promise<BulkTagResult> {
+  const uniqueMessageIds = [...new Set(
+    messageIds.map((value) => Math.trunc(value)).filter((value) => value > 0),
+  )];
+  const uniqueTagIds = [...new Set(
+    tagIds.map((value) => Math.trunc(value)).filter((value) => value > 0),
+  )];
+  if (uniqueMessageIds.length === 0) {
+    throw new Error("At least one message id is required.");
+  }
+  if (uniqueTagIds.length === 0) {
+    throw new Error("At least one tag id is required.");
+  }
+
+  const result = await requestJson<BulkTagResult>("/messages/bulk-tags", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message_ids: uniqueMessageIds, tag_ids: uniqueTagIds }),
+  });
+  notifyOrganizationChanged("tags");
+  return result;
 }
 
 export async function removeTagFromMessage(messageId: number, tagId: number): Promise<MessageTag[]> {
@@ -91,5 +129,6 @@ export async function removeTagFromMessage(messageId: number, tagId: number): Pr
     method: "DELETE",
   });
 
+  notifyOrganizationChanged("tags");
   return payload.tags;
 }

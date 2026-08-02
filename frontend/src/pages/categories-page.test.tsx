@@ -22,6 +22,7 @@ const categories = [
     id: 3,
     name: "Links",
     slug: "links",
+    system_key: "links",
     icon: "link",
     color: "#0EA5E9",
     position: 3,
@@ -32,11 +33,23 @@ const categories = [
     id: 9,
     name: "Read later",
     slug: "read-later",
+    system_key: null,
     icon: "bookmark",
     color: "#22C55E",
     position: 9,
     is_default: false,
     message_count: 2,
+  },
+  {
+    id: 8,
+    name: "Catch-all",
+    slug: "catch-all",
+    system_key: "other",
+    icon: "archive",
+    color: "#64748B",
+    position: 8,
+    is_default: true,
+    message_count: 0,
   },
 ];
 
@@ -66,9 +79,28 @@ describe("CategoriesPage", () => {
 
     expect(screen.getByText("4 messages · Order 3 · /links")).toBeInTheDocument();
     expect(screen.getByText("2 messages · Order 9 · /read-later")).toBeInTheDocument();
-    const deleteButtons = screen.getAllByRole("button", { name: "Delete" });
-    expect(deleteButtons[0]).toBeDisabled();
-    expect(deleteButtons[1]).toBeEnabled();
+    const linksRow = screen.getByText("Links").closest("li");
+    const linksAccent = linksRow?.querySelector<HTMLElement>("span[aria-hidden='true']");
+    expect(linksAccent).toHaveClass("bg-[hsl(var(--muted))]");
+    expect(linksAccent).not.toHaveStyle({ backgroundColor: `${categories[0].color}14` });
+    expect(linksAccent?.querySelector("svg")).toHaveStyle({ color: categories[0].color });
+    const builtInDeleteButton = screen.getByRole("button", { name: "Delete Links" });
+    expect(builtInDeleteButton).toBeDisabled();
+    expect(builtInDeleteButton).toHaveAttribute("title", "“Links” is built in and cannot be deleted");
+    expect(builtInDeleteButton).toHaveAccessibleDescription(
+      "Built-in categories can be edited, but they cannot be deleted.",
+    );
+    expect(screen.getByRole("button", { name: "Delete Read later" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Edit Links" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit Read later" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View messages in Links" })).toHaveAttribute(
+      "href",
+      "/messages?category=links",
+    );
+    expect(screen.getByRole("link", { name: "View messages in Read later" })).toHaveAttribute(
+      "href",
+      "/messages?category=read-later",
+    );
   });
 
   it("creates a category from the dedicated dialog", async () => {
@@ -89,18 +121,17 @@ describe("CategoriesPage", () => {
 
   it("edits and deletes a custom category with explicit confirmation", async () => {
     renderPage();
-    const editButtons = screen.getAllByRole("button", { name: "Edit" });
-    fireEvent.click(editButtons[1]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit Read later" }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Reading" } });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(updateCategory).toHaveBeenCalledWith(9, expect.objectContaining({ name: "Reading" })));
     await waitFor(() => expect(document.body.firstElementChild).not.toHaveAttribute("aria-hidden"));
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Delete" })[1]);
-    expect(screen.getByText("2 messages will be moved to Other. This category itself cannot be recovered.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Delete Read later" }));
+    expect(screen.getByText("2 messages will be moved to Catch-all. This category itself cannot be recovered.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Delete category" }));
 
     await waitFor(() => expect(deleteCategory).toHaveBeenCalledWith(9));
-    expect(await screen.findByText("Deleted “Read later”. 2 messages moved to Other.")).toBeInTheDocument();
+    expect(await screen.findByText("Deleted “Read later”. 2 messages moved to Catch-all.")).toBeInTheDocument();
   });
 });

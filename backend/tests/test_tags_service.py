@@ -83,7 +83,9 @@ class _FakeSession:
         self.rollback_calls += 1
 
 
-def _build_tag(*, tag_id: int = 1, name: str = "Read Later", color: str | None = "#22C55E") -> Tag:
+def _build_tag(
+    *, tag_id: int = 1, name: str = "Read Later", color: str | None = "#22C55E"
+) -> Tag:
     return Tag(
         id=tag_id,
         user_id=USER_ID,
@@ -112,14 +114,19 @@ def _build_message(*, message_id: int = 1, tag_ids: tuple[int, ...] = (1,)) -> M
         created_at=timestamp,
         updated_at=timestamp,
     )
-    message.tags = [_build_tag(tag_id=tag_id, name=f"tag-{tag_id}", color="#22C55E") for tag_id in tag_ids]
+    message.tags = [
+        _build_tag(tag_id=tag_id, name=f"tag-{tag_id}", color="#22C55E")
+        for tag_id in tag_ids
+    ]
     return message
 
 
 @pytest.mark.asyncio
 async def test_list_tags_returns_name_ordered_tags() -> None:
     session = _FakeSession()
-    session.scalars_values = [[_build_tag(tag_id=2, name="b"), _build_tag(tag_id=1, name="a")]]
+    session.scalars_values = [
+        [_build_tag(tag_id=2, name="b"), _build_tag(tag_id=1, name="a")]
+    ]
 
     service = TagService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
     result = await service.list_tags()
@@ -159,6 +166,29 @@ async def test_create_tag_normalizes_fields_and_commits() -> None:
     assert tag.color == "#22C55E"
     assert session.add_calls == [tag]
     assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_create_tag_stores_canonical_unicode_name_and_key() -> None:
+    session = _FakeSession()
+    session.scalar_values = [None]
+    service = TagService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    tag = await service.create_tag(name="  CAFE\u0301 \u01f0  ", color=None)
+
+    assert tag.name == "CAFÉ ǰ"
+    assert tag.normalized_name == "café ǰ"
+
+
+@pytest.mark.asyncio
+async def test_create_tag_rejects_casefold_expansion_beyond_name_key_limit() -> None:
+    session = _FakeSession()
+    service = TagService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="too long after Unicode normalization"):
+        await service.create_tag(name="ß" * 100, color=None)
+
+    assert session.add_calls == []
 
 
 @pytest.mark.asyncio
@@ -269,9 +299,9 @@ async def test_add_tags_to_message_appends_missing_tags_and_commits() -> None:
     tags = await service.add_tags_to_message(message_id=7, tag_ids=[1, 2, 2])
 
     assert [tag.id for tag in tags] == [1, 2]
-    assert [(link.user_id, link.message_id, link.tag_id) for link in session.add_calls] == [
-        (USER_ID, 7, 2)
-    ]
+    assert [
+        (link.user_id, link.message_id, link.tag_id) for link in session.add_calls
+    ] == [(USER_ID, 7, 2)]
     assert session.commit_calls == 1
 
 
@@ -294,6 +324,125 @@ async def test_add_tags_to_message_treats_a_concurrent_duplicate_as_success() ->
 
     assert [tag.id for tag in tags] == [1, 2]
     assert session.rollback_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_bulk_add_tags_is_tenant_scoped_deduplicated_and_atomic() -> None:
+    session = _FakeSession()
+    first_message = _build_message(message_id=1, tag_ids=())
+    second_message = _build_message(message_id=2, tag_ids=())
+    first_tag = _build_tag(tag_id=3, name="first")
+    second_tag = _build_tag(tag_id=4, name="second")
+    session.scalars_values = [
+        [first_message, second_message],
+        [first_tag, second_tag],
+    ]
+    session.execute_values = [[(1, 3)]]
+    service = TagService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    result = await service.bulk_add_tags_to_messages(
+        message_ids=[1, 2, 1],
+        tag_ids=[3, 4, 3],
+    )
+
+    assert result.updated_count == 2
+    assert result.assignment_count == 3
+    assert [
+        (link.user_id, link.message_id, link.tag_id) for link in session.add_calls
+    ] == [
+        (USER_ID, 1, 4),
+        (USER_ID, 2, 3),
+        (USER_ID, 2, 4),
+    ]
+    assert "messages.user_id" in str(session.scalars_calls[0])
+    assert "tags.user_id" in str(session.scalars_calls[1])
+    assert "message_tags.user_id" in str(session.execute_calls[0])
+    assert session.commit_calls == 1
+
+    session.scalars_values = [
+        [first_message, second_message],
+        [first_tag, second_tag],
+    ]
+    session.execute_values = [[(1, 3), (1, 4), (2, 3), (2, 4)]]
+
+    retry_result = await service.bulk_add_tags_to_messages(
+        message_ids=[1, 2],
+        tag_ids=[3, 4],
+    )
+
+    assert retry_result.updated_count == 0
+    assert retry_result.assignment_count == 0
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_bulk_add_tags_rejects_all_missing_ids_before_writing() -> None:
+    message_session = _FakeSession()
+    message_session.scalars_values = [[_build_message(message_id=1, tag_ids=())]]
+    message_service = TagService(
+        session=message_session, user_id=USER_ID  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(MessageNotFoundError, match="Message 2 was not found."):
+        await message_service.bulk_add_tags_to_messages(
+            message_ids=[1, 2],
+            tag_ids=[3],
+        )
+
+    assert len(message_session.scalars_calls) == 1
+    assert message_session.add_calls == []
+    assert message_session.commit_calls == 0
+
+    tag_session = _FakeSession()
+    tag_session.scalars_values = [
+        [_build_message(message_id=1, tag_ids=())],
+        [_build_tag(tag_id=3, name="first")],
+    ]
+    tag_service = TagService(
+        session=tag_session, user_id=USER_ID  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(TagNotFoundError, match="Tag 4 was not found."):
+        await tag_service.bulk_add_tags_to_messages(
+            message_ids=[1],
+            tag_ids=[3, 4],
+        )
+
+    assert tag_session.add_calls == []
+    assert tag_session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_bulk_add_tags_is_idempotent_when_assignments_already_exist() -> None:
+    session = _FakeSession()
+    session.scalars_values = [
+        [_build_message(message_id=1, tag_ids=())],
+        [_build_tag(tag_id=3, name="first")],
+    ]
+    session.execute_values = [[(1, 3)]]
+    service = TagService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    result = await service.bulk_add_tags_to_messages(
+        message_ids=[1],
+        tag_ids=[3],
+    )
+
+    assert result.updated_count == 0
+    assert result.assignment_count == 0
+    assert session.add_calls == []
+    assert session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_bulk_add_tags_rejects_non_positive_ids() -> None:
+    service = TagService(
+        session=_FakeSession(), user_id=USER_ID  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ValueError, match="message_ids must be a positive integer"):
+        await service.bulk_add_tags_to_messages(message_ids=[0], tag_ids=[1])
+    with pytest.raises(ValueError, match="tag_ids must be a positive integer"):
+        await service.bulk_add_tags_to_messages(message_ids=[1], tag_ids=[True])
 
 
 @pytest.mark.asyncio
@@ -449,7 +598,9 @@ async def test_create_tag_rejects_invalid_color_pattern() -> None:
     session = _FakeSession()
     service = TagService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
 
-    with pytest.raises(ValueError, match="color must be a valid hex value like #22C55E."):
+    with pytest.raises(
+        ValueError, match="color must be a valid hex value like #22C55E."
+    ):
         await service.create_tag(name="Archive", color="#GGGGGG")
 
 

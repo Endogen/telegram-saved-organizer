@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import os
 import secrets
 import stat
@@ -13,6 +15,9 @@ from urllib.parse import urlsplit
 PRIVATE_DIRECTORY_MODE = 0o700
 PRIVATE_FILE_MODE = 0o600
 PRODUCTION_PLACEHOLDER_MARKERS = ("replace-with", "organizer.example.com")
+MASTER_KEY_BYTES = 48
+MASTER_KEY_ENCODED_LENGTH = 64
+MIN_MASTER_KEY_UNIQUE_BYTES = 16
 
 
 def _read_bool(name: str, *, default: bool) -> bool:
@@ -55,11 +60,21 @@ def _normalize_origin(value: str, *, require_https: bool) -> str:
     except ValueError as exc:
         raise RuntimeError("TSO_PUBLIC_ORIGIN must be a valid origin URL.") from exc
     if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
-        raise RuntimeError("TSO_PUBLIC_ORIGIN must use http or https and include a host.")
+        raise RuntimeError(
+            "TSO_PUBLIC_ORIGIN must use http or https and include a host."
+        )
     if require_https and parsed.scheme != "https":
         raise RuntimeError("TSO_PUBLIC_ORIGIN must use https in production.")
-    if parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
-        raise RuntimeError("TSO_PUBLIC_ORIGIN must be an origin without credentials, path, query, or fragment.")
+    if (
+        parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise RuntimeError(
+            "TSO_PUBLIC_ORIGIN must be an origin without credentials, path, query, or fragment."
+        )
     default_port = 443 if parsed.scheme == "https" else 80
     port_suffix = "" if (port or default_port) == default_port else f":{port}"
     return f"{parsed.scheme}://{parsed.hostname.lower().rstrip('.')}{port_suffix}"
@@ -86,15 +101,51 @@ def _private_regular_file(path: Path) -> str:
     return value
 
 
+def _validate_production_master_key(value: str) -> str:
+    """Require the documented encoding and reject obviously non-random keys."""
+
+    normalized = value.strip()
+    if len(normalized) != MASTER_KEY_ENCODED_LENGTH:
+        raise RuntimeError(
+            "TSO_MASTER_KEY must be a base64 or base64url encoding of exactly "
+            f"{MASTER_KEY_BYTES} random bytes."
+        )
+    try:
+        decoded = base64.b64decode(
+            normalized.encode("ascii"),
+            altchars=b"-_",
+            validate=True,
+        )
+    except (UnicodeEncodeError, binascii.Error, ValueError) as exc:
+        raise RuntimeError("TSO_MASTER_KEY must be valid base64 or base64url.") from exc
+    if len(decoded) != MASTER_KEY_BYTES:
+        raise RuntimeError(
+            f"TSO_MASTER_KEY must decode to exactly {MASTER_KEY_BYTES} random bytes."
+        )
+    if len(set(decoded)) < MIN_MASTER_KEY_UNIQUE_BYTES:
+        raise RuntimeError(
+            "TSO_MASTER_KEY is not sufficiently random; generate it with "
+            "`openssl rand -base64 48`."
+        )
+    return normalized
+
+
 def _load_master_key(*, data_dir: Path, production: bool) -> tuple[str, Path | None]:
     configured = os.getenv("TSO_MASTER_KEY")
     if configured is not None:
         normalized = configured.strip()
         if len(normalized) < 43:
-            raise RuntimeError("TSO_MASTER_KEY must contain at least 43 characters of entropy.")
+            raise RuntimeError(
+                "TSO_MASTER_KEY must contain at least 43 characters of entropy."
+            )
+        if production:
+            _reject_production_placeholder("TSO_MASTER_KEY", normalized)
+            normalized = _validate_production_master_key(normalized)
         return normalized, None
     if production:
-        raise RuntimeError("TSO_MASTER_KEY is required when TSO_ENVIRONMENT=production.")
+        raise RuntimeError(
+            "TSO_MASTER_KEY is required when TSO_ENVIRONMENT=production."
+        )
 
     path = data_dir / "master-key"
     try:
@@ -104,7 +155,9 @@ def _load_master_key(*, data_dir: Path, production: bool) -> tuple[str, Path | N
 
     generated = secrets.token_urlsafe(48)
     try:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_FILE_MODE)
+        descriptor = os.open(
+            path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_FILE_MODE
+        )
     except FileExistsError:
         return _private_regular_file(path), path
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
@@ -134,6 +187,8 @@ class Settings:
     scan_slice_max_pages: int
     scan_slice_seconds: int
     scan_max_streams_per_user: int
+    telegram_connect_timeout_seconds: int
+    telegram_disconnect_timeout_seconds: int
     telegram_api_id: int | None
     telegram_api_hash: str | None
 
@@ -161,15 +216,21 @@ def _build_settings() -> Settings:
     data_dir.mkdir(mode=PRIVATE_DIRECTORY_MODE, parents=True, exist_ok=True)
     data_dir.chmod(PRIVATE_DIRECTORY_MODE)
 
-    database_url = os.getenv("TSO_DATABASE_URL", f"sqlite+aiosqlite:///{data_dir / 'app.db'}").strip()
-    master_key, master_key_file = _load_master_key(data_dir=data_dir, production=production)
+    database_url = os.getenv(
+        "TSO_DATABASE_URL", f"sqlite+aiosqlite:///{data_dir / 'app.db'}"
+    ).strip()
+    master_key, master_key_file = _load_master_key(
+        data_dir=data_dir, production=production
+    )
     if production:
         _reject_production_placeholder("TSO_DATABASE_URL", database_url)
         _reject_production_placeholder("TSO_MASTER_KEY", master_key)
 
     origin_value = os.getenv("TSO_PUBLIC_ORIGIN")
     public_origin = (
-        _normalize_origin(origin_value, require_https=production) if origin_value else None
+        _normalize_origin(origin_value, require_https=production)
+        if origin_value
+        else None
     )
     if production and public_origin is None:
         raise RuntimeError("TSO_PUBLIC_ORIGIN is required in production.")
@@ -177,7 +238,9 @@ def _build_settings() -> Settings:
         _reject_production_placeholder("TSO_PUBLIC_ORIGIN", public_origin)
     if public_origin is not None:
         public_host = urlsplit(public_origin).hostname
-        if not production and (public_host is None or not _is_loopback_host(public_host)):
+        if not production and (
+            public_host is None or not _is_loopback_host(public_host)
+        ):
             raise RuntimeError(
                 "A non-loopback TSO_PUBLIC_ORIGIN requires TSO_ENVIRONMENT=production."
             )
@@ -191,9 +254,15 @@ def _build_settings() -> Settings:
         for configured_host in configured_hosts:
             _reject_production_placeholder("TSO_ALLOWED_HOSTS", configured_host)
     derived_host = urlsplit(public_origin).hostname if public_origin else None
-    allowed_hosts = configured_hosts or ((derived_host,) if derived_host else ("127.0.0.1", "localhost", "testserver"))
-    if production and any(host == "*" or host.startswith("*.") for host in allowed_hosts):
-        raise RuntimeError("Wildcard TSO_ALLOWED_HOSTS values are not allowed in production.")
+    allowed_hosts = configured_hosts or (
+        (derived_host,) if derived_host else ("127.0.0.1", "localhost", "testserver")
+    )
+    if production and any(
+        host == "*" or host.startswith("*.") for host in allowed_hosts
+    ):
+        raise RuntimeError(
+            "Wildcard TSO_ALLOWED_HOSTS values are not allowed in production."
+        )
     if not production and any(not _is_loopback_host(host) for host in allowed_hosts):
         raise RuntimeError(
             "Non-loopback TSO_ALLOWED_HOSTS values require TSO_ENVIRONMENT=production."
@@ -201,7 +270,8 @@ def _build_settings() -> Settings:
 
     cookie_secure = _read_bool(
         "TSO_COOKIE_SECURE",
-        default=production or bool(public_origin and public_origin.startswith("https://")),
+        default=production
+        or bool(public_origin and public_origin.startswith("https://")),
     )
     if production and not cookie_secure:
         raise RuntimeError("TSO_COOKIE_SECURE cannot be disabled in production.")
@@ -217,16 +287,24 @@ def _build_settings() -> Settings:
         if telegram_api_id <= 0:
             raise RuntimeError("TSO_TELEGRAM_API_ID must be positive.")
     if bool(telegram_api_id) != bool(telegram_api_hash):
-        raise RuntimeError("TSO_TELEGRAM_API_ID and TSO_TELEGRAM_API_HASH must be configured together.")
+        raise RuntimeError(
+            "TSO_TELEGRAM_API_ID and TSO_TELEGRAM_API_HASH must be configured together."
+        )
     if production and telegram_api_id_raw:
         _reject_production_placeholder("TSO_TELEGRAM_API_ID", telegram_api_id_raw)
     if production and telegram_api_hash:
         _reject_production_placeholder("TSO_TELEGRAM_API_HASH", telegram_api_hash)
 
-    absolute_seconds = _read_positive_int("TSO_SESSION_ABSOLUTE_SECONDS", default=30 * 24 * 60 * 60)
-    idle_seconds = _read_positive_int("TSO_SESSION_IDLE_SECONDS", default=7 * 24 * 60 * 60)
+    absolute_seconds = _read_positive_int(
+        "TSO_SESSION_ABSOLUTE_SECONDS", default=30 * 24 * 60 * 60
+    )
+    idle_seconds = _read_positive_int(
+        "TSO_SESSION_IDLE_SECONDS", default=7 * 24 * 60 * 60
+    )
     if idle_seconds > absolute_seconds:
-        raise RuntimeError("TSO_SESSION_IDLE_SECONDS cannot exceed TSO_SESSION_ABSOLUTE_SECONDS.")
+        raise RuntimeError(
+            "TSO_SESSION_IDLE_SECONDS cannot exceed TSO_SESSION_ABSOLUTE_SECONDS."
+        )
 
     return Settings(
         app_name="Telegram Saved Messages Organizer API",
@@ -242,7 +320,9 @@ def _build_settings() -> Settings:
         session_absolute_seconds=absolute_seconds,
         session_idle_seconds=idle_seconds,
         max_active_sessions=_read_positive_int("TSO_MAX_ACTIVE_SESSIONS", default=10),
-        process_scans_in_api=_read_bool("TSO_PROCESS_SCANS_IN_API", default=not production),
+        process_scans_in_api=_read_bool(
+            "TSO_PROCESS_SCANS_IN_API", default=not production
+        ),
         scan_max_messages=_read_positive_int("TSO_SCAN_MAX_MESSAGES", default=10_000),
         scan_max_runtime_seconds=_read_positive_int(
             "TSO_SCAN_MAX_RUNTIME_SECONDS",
@@ -253,6 +333,14 @@ def _build_settings() -> Settings:
         scan_max_streams_per_user=_read_positive_int(
             "TSO_SCAN_MAX_STREAMS_PER_USER",
             default=3,
+        ),
+        telegram_connect_timeout_seconds=_read_positive_int(
+            "TSO_TELEGRAM_CONNECT_TIMEOUT_SECONDS",
+            default=15,
+        ),
+        telegram_disconnect_timeout_seconds=_read_positive_int(
+            "TSO_TELEGRAM_DISCONNECT_TIMEOUT_SECONDS",
+            default=5,
         ),
         telegram_api_id=telegram_api_id,
         telegram_api_hash=telegram_api_hash.strip() if telegram_api_hash else None,

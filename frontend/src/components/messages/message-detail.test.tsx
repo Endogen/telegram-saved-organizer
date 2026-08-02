@@ -93,6 +93,18 @@ describe("MessageDetail", () => {
     expect(screen.getByText("1.00 MB")).toBeInTheDocument();
     expect(screen.getByText("#important")).toBeInTheDocument();
     expect(screen.getByText("#work")).toBeInTheDocument();
+    const categoryBadge = screen.getByLabelText("Category: Links");
+    expect(categoryBadge).toHaveClass("bg-[hsl(var(--muted))]", "text-[hsl(var(--foreground))]");
+    expect(categoryBadge).not.toHaveStyle({ color: message.category.color });
+    expect(categoryBadge.querySelector("span[aria-hidden='true']")).toHaveStyle({
+      backgroundColor: message.category.color,
+    });
+    const importantTag = screen.getByLabelText("Tag: important");
+    expect(importantTag).toHaveClass("bg-[hsl(var(--muted))]", "text-[hsl(var(--foreground))]");
+    expect(importantTag).not.toHaveStyle({ color: message.tags[0].color });
+    expect(importantTag.querySelector("span[aria-hidden='true']")).toHaveStyle({
+      backgroundColor: message.tags[0].color,
+    });
   });
 
   it("shows the link preview when content is null", () => {

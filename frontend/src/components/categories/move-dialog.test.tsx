@@ -1,4 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 
 import { MoveDialog } from "@/components/categories/move-dialog";
@@ -10,6 +12,7 @@ const categories: CategoryWithCount[] = [
     id: 1,
     name: "Text",
     slug: "text",
+    system_key: "text",
     icon: "message-square",
     color: "#6B7280",
     position: 1,
@@ -20,6 +23,7 @@ const categories: CategoryWithCount[] = [
     id: 2,
     name: "Links",
     slug: "links",
+    system_key: "links",
     icon: "link",
     color: "#0EA5E9",
     position: 2,
@@ -56,9 +60,13 @@ function createMessage(overrides: Partial<MessageListItem> = {}): MessageListIte
   };
 }
 
+function renderWithRouter(element: ReactElement) {
+  return render(<MemoryRouter>{element}</MemoryRouter>);
+}
+
 describe("MoveDialog", () => {
   it("renders nothing when closed", () => {
-    const { container } = render(
+    const { container } = renderWithRouter(
       <MoveDialog
         open={false}
         message={null}
@@ -74,7 +82,7 @@ describe("MoveDialog", () => {
   });
 
   it("renders nothing when open but no message", () => {
-    const { container } = render(
+    const { container } = renderWithRouter(
       <MoveDialog
         open
         message={null}
@@ -92,7 +100,7 @@ describe("MoveDialog", () => {
   it("renders dialog with category options", () => {
     const message = createMessage();
 
-    render(
+    renderWithRouter(
       <MoveDialog
         open
         message={message}
@@ -108,13 +116,17 @@ describe("MoveDialog", () => {
     expect(screen.getByRole("combobox")).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Text" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Links" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Manage categories" })).toHaveAttribute(
+      "href",
+      "/settings/categories",
+    );
   });
 
   it("submits move with selected category", async () => {
     const message = createMessage();
     const onSubmit = vi.fn();
 
-    render(
+    renderWithRouter(
       <MoveDialog
         open
         message={message}
@@ -136,7 +148,7 @@ describe("MoveDialog", () => {
     const message = createMessage();
     const onSubmit = vi.fn();
 
-    render(
+    renderWithRouter(
       <MoveDialog
         open
         message={message}
@@ -155,7 +167,7 @@ describe("MoveDialog", () => {
   it("shows submitting state", () => {
     const message = createMessage();
 
-    render(
+    renderWithRouter(
       <MoveDialog
         open
         message={message}
@@ -173,7 +185,7 @@ describe("MoveDialog", () => {
   it("displays error message", () => {
     const message = createMessage();
 
-    render(
+    renderWithRouter(
       <MoveDialog
         open
         message={message}
@@ -192,7 +204,7 @@ describe("MoveDialog", () => {
     const message = createMessage();
     const onClose = vi.fn();
 
-    render(
+    renderWithRouter(
       <MoveDialog
         open
         message={message}
@@ -208,11 +220,31 @@ describe("MoveDialog", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("closes the dialog when navigating to category management", () => {
+    const message = createMessage();
+    const onClose = vi.fn();
+
+    renderWithRouter(
+      <MoveDialog
+        open
+        message={message}
+        categories={categories}
+        isSubmitting={false}
+        errorMessage={null}
+        onClose={onClose}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "Manage categories" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("closes on escape key", () => {
     const message = createMessage();
     const onClose = vi.fn();
 
-    render(
+    renderWithRouter(
       <MoveDialog
         open
         message={message}

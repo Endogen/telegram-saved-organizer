@@ -78,7 +78,7 @@ class MessageListResponse(BaseModel):
 class MessageUpdateRequest(BaseModel):
     """Updatable message fields."""
 
-    category_id: int | None = Field(default=None, gt=0, le=MAX_DB_IDENTIFIER, strict=True)
+    category_id: int = Field(default=None, gt=0, le=MAX_DB_IDENTIFIER, strict=True)  # type: ignore[arg-type]
     content: str | None = None
 
     @model_validator(mode="after")

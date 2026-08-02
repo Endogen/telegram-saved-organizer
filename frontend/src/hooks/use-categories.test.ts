@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 
@@ -15,6 +15,7 @@ const apiCategories: CategoryWithCount[] = [
     id: 1,
     name: "Videos",
     slug: "videos",
+    system_key: "videos",
     icon: "video",
     color: "#E11D48",
     position: 1,
@@ -25,6 +26,7 @@ const apiCategories: CategoryWithCount[] = [
     id: 2,
     name: "Audio",
     slug: "audio",
+    system_key: "audio",
     icon: "music",
     color: "#2563EB",
     position: 2,
@@ -32,6 +34,14 @@ const apiCategories: CategoryWithCount[] = [
     message_count: 3,
   },
 ];
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 describe("useCategories", () => {
   const fetchMock = vi.fn();
@@ -128,6 +138,20 @@ describe("useCategories", () => {
     expect(result.current.error).toBe("Unexpected category payload.");
   });
 
+  it("rejects category payloads that omit the stable system key", async () => {
+    const { system_key: _systemKey, ...categoryWithoutSystemKey } = apiCategories[0];
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([categoryWithoutSystemKey]),
+    });
+
+    const { result } = renderHook(() => useCategories(), { wrapper: routerWrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.isFallback).toBe(true);
+    expect(result.current.error).toBe("Unexpected category payload.");
+  });
+
   it("sorts categories by position then id", async () => {
     const unordered: CategoryWithCount[] = [
       { ...apiCategories[1], position: 1 },
@@ -175,5 +199,30 @@ describe("useCategories", () => {
 
     await waitFor(() => expect(result.current.categories[0].message_count).toBe(6));
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("deduplicates category requests mounted concurrently", async () => {
+    const response = deferred<{ ok: boolean; json: () => Promise<CategoryWithCount[]> }>();
+    fetchMock.mockReturnValue(response.promise);
+
+    const { result } = renderHook(() => {
+      const first = useCategories();
+      const second = useCategories();
+      return { first, second };
+    }, { wrapper: routerWrapper });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      response.resolve({ ok: true, json: () => Promise.resolve(apiCategories) });
+      await response.promise;
+    });
+
+    await waitFor(() => {
+      expect(result.current.first.isLoading).toBe(false);
+      expect(result.current.second.isLoading).toBe(false);
+    });
+    expect(result.current.first.categories).toEqual(apiCategories);
+    expect(result.current.second.categories).toEqual(apiCategories);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

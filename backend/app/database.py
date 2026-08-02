@@ -38,7 +38,14 @@ def _secure_sqlite_database_file(database_path: str | None) -> None:
 
 
 def build_engine(database_url: str) -> AsyncEngine:
-    engine = create_async_engine(database_url, pool_pre_ping=True)
+    # SQLAlchemy includes bound values in many DBAPI exception strings by
+    # default. Those values can contain private Saved Message text and Telegram
+    # metadata, so keep them out of worker and API tracebacks.
+    engine = create_async_engine(
+        database_url,
+        pool_pre_ping=True,
+        hide_parameters=True,
+    )
     if engine.url.get_backend_name() == "sqlite":
         event.listen(engine.sync_engine, "connect", _configure_sqlite_connection)
     return engine

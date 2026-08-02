@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +10,7 @@ vi.mock("@/api/tags", () => ({
 }));
 
 import { createTag, deleteTag, listManagedTags, updateTag } from "@/api/tags";
+import { notifyOrganizationChanged } from "@/lib/organization-events";
 import { TagsPage } from "@/pages/tags-page";
 
 const tags = [
@@ -39,6 +40,11 @@ describe("TagsPage", () => {
     expect(await screen.findByText("#frontend")).toBeInTheDocument();
     expect(screen.getByText("4 messages")).toBeInTheDocument();
     expect(screen.getByText("1 message")).toBeInTheDocument();
+    const coloredTag = screen.getByText("#frontend").parentElement;
+    expect(coloredTag).toHaveClass("bg-[hsl(var(--muted))]", "text-[hsl(var(--foreground))]");
+    expect(coloredTag).not.toHaveStyle({ color: tags[0].color });
+    expect(coloredTag).not.toHaveStyle({ backgroundColor: `${tags[0].color}14` });
+    expect(coloredTag?.querySelector("svg")).toHaveStyle({ color: tags[0].color });
   });
 
   it("creates and edits a tag", async () => {
@@ -80,5 +86,18 @@ describe("TagsPage", () => {
       .toHaveAttribute("href", "/messages?tag=frontend");
     expect(screen.getByRole("link", { name: "View messages tagged #urgent" }))
       .toHaveAttribute("href", "/messages?tag=urgent");
+  });
+
+  it("refreshes assignment counts when tags change in another view", async () => {
+    vi.mocked(listManagedTags)
+      .mockResolvedValueOnce(tags)
+      .mockResolvedValueOnce([{ ...tags[0], message_count: 7 }, tags[1]]);
+    renderPage();
+    await screen.findByText("4 messages");
+
+    act(() => notifyOrganizationChanged("tags"));
+
+    expect(await screen.findByText("7 messages")).toBeInTheDocument();
+    expect(listManagedTags).toHaveBeenCalledTimes(2);
   });
 });

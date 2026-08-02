@@ -74,6 +74,7 @@ services:
   worker:
     <<: *backend
     command: ["python", "-m", "app.telegram.worker"]
+    stop_grace_period: 45s
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -91,6 +92,12 @@ services:
     logging: *default-logging
     security_opt:
       - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/index.html"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
 volumes:
   postgres-data:

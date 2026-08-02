@@ -46,7 +46,7 @@ export function DashboardPage() {
       <p className="mt-2 max-w-3xl text-sm text-[hsl(var(--muted-foreground))] md:text-base">
         {totalMessages > 0
           ? `${totalMessages.toLocaleString()} messages organized across ${categories.length} categories.`
-          : "Connect Telegram and run a scan to get started."}
+          : "Connect Telegram and import your Saved Messages to get started."}
       </p>
 
       <div className="mt-6">

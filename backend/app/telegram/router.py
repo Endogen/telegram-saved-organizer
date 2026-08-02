@@ -8,7 +8,15 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    status,
+)
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,9 +26,12 @@ from app.accounts.service import AuthContext
 from app.config import settings
 from app.database import SessionLocal, get_session
 from app.models import WebSession
-from app.telegram.client import TelegramClientNotConnectedError
+from app.telegram.client import (
+    TelegramClientNotConnectedError,
+    TelegramClientTimeoutError,
+)
 from app.telegram.scanner import ScanAlreadyRunningError
-from app.telegram.schemas import ScanStatusResponse
+from app.telegram.schemas import ScanState, ScanStatusResponse
 from app.telegram.service import TelegramScanService, process_scan_queue
 from app.telegram.streams import (
     STREAM_HEARTBEAT_SECONDS,
@@ -32,13 +43,18 @@ from app.telegram.streams import (
 router = APIRouter(prefix="/scan", tags=["scan"])
 STREAM_POLL_INTERVAL_SECONDS = 0.5
 STREAM_KEEPALIVE_SECONDS = 15.0
+ACTIVE_STREAM_STATES = frozenset(
+    (ScanState.PENDING, ScanState.RUNNING, ScanState.STOPPING)
+)
 
 
 def _service(*, session: AsyncSession, user: Any) -> TelegramScanService:
     return TelegramScanService(session=session, user_id=str(user.id))
 
 
-@router.post("/start", response_model=ScanStatusResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/start", response_model=ScanStatusResponse, status_code=status.HTTP_202_ACCEPTED
+)
 async def start_scan(
     background_tasks: BackgroundTasks,
     user: Annotated[Any, Depends(get_current_user)],
@@ -52,9 +68,18 @@ async def start_scan(
             clear_existing=clear_existing,
         )
     except TelegramClientNotConnectedError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="telegram_not_connected") from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="telegram_not_connected"
+        ) from exc
+    except TelegramClientTimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="telegram_temporarily_unavailable",
+        ) from exc
     except ScanAlreadyRunningError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     if settings.process_scans_in_api:
         background_tasks.add_task(process_scan_queue)
     return ScanStatusResponse.from_job(job)
@@ -129,13 +154,16 @@ async def scan_status_stream(
                         session=stream_session,
                         user_id=user_id,
                     ).status()
-                payload = ScanStatusResponse.from_job(job).model_dump_json()
+                status_response = ScanStatusResponse.from_job(job)
+                payload = status_response.model_dump_json()
                 if payload != last_payload:
                     last_payload = payload
                     last_emitted_at = now
                     yield _format_sse_event(event="status", data=payload)
                     emitted_events += 1
                     if max_events is not None and emitted_events >= max_events:
+                        break
+                    if status_response.state not in ACTIVE_STREAM_STATES:
                         break
                 elif now - last_emitted_at >= STREAM_KEEPALIVE_SECONDS:
                     last_emitted_at = now

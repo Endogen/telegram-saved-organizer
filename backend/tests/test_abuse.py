@@ -23,13 +23,14 @@ from app.abuse import (
     RateLimitExceeded,
     RateLimitRule,
     phone_subject,
+    telegram_phone_subject,
 )
 from app.accounts.dependencies import get_auth_context, get_current_user
-from app.auth.schemas import TelegramConnectionState
+from app.auth.schemas import TelegramConnectionResponse, TelegramConnectionState
 from app.database import _configure_sqlite_connection, get_session
 from app.main import create_app
 from app.models import Base, TelegramConnection, User
-from app.security import encrypt_secret
+from app.security import SecretDecryptionError, encrypt_secret
 
 
 @asynccontextmanager
@@ -45,6 +46,28 @@ async def memory_sessions() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
         yield async_sessionmaker(engine, expire_on_commit=False)
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_corrupt_pending_phone_uses_tenant_fallback_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CorruptPhoneSession:
+        async def scalar(self, _: object) -> str:
+            return "corrupt-ciphertext"
+
+    def reject_ciphertext(_: str, *, context: str) -> str:
+        assert context == "telegram:user-123:phone"
+        raise SecretDecryptionError("corrupt")
+
+    monkeypatch.setattr("app.abuse.decrypt_secret", reject_ciphertext)
+
+    subject = await telegram_phone_subject(
+        CorruptPhoneSession(),  # type: ignore[arg-type]
+        user_id="user-123",
+    )
+
+    assert subject == "unavailable:user-123"
 
 
 @pytest.mark.asyncio
@@ -475,6 +498,13 @@ async def test_telegram_quotas_run_before_code_send_and_verification(
         ) -> TelegramConnectionState:
             self.verify_calls += 1
             return TelegramConnectionState.CONNECTED
+
+        async def response(
+            self,
+            *,
+            state: TelegramConnectionState,
+        ) -> TelegramConnectionResponse:
+            return TelegramConnectionResponse(state=state)
 
     fake_service = FakeTelegramService()
     monkeypatch.setattr(auth_router, "_service", lambda **_: fake_service)

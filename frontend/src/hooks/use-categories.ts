@@ -1,16 +1,18 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "react-router";
 
 import { requestJson } from "@/api/client";
+import {
+  notifyOrganizationChanged,
+  subscribeToOrganizationChanges,
+} from "@/lib/organization-events";
 import type { CategoryWithCount } from "@/types/category";
 
 const CATEGORIES_ENDPOINT = "/api/categories";
-export const CATEGORIES_CHANGED_EVENT = "tso:categories-changed";
+export { CATEGORIES_CHANGED_EVENT } from "@/lib/organization-events";
 
 export function notifyCategoriesChanged() {
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event(CATEGORIES_CHANGED_EVENT));
-  }
+  notifyOrganizationChanged("categories");
 }
 
 const DEFAULT_CATEGORY_FALLBACK: CategoryWithCount[] = [
@@ -18,6 +20,7 @@ const DEFAULT_CATEGORY_FALLBACK: CategoryWithCount[] = [
     id: 1,
     name: "Videos",
     slug: "videos",
+    system_key: "videos",
     icon: "video",
     color: "#E11D48",
     position: 1,
@@ -28,6 +31,7 @@ const DEFAULT_CATEGORY_FALLBACK: CategoryWithCount[] = [
     id: 2,
     name: "Audio",
     slug: "audio",
+    system_key: "audio",
     icon: "music",
     color: "#2563EB",
     position: 2,
@@ -38,6 +42,7 @@ const DEFAULT_CATEGORY_FALLBACK: CategoryWithCount[] = [
     id: 3,
     name: "Links",
     slug: "links",
+    system_key: "links",
     icon: "link",
     color: "#0EA5E9",
     position: 3,
@@ -48,6 +53,7 @@ const DEFAULT_CATEGORY_FALLBACK: CategoryWithCount[] = [
     id: 4,
     name: "Repositories",
     slug: "repositories",
+    system_key: "repositories",
     icon: "code",
     color: "#4F46E5",
     position: 4,
@@ -58,6 +64,7 @@ const DEFAULT_CATEGORY_FALLBACK: CategoryWithCount[] = [
     id: 5,
     name: "Images",
     slug: "images",
+    system_key: "images",
     icon: "image",
     color: "#14B8A6",
     position: 5,
@@ -68,6 +75,7 @@ const DEFAULT_CATEGORY_FALLBACK: CategoryWithCount[] = [
     id: 6,
     name: "Documents",
     slug: "documents",
+    system_key: "documents",
     icon: "file-text",
     color: "#F59E0B",
     position: 6,
@@ -78,6 +86,7 @@ const DEFAULT_CATEGORY_FALLBACK: CategoryWithCount[] = [
     id: 7,
     name: "Text",
     slug: "text",
+    system_key: "text",
     icon: "message-square",
     color: "#6B7280",
     position: 7,
@@ -88,6 +97,7 @@ const DEFAULT_CATEGORY_FALLBACK: CategoryWithCount[] = [
     id: 8,
     name: "Other",
     slug: "other",
+    system_key: "other",
     icon: "archive",
     color: "#64748B",
     position: 8,
@@ -113,6 +123,7 @@ function isCategoryWithCount(value: unknown): value is CategoryWithCount {
     typeof candidate.id === "number" &&
     typeof candidate.name === "string" &&
     typeof candidate.slug === "string" &&
+    (candidate.system_key === null || typeof candidate.system_key === "string") &&
     typeof candidate.icon === "string" &&
     typeof candidate.color === "string" &&
     typeof candidate.position === "number" &&
@@ -145,6 +156,35 @@ function toErrorMessage(error: unknown): string {
   return "Failed to fetch categories.";
 }
 
+let inFlightCategoryRequest: Promise<CategoryWithCount[]> | null = null;
+
+function invalidateCategoryRequest() {
+  inFlightCategoryRequest = null;
+}
+
+function requestCategories(): Promise<CategoryWithCount[]> {
+  if (inFlightCategoryRequest !== null) {
+    return inFlightCategoryRequest;
+  }
+
+  const request = requestJson<unknown>(CATEGORIES_ENDPOINT, undefined, {
+    fallbackMessage: "Failed to fetch categories.",
+  }).then((payload) => {
+    const parsed = normalizeCategories(payload);
+    if (parsed === null) {
+      throw new Error("Unexpected category payload.");
+    }
+    return parsed;
+  });
+  const trackedRequest = request.finally(() => {
+    if (inFlightCategoryRequest === trackedRequest) {
+      inFlightCategoryRequest = null;
+    }
+  });
+  inFlightCategoryRequest = trackedRequest;
+  return trackedRequest;
+}
+
 export function useCategories(): UseCategoriesResult {
   const [categories, setCategories] = useState<CategoryWithCount[]>(DEFAULT_CATEGORY_FALLBACK);
   const [isLoading, setIsLoading] = useState(true);
@@ -153,47 +193,46 @@ export function useCategories(): UseCategoriesResult {
   const [refreshRevision, setRefreshRevision] = useState(0);
   const location = useLocation();
 
-  const fetchCategories = useCallback(async (signal: AbortSignal) => {
-    try {
-      const payload = await requestJson<unknown>(CATEGORIES_ENDPOINT, { signal }, {
-        fallbackMessage: "Failed to fetch categories.",
-      });
-      const parsed = normalizeCategories(payload);
-      if (parsed === null) {
-        throw new Error("Unexpected category payload.");
-      }
+  useEffect(() => {
+    const refresh = () => {
+      invalidateCategoryRequest();
+      setRefreshRevision((current) => current + 1);
+    };
+    return subscribeToOrganizationChanges("categories", refresh);
+  }, []);
 
-      setCategories(parsed);
-      setIsFallback(false);
-      setError(null);
-    } catch (fetchError) {
-      if (signal.aborted) {
-        return;
-      }
-      setCategories(DEFAULT_CATEGORY_FALLBACK);
-      setIsFallback(true);
-      setError(toErrorMessage(fetchError));
-    } finally {
-      if (!signal.aborted) {
-        setIsLoading(false);
+  useEffect(() => {
+    let isCanceled = false;
+
+    async function fetchCategories() {
+      try {
+        const parsed = await requestCategories();
+        if (isCanceled) {
+          return;
+        }
+
+        setCategories(parsed);
+        setIsFallback(false);
+        setError(null);
+      } catch (fetchError) {
+        if (isCanceled) {
+          return;
+        }
+        setCategories(DEFAULT_CATEGORY_FALLBACK);
+        setIsFallback(true);
+        setError(toErrorMessage(fetchError));
+      } finally {
+        if (!isCanceled) {
+          setIsLoading(false);
+        }
       }
     }
-  }, []);
 
-  // Refetch when route changes (e.g. after scan completes and user navigates to Messages)
-  useEffect(() => {
-    const refresh = () => setRefreshRevision((current) => current + 1);
-    window.addEventListener(CATEGORIES_CHANGED_EVENT, refresh);
-    return () => window.removeEventListener(CATEGORIES_CHANGED_EVENT, refresh);
-  }, []);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetchCategories(controller.signal);
+    void fetchCategories();
     return () => {
-      controller.abort();
+      isCanceled = true;
     };
-  }, [fetchCategories, location.pathname, refreshRevision]);
+  }, [location.pathname, refreshRevision]);
 
   return { categories, isLoading, isFallback, error };
 }

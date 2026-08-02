@@ -95,7 +95,10 @@ def _connection(**overrides: Any) -> SimpleNamespace:
 
 def test_verify_schema_accepts_exactly_one_ephemeral_secret() -> None:
     assert TelegramVerifyRequest(code=" 12345 ").code == "12345"
-    assert TelegramVerifyRequest(password="  keep whitespace  ").password == "  keep whitespace  "
+    assert (
+        TelegramVerifyRequest(password="  keep whitespace  ").password
+        == "  keep whitespace  "
+    )
     with pytest.raises(ValidationError):
         TelegramVerifyRequest()
     with pytest.raises(ValidationError):
@@ -104,8 +107,7 @@ def test_verify_schema_accepts_exactly_one_ephemeral_secret() -> None:
 
 def test_connection_router_exposes_the_user_scoped_contract() -> None:
     operations = {
-        (route.path, next(iter(route.methods or set())))
-        for route in router.routes
+        (route.path, next(iter(route.methods or set()))) for route in router.routes
     }
     assert ("/telegram/connection", "GET") in operations
     assert ("/telegram/connection", "POST") in operations
@@ -132,6 +134,65 @@ async def test_status_maps_persisted_pending_state_without_network(
     )
     service = TelegramAuthService(session=session, user_id="user-a")  # type: ignore[arg-type]
     assert await service.status() is TelegramConnectionState.PASSWORD_REQUIRED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        (
+            TelegramConnectionState.CODE_REQUIRED,
+            {"state": "code_required", "phone_masked": "••• ••• 0123"},
+        ),
+        (
+            TelegramConnectionState.PASSWORD_REQUIRED,
+            {"state": "password_required", "phone_masked": "••• ••• 0123"},
+        ),
+        (
+            TelegramConnectionState.CONNECTED,
+            {
+                "state": "connected",
+                "account": {"phone_masked": "••• ••• 0123"},
+            },
+        ),
+    ],
+)
+async def test_connection_response_returns_only_masked_phone_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    state: TelegramConnectionState,
+    expected: dict[str, Any],
+) -> None:
+    session = _FakeSession(_connection(phone_encrypted="phone-cipher"))
+    monkeypatch.setattr(
+        service_module,
+        "decrypt_secret",
+        lambda value, *, context: "+49 170 890123",
+    )
+    service = TelegramAuthService(session=session, user_id="user-a")  # type: ignore[arg-type]
+
+    response = await service.response(state=state)
+
+    assert response.model_dump(mode="json", exclude_none=True) == expected
+    assert "+49 170 890123" not in response.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_connection_response_omits_identity_when_phone_cannot_be_opened(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeSession(_connection(phone_encrypted="corrupt-phone"))
+    monkeypatch.setattr(
+        service_module,
+        "decrypt_secret",
+        lambda value, *, context: (_ for _ in ()).throw(
+            SecretDecryptionError("corrupt")
+        ),
+    )
+    service = TelegramAuthService(session=session, user_id="user-a")  # type: ignore[arg-type]
+
+    response = await service.response(state=TelegramConnectionState.CONNECTED)
+
+    assert response.model_dump(mode="json", exclude_none=True) == {"state": "connected"}
 
 
 @pytest.mark.asyncio
@@ -186,7 +247,10 @@ async def test_status_invalidates_corrupt_connection_ciphertext(
     assert connection.phone_encrypted is None
     assert connection.session_encrypted is None
     assert connection.generation == 5
-    assert len(session.execute_calls) == 1
+    assert {statement.table.name for statement in session.execute_calls} == {
+        "messages",
+        "scan_jobs",
+    }
     assert session.commit_calls == 1
 
 
@@ -209,7 +273,9 @@ async def test_start_persists_only_encrypted_challenge_material(
         lambda value, *, context: f"cipher:{context}:{value}",
     )
 
-    state = await TelegramAuthService(session=session, user_id="user-a").start(phone=" +49123 ")  # type: ignore[arg-type]
+    state = await TelegramAuthService(session=session, user_id="user-a").start(
+        phone=" +49123 "
+    )  # type: ignore[arg-type]
 
     assert state is TelegramConnectionState.CODE_REQUIRED
     assert connection.state == "pending"
@@ -239,8 +305,12 @@ async def test_starting_new_challenge_clears_old_principal_and_generation(
         yield client
 
     monkeypatch.setattr(service_module, "short_lived_client", fake_client)
-    monkeypatch.setattr(service_module, "decrypt_secret", lambda value, *, context: "session")
-    monkeypatch.setattr(service_module, "encrypt_secret", lambda value, *, context: f"cipher:{value}")
+    monkeypatch.setattr(
+        service_module, "decrypt_secret", lambda value, *, context: "session"
+    )
+    monkeypatch.setattr(
+        service_module, "encrypt_secret", lambda value, *, context: f"cipher:{value}"
+    )
 
     state = await TelegramAuthService(session=session, user_id="user-a").start(  # type: ignore[arg-type]
         phone="+49123"
@@ -249,7 +319,10 @@ async def test_starting_new_challenge_clears_old_principal_and_generation(
     assert state is TelegramConnectionState.CODE_REQUIRED
     assert connection.telegram_user_id is None
     assert connection.generation == 8
-    assert len(session.execute_calls) == 1
+    assert {statement.table.name for statement in session.execute_calls} == {
+        "messages",
+        "scan_jobs",
+    }
     assert "scan_jobs" in str(session.execute_calls[0])
 
 
@@ -277,8 +350,12 @@ async def test_verify_uses_ephemeral_code_and_clears_challenge(
         "hash-cipher": "phone-code-hash",
     }
     monkeypatch.setattr(service_module, "short_lived_client", fake_client)
-    monkeypatch.setattr(service_module, "decrypt_secret", lambda value, *, context: plaintext[value])
-    monkeypatch.setattr(service_module, "encrypt_secret", lambda value, *, context: f"cipher:{value}")
+    monkeypatch.setattr(
+        service_module, "decrypt_secret", lambda value, *, context: plaintext[value]
+    )
+    monkeypatch.setattr(
+        service_module, "encrypt_secret", lambda value, *, context: f"cipher:{value}"
+    )
 
     state = await TelegramAuthService(session=session, user_id="user-a").verify(  # type: ignore[arg-type]
         code="12345",

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckSquare2, ChevronLeft, ChevronRight, Search, X } from "lucide-react";
-import { useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 
 import {
   bulkDeleteMessages,
@@ -11,7 +11,13 @@ import {
   TelegramConnectionChangedError,
   TelegramNotConnectedError,
 } from "@/api/messages";
-import { addTagsToMessage, createTag, listTags, removeTagFromMessage } from "@/api/tags";
+import {
+  addTagsToMessage,
+  bulkAddTagsToMessages,
+  createTag,
+  listTags,
+  removeTagFromMessage,
+} from "@/api/tags";
 import { MoveDialog } from "@/components/categories/move-dialog";
 import { BulkActions } from "@/components/messages/bulk-actions";
 import { MessageDetail } from "@/components/messages/message-detail";
@@ -22,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatePanel } from "@/components/ui/state-panel";
 import { notifyCategoriesChanged, useCategories } from "@/hooks/use-categories";
+import { subscribeToOrganizationChanges } from "@/lib/organization-events";
 import { MESSAGE_DROP_TO_CATEGORY_EVENT, readMessageDropToCategoryEvent } from "@/lib/message-drag-events";
 import type { CategoryWithCount } from "@/types/category";
 import type { MessageListItem, MessageTag } from "@/types/message";
@@ -121,6 +128,7 @@ function deriveCategoriesFromMessages(messages: MessageListItem[]): CategoryWith
       id: message.category.id,
       name: message.category.name,
       slug: message.category.slug,
+      system_key: null,
       icon: message.category.icon,
       color: message.category.color,
       position: message.category.id,
@@ -169,7 +177,9 @@ export function MessagesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [messages, setMessages] = useState<MessageListItem[]>([]);
   const [knownTags, setKnownTags] = useState<MessageTag[]>([]);
+  const [hasLoadedTagCatalogue, setHasLoadedTagCatalogue] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [totalMessages, setTotalMessages] = useState(0);
   const [reloadRevision, setReloadRevision] = useState(0);
@@ -185,11 +195,15 @@ export function MessagesPage() {
   const [isBulkSelectionMode, setIsBulkSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<number[]>([]);
   const [bulkMoveCategoryId, setBulkMoveCategoryId] = useState<number | null>(null);
-  const [bulkActionPending, setBulkActionPending] = useState<"move" | "delete" | null>(null);
+  const [bulkTagId, setBulkTagId] = useState<number | null>(null);
+  const [bulkActionPending, setBulkActionPending] = useState<"move" | "tag" | "delete" | null>(null);
   const [moveDialogError, setMoveDialogError] = useState<string | null>(null);
   const [tagDialogError, setTagDialogError] = useState<string | null>(null);
   const [bulkActionError, setBulkActionError] = useState<string | null>(null);
+  const [bulkActionSuccess, setBulkActionSuccess] = useState<string | null>(null);
   const gridTopRef = useRef<HTMLDivElement | null>(null);
+  const hasCompletedInitialLoadRef = useRef(false);
+  const hasLoadedTagCatalogueRef = useRef(false);
   const { categories: fetchedCategories, isFallback: isCategoriesFallback } = useCategories();
   const categoryFilter = searchParams.get("category")?.trim().toLowerCase() ?? "";
   const selectedTagFilters = useMemo(
@@ -234,11 +248,17 @@ export function MessagesPage() {
 
   useEffect(() => {
     let isCanceled = false;
+    let requestRevision = 0;
 
     async function hydrateTags() {
+      const currentRevision = ++requestRevision;
       try {
         const apiTags = await listTags();
-        if (!isCanceled) setKnownTags(apiTags);
+        if (!isCanceled && currentRevision === requestRevision) {
+          hasLoadedTagCatalogueRef.current = true;
+          setHasLoadedTagCatalogue(true);
+          setKnownTags(apiTags);
+        }
       } catch {
         // The message library remains usable when the optional tag catalogue
         // cannot be loaded; tags present on the current page are still shown.
@@ -246,9 +266,14 @@ export function MessagesPage() {
     }
 
     void hydrateTags();
+    const unsubscribe = subscribeToOrganizationChanges("tags", () => {
+      void hydrateTags();
+    });
 
     return () => {
       isCanceled = true;
+      requestRevision += 1;
+      unsubscribe();
     };
   }, []);
 
@@ -256,7 +281,12 @@ export function MessagesPage() {
     let isCanceled = false;
 
     async function hydrateMessages() {
-      setIsInitialLoading(true);
+      const isFirstLoad = !hasCompletedInitialLoadRef.current;
+      if (isFirstLoad) {
+        setIsInitialLoading(true);
+      } else {
+        setIsRefreshing(true);
+      }
       setLoadError(null);
       try {
         const messageResponse = await listMessages({
@@ -270,14 +300,22 @@ export function MessagesPage() {
         if (isCanceled) return;
         setMessages(messageResponse.items);
         setTotalMessages(messageResponse.total);
-        setKnownTags((currentTags) => mergeTags(currentTags, deriveTagsFromMessages(messageResponse.items)));
+        if (!hasLoadedTagCatalogueRef.current) {
+          setKnownTags((currentTags) => mergeTags(currentTags, deriveTagsFromMessages(messageResponse.items)));
+        }
       } catch (error) {
         if (isCanceled) return;
-        setMessages([]);
-        setTotalMessages(0);
+        if (isFirstLoad) {
+          setMessages([]);
+          setTotalMessages(0);
+        }
         setLoadError(toErrorMessage(error, "Unable to load your messages right now."));
       } finally {
-        if (!isCanceled) setIsInitialLoading(false);
+        if (!isCanceled) {
+          hasCompletedInitialLoadRef.current = true;
+          setIsInitialLoading(false);
+          setIsRefreshing(false);
+        }
       }
     }
 
@@ -327,15 +365,31 @@ export function MessagesPage() {
     [actionCategories],
   );
 
-  const availableTags = useMemo(
-    () => mergeTags(knownTags, deriveTagsFromMessages(messages)).map((tag) => ({
+  const availableTags = useMemo(() => {
+    const catalogue = hasLoadedTagCatalogue
+      ? knownTags
+      : mergeTags(knownTags, deriveTagsFromMessages(messages));
+    return catalogue.map((tag) => ({
       key: normalizeTagKey(tag.name),
       label: tag.name,
       id: tag.id,
       color: tag.color,
-    })),
-    [knownTags, messages],
-  );
+    }));
+  }, [hasLoadedTagCatalogue, knownTags, messages]);
+
+  useEffect(() => {
+    if (availableTags.length === 0) {
+      setBulkTagId(null);
+      return;
+    }
+
+    setBulkTagId((currentTagId) => {
+      if (currentTagId !== null && availableTags.some((tag) => tag.id === currentTagId)) {
+        return currentTagId;
+      }
+      return availableTags[0].id;
+    });
+  }, [availableTags]);
 
   const filteredAndSorted = messages;
 
@@ -390,6 +444,7 @@ export function MessagesPage() {
 
     setSelectedMessageIds([]);
     setBulkActionError(null);
+    setBulkActionSuccess(null);
   }, [isBulkSelectionMode]);
 
   const activeMoveMessage = useMemo(
@@ -542,6 +597,7 @@ export function MessagesPage() {
 
   function activateBulkSelectionMode() {
     setBulkActionError(null);
+    setBulkActionSuccess(null);
     setIsBulkSelectionMode(true);
   }
 
@@ -550,7 +606,11 @@ export function MessagesPage() {
   }
 
   function handleMessageSelectionChange(message: MessageListItem, isSelected: boolean) {
+    if (bulkActionPending !== null) {
+      return;
+    }
     setBulkActionError(null);
+    setBulkActionSuccess(null);
 
     if (isSelected) {
       setIsBulkSelectionMode(true);
@@ -570,12 +630,14 @@ export function MessagesPage() {
 
   function handleSelectAllFiltered() {
     setBulkActionError(null);
+    setBulkActionSuccess(null);
     setIsBulkSelectionMode(true);
     setSelectedMessageIds(filteredAndSorted.map((message) => message.id));
   }
 
   function clearSelectedMessages() {
     setBulkActionError(null);
+    setBulkActionSuccess(null);
     setSelectedMessageIds([]);
   }
 
@@ -643,10 +705,19 @@ export function MessagesPage() {
     setTagDialogError(null);
     setIsTagSubmitting(true);
 
+    let created: MessageTag;
     try {
-      const created = await createTag({ name: normalizedName });
+      created = await createTag({ name: normalizedName });
+      setKnownTags((currentTags) => mergeTags(currentTags, [created]));
+    } catch (error) {
+      setTagDialogError(toErrorMessage(error, "Unable to create tag."));
+      setIsTagSubmitting(false);
+      return false;
+    }
+
+    try {
       const updatedTags = await addTagsToMessage(activeTagMessage.id, [created.id]);
-      setKnownTags((currentTags) => mergeTags(currentTags, [created, ...updatedTags]));
+      setKnownTags((currentTags) => mergeTags(currentTags, updatedTags));
       setMessages((currentMessages) =>
         currentMessages.map((message) =>
           message.id === activeTagMessage.id ? { ...message, tags: updatedTags } : message,
@@ -657,8 +728,9 @@ export function MessagesPage() {
       }
       return true;
     } catch (error) {
-      setTagDialogError(toErrorMessage(error, "Unable to create tag."));
-      return false;
+      const reason = toErrorMessage(error, "Try attaching it from the existing tags above.");
+      setTagDialogError(`Created #${created.name}, but it could not be attached. ${reason}`);
+      return true;
     } finally {
       setIsTagSubmitting(false);
     }
@@ -735,6 +807,7 @@ export function MessagesPage() {
     const targetMessageIds = [...selectedMessageIds];
     setPageError(null);
     setBulkActionError(null);
+    setBulkActionSuccess(null);
     setBulkActionPending("move");
 
     try {
@@ -750,6 +823,55 @@ export function MessagesPage() {
       setSelectedMessageIds([]);
     } catch (error) {
       setBulkActionError(toErrorMessage(error, "Unable to move selected messages right now."));
+    } finally {
+      setBulkActionPending(null);
+    }
+  }
+
+  async function handleBulkTag() {
+    if (selectedMessageIds.length === 0 || bulkActionPending !== null) {
+      return;
+    }
+    if (bulkTagId === null) {
+      setBulkActionError("Select a tag before tagging messages.");
+      setBulkActionSuccess(null);
+      return;
+    }
+
+    const selectedTag = availableTags.find((tag) => tag.id === bulkTagId);
+    if (selectedTag === undefined) {
+      setBulkActionError("Selected tag was not found.");
+      setBulkActionSuccess(null);
+      return;
+    }
+
+    const targetMessageIds = [...selectedMessageIds];
+    const targetIdSet = new Set(targetMessageIds);
+    const messageTag: MessageTag = {
+      id: selectedTag.id,
+      name: selectedTag.label,
+      color: selectedTag.color,
+    };
+    setPageError(null);
+    setBulkActionError(null);
+    setBulkActionSuccess(null);
+    setBulkActionPending("tag");
+
+    try {
+      const result = await bulkAddTagsToMessages(targetMessageIds, [selectedTag.id]);
+      setMessages((currentMessages) => currentMessages.map((message) => (
+        targetIdSet.has(message.id)
+          ? { ...message, tags: mergeTags(message.tags, [messageTag]) }
+          : message
+      )));
+      setKnownTags((currentTags) => mergeTags(currentTags, [messageTag]));
+      setBulkActionSuccess(
+        result.assignment_count === 0
+          ? `#${selectedTag.label} was already attached to ${targetMessageIds.length === 1 ? "the selected message" : `all ${targetMessageIds.length} selected messages`}.`
+          : `Added #${selectedTag.label} to ${result.updated_count} selected ${result.updated_count === 1 ? "message" : "messages"}.`,
+      );
+    } catch (error) {
+      setBulkActionError(toErrorMessage(error, "Unable to tag selected messages right now."));
     } finally {
       setBulkActionPending(null);
     }
@@ -773,6 +895,7 @@ export function MessagesPage() {
     const targetIdSet = new Set(targetMessageIds);
     setPageError(null);
     setBulkActionError(null);
+    setBulkActionSuccess(null);
     setBulkActionPending("delete");
 
     try {
@@ -966,6 +1089,16 @@ export function MessagesPage() {
           {!isInitialLoading && totalMessages > itemsPerPage
             ? ` · Page ${safePage} of ${totalPages}`
             : ""}
+          {isRefreshing ? (
+            <span
+              className="ml-2 inline-flex items-center gap-1 font-medium text-[hsl(var(--primary))]"
+              role="status"
+              aria-label="Updating messages"
+            >
+              <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+              Updating…
+            </span>
+          ) : null}
         </p>
 
         <div className="flex items-center gap-2">
@@ -1002,15 +1135,31 @@ export function MessagesPage() {
           selectedCount={selectedMessageIds.length}
           filteredCount={messages.length}
           categories={actionCategories}
+          tags={availableTags.map(({ id, label, color }) => ({ id, name: label, color }))}
           selectedCategoryId={bulkMoveCategoryId}
+          selectedTagId={bulkTagId}
           isMoveSubmitting={bulkActionPending === "move"}
+          isTagSubmitting={bulkActionPending === "tag"}
           isDeleteSubmitting={bulkActionPending === "delete"}
           errorMessage={bulkActionError}
+          successMessage={bulkActionSuccess}
           onSelectAllFiltered={handleSelectAllFiltered}
           onClearSelection={clearSelectedMessages}
-          onSelectedCategoryChange={setBulkMoveCategoryId}
+          onSelectedCategoryChange={(categoryId) => {
+            setBulkMoveCategoryId(categoryId);
+            setBulkActionError(null);
+            setBulkActionSuccess(null);
+          }}
+          onSelectedTagChange={(tagId) => {
+            setBulkTagId(tagId);
+            setBulkActionError(null);
+            setBulkActionSuccess(null);
+          }}
           onBulkMove={() => {
             void handleBulkMove();
+          }}
+          onBulkTag={() => {
+            void handleBulkTag();
           }}
           onBulkDelete={() => {
             void handleBulkDelete();
@@ -1046,7 +1195,7 @@ export function MessagesPage() {
       )}
 
       {!isInitialLoading && loadError === null && totalPages > 1 ? (
-        <nav className="mt-5 flex items-center justify-center gap-2" aria-label="Message pages">
+        <nav className="mt-5 flex flex-wrap items-center justify-center gap-2" aria-label="Message pages">
           <Button
             variant="outline"
             size="sm"
@@ -1058,40 +1207,49 @@ export function MessagesPage() {
             Prev
           </Button>
 
-          {Array.from({ length: totalPages }, (_, i) => i + 1)
-            .filter((page) => {
-              if (totalPages <= 7) return true;
-              if (page === 1 || page === totalPages) return true;
-              if (Math.abs(page - safePage) <= 1) return true;
-              return false;
-            })
-            .reduce<(number | "ellipsis")[]>((acc, page, idx, arr) => {
-              if (idx > 0) {
-                const prev = arr[idx - 1];
-                if (page - prev > 1) acc.push("ellipsis");
-              }
-              acc.push(page);
-              return acc;
-            }, [])
-            .map((item, idx) =>
-              item === "ellipsis" ? (
-                <span key={`ellipsis-${idx}`} className="px-1 text-sm text-[hsl(var(--muted-foreground))]">
-                  …
-                </span>
-              ) : (
-                <Button
-                  key={item}
-                  variant={item === safePage ? "default" : "outline"}
-                  size="sm"
-                  className="h-8 w-8 p-0 text-xs"
-                  onClick={() => goToPage(item)}
-                  aria-current={item === safePage ? "page" : undefined}
-                  aria-label={`Page ${item}`}
-                >
-                  {item}
-                </Button>
-              ),
-            )}
+          <span
+            className="min-w-16 text-center text-sm font-semibold text-[hsl(var(--foreground))] sm:hidden"
+            aria-label={`Current page, ${safePage} of ${totalPages}`}
+          >
+            {safePage} / {totalPages}
+          </span>
+
+          <span className="hidden items-center gap-2 sm:flex" aria-label="Pagination page numbers">
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter((page) => {
+                if (totalPages <= 7) return true;
+                if (page === 1 || page === totalPages) return true;
+                if (Math.abs(page - safePage) <= 1) return true;
+                return false;
+              })
+              .reduce<(number | "ellipsis")[]>((acc, page, idx, arr) => {
+                if (idx > 0) {
+                  const prev = arr[idx - 1];
+                  if (page - prev > 1) acc.push("ellipsis");
+                }
+                acc.push(page);
+                return acc;
+              }, [])
+              .map((item, idx) =>
+                item === "ellipsis" ? (
+                  <span key={`ellipsis-${idx}`} className="px-1 text-sm text-[hsl(var(--muted-foreground))]">
+                    …
+                  </span>
+                ) : (
+                  <Button
+                    key={item}
+                    variant={item === safePage ? "default" : "outline"}
+                    size="sm"
+                    className="h-8 w-8 p-0 text-xs"
+                    onClick={() => goToPage(item)}
+                    aria-current={item === safePage ? "page" : undefined}
+                    aria-label={`Page ${item}`}
+                  >
+                    {item}
+                  </Button>
+                ),
+              )}
+          </span>
 
           <Button
             variant="outline"
@@ -1113,7 +1271,7 @@ export function MessagesPage() {
           description={
             hasActiveFilters
               ? "Adjust search or filter controls to broaden results."
-              : "Connect Telegram and run a scan to import Saved Messages."
+              : "Import Saved Messages from the Dashboard scanner, or review your Telegram connection first."
           }
           action={
             hasActiveFilters ? (
@@ -1121,7 +1279,22 @@ export function MessagesPage() {
                 <X className="size-3.5" />
                 Clear filters
               </Button>
-            ) : null
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  to="/"
+                  className="inline-flex h-9 items-center justify-center rounded-md bg-[hsl(var(--primary))] px-3 text-sm font-semibold text-[hsl(var(--primary-foreground))] transition-colors hover:bg-[hsl(var(--primary)/0.92)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+                >
+                  Open scanner
+                </Link>
+                <Link
+                  to="/settings/telegram"
+                  className="inline-flex h-9 items-center justify-center rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 text-sm font-semibold text-[hsl(var(--card-foreground))] transition-colors hover:bg-[hsl(var(--muted))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+                >
+                  Telegram connection
+                </Link>
+              </div>
+            )
           }
         />
       ) : null}

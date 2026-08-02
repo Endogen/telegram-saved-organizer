@@ -11,6 +11,8 @@ from app.accounts.dependencies import get_current_user
 from app.database import get_session
 from app.models import User
 from app.tags.schemas import (
+    MessageBulkTagRequest,
+    MessageBulkTagResponse,
     MessageTagsResponse,
     MessageTagsUpdateRequest,
     TagCreateRequest,
@@ -116,6 +118,30 @@ async def add_tags_to_message(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return MessageTagsResponse(message_id=message_id, tags=[TagResponse.model_validate(tag) for tag in tags])
+
+
+@router.post("/messages/bulk-tags", response_model=MessageBulkTagResponse)
+async def bulk_add_tags_to_messages(
+    payload: MessageBulkTagRequest,
+    service: TagService = Depends(get_tag_service),
+) -> MessageBulkTagResponse:
+    try:
+        result = await service.bulk_add_tags_to_messages(
+            message_ids=payload.message_ids,
+            tag_ids=payload.tag_ids,
+        )
+    except MessageNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except TagNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except TagConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return MessageBulkTagResponse(
+        updated_count=result.updated_count,
+        assignment_count=result.assignment_count,
+    )
 
 
 @router.delete("/messages/{message_id}/tags/{tag_id}", response_model=MessageTagsResponse)

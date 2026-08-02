@@ -44,9 +44,10 @@ describe("DashboardPage", () => {
     );
 
     expect(screen.getByText("Dashboard")).toBeInTheDocument();
+    expect(screen.getByText("Connect Telegram and import your Saved Messages to get started.")).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByText("Ready to scan")).toBeInTheDocument();
+      expect(screen.getByText("Ready to import")).toBeInTheDocument();
     });
   });
 });

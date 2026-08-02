@@ -52,6 +52,34 @@ describe("RegisterPage", () => {
     expect(await screen.findByText("Telegram onboarding")).toBeInTheDocument();
   });
 
+  it("uses the backend UTF-8 byte policy for password validation", async () => {
+    authMocks.register.mockResolvedValue({});
+    renderPage();
+    fireEvent.change(screen.getByLabelText("Display name"), { target: { value: "Ada" } });
+    fireEvent.change(screen.getByLabelText("Email address"), { target: { value: "ada@example.com" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "€€€€" } });
+    fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "€€€€" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create account" }));
+
+    await waitFor(() => expect(authMocks.register).toHaveBeenCalledWith({
+      email: "ada@example.com",
+      display_name: "Ada",
+      password: "€€€€",
+    }));
+  });
+
+  it("rejects passwords longer than the backend's 128-byte limit", () => {
+    renderPage();
+    fireEvent.change(screen.getByLabelText("Display name"), { target: { value: "Ada" } });
+    fireEvent.change(screen.getByLabelText("Email address"), { target: { value: "ada@example.com" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "a".repeat(129) } });
+    fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "a".repeat(129) } });
+    fireEvent.click(screen.getByRole("button", { name: "Create account" }));
+
+    expect(screen.getByText("Password must not exceed 128 bytes.")).toBeInTheDocument();
+    expect(authMocks.register).not.toHaveBeenCalled();
+  });
+
   it("does not reveal whether the registration email already exists", async () => {
     authMocks.register.mockRejectedValue(
       new ApiRequestError("An account with this email already exists.", 409, "account_conflict"),

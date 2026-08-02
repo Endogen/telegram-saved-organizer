@@ -33,6 +33,7 @@ class _FakeCategory:
     color: str
     position: int
     is_default: bool
+    system_key: str | None = None
 
 
 class _FakeCategoryService:
@@ -51,7 +52,9 @@ class _FakeCategoryService:
         self.list_result = [CategoryWithCount(category=self.category, message_count=4)]
         self.create_result = self.category
         self.update_result = self.category
-        self.delete_result = CategoryDeleteResult(moved_message_count=0, destination_category_id=8)
+        self.delete_result = CategoryDeleteResult(
+            moved_message_count=0, destination_category_id=8
+        )
 
     async def list_categories(self) -> list[CategoryWithCount]:
         self.list_calls += 1
@@ -79,7 +82,9 @@ class _FakeCategoryService:
             raise self.create_error
         return self.create_result
 
-    async def update_category(self, *, category_id: int, updates: dict[str, Any]) -> _FakeCategory:
+    async def update_category(
+        self, *, category_id: int, updates: dict[str, Any]
+    ) -> _FakeCategory:
         self.update_calls.append((category_id, updates))
         if self.update_error is not None:
             raise self.update_error
@@ -101,6 +106,7 @@ def _build_category() -> _FakeCategory:
         color="#0EA5E9",
         position=3,
         is_default=True,
+        system_key="links",
     )
 
 
@@ -150,6 +156,7 @@ async def test_list_categories_endpoint_returns_categories_with_counts(
             "id": 3,
             "name": "Links",
             "slug": "links",
+            "system_key": "links",
             "icon": "link",
             "color": "#0EA5E9",
             "position": 3,
@@ -190,6 +197,7 @@ async def test_create_category_endpoint_returns_created_category(
     assert response.json()["id"] == 9
     assert response.json()["slug"] == "read-later"
     assert response.json()["is_default"] is False
+    assert response.json()["system_key"] is None
     assert service.create_calls == [
         {
             "name": "Read Later",
@@ -205,7 +213,9 @@ async def test_create_category_endpoint_returns_conflict(
     category_context: tuple[Any, _FakeCategoryService],
 ) -> None:
     app, service = category_context
-    service.create_error = CategoryConflictError("Category name 'Links' already exists.")
+    service.create_error = CategoryConflictError(
+        "Category name 'Links' already exists."
+    )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.post(
@@ -250,7 +260,9 @@ async def test_update_category_endpoint_returns_updated_category(
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.patch("/api/categories/3", json={"name": "Bookmarks", "position": 5})
+        response = await client.patch(
+            "/api/categories/3", json={"name": "Bookmarks", "position": 5}
+        )
 
     assert response.status_code == 200
     assert response.json()["name"] == "Bookmarks"
@@ -277,7 +289,9 @@ async def test_update_category_endpoint_returns_conflict(
     category_context: tuple[Any, _FakeCategoryService],
 ) -> None:
     app, service = category_context
-    service.update_error = CategoryConflictError("Category slug 'links' already exists.")
+    service.update_error = CategoryConflictError(
+        "Category slug 'links' already exists."
+    )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.patch("/api/categories/3", json={"name": "Links"})
@@ -318,7 +332,9 @@ async def test_delete_category_endpoint_returns_move_summary(
     category_context: tuple[Any, _FakeCategoryService],
 ) -> None:
     app, service = category_context
-    service.delete_result = CategoryDeleteResult(moved_message_count=6, destination_category_id=8)
+    service.delete_result = CategoryDeleteResult(
+        moved_message_count=6, destination_category_id=8
+    )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.delete("/api/categories/3")

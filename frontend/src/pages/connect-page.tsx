@@ -174,7 +174,7 @@ export function ConnectPage() {
     const isConnected = connection.state === "connected";
     const confirmed = window.confirm(
       isConnected
-        ? "Disconnect Telegram? Future scans will stop, but messages already imported into the organizer will remain."
+        ? "Disconnect Telegram? Future imports will stop, but messages already imported into the organizer will remain."
         : "Cancel this Telegram sign-in attempt and use a different phone number?",
     );
     if (!confirmed) {
@@ -374,7 +374,7 @@ export function ConnectPage() {
                           </p>
                         ) : null}
                         <p className="mt-2 text-sm">
-                          You can now scan and organize Saved Messages. Disconnecting later stops future scans but does
+                          You can now import and organize Saved Messages. Disconnecting later stops future imports but does
                           not remove messages already imported into the organizer.
                         </p>
                       </div>
@@ -382,13 +382,13 @@ export function ConnectPage() {
                     <div className="mt-4 flex flex-wrap items-center gap-3">
                       <div className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-800 dark:text-emerald-200">
                         <CheckCircle2 className="size-3.5" aria-hidden="true" />
-                        Ready to scan
+                        Ready to import
                       </div>
                       <Link
                         to="/"
                         className="inline-flex min-h-11 items-center justify-center rounded-md bg-[hsl(var(--primary))] px-4 text-sm font-semibold text-[hsl(var(--primary-foreground))] transition-colors hover:bg-[hsl(var(--primary)/0.92)]"
                       >
-                        Open scanner dashboard
+                        Open import dashboard
                       </Link>
                     </div>
                   </div>

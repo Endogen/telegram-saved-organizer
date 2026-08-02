@@ -22,4 +22,7 @@ htmlcov/
 .ralph/inject.md
 data/
 frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
 graphify-out/
+/backups/

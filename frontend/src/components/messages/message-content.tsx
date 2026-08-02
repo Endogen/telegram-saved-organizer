@@ -31,6 +31,7 @@ function ProviderIcon({ provider }: { provider: LinkProvider }) {
 
 function LinkPreview({ link, compact }: { link: MessageLink; compact: boolean }) {
   const [isCopied, setIsCopied] = useState(false);
+  const [thumbnailRequested, setThumbnailRequested] = useState(false);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
 
   useEffect(() => {
@@ -54,13 +55,39 @@ function LinkPreview({ link, compact }: { link: MessageLink; compact: boolean })
     setIsCopied(true);
   }
 
+  function loadThumbnail(event: MouseEvent<HTMLButtonElement>) {
+    stopCardInteraction(event);
+    setThumbnailRequested(true);
+  }
+
   const thumbnailUrl = link.youtubeVideoId === null
     ? null
     : `https://i.ytimg.com/vi/${link.youtubeVideoId}/hqdefault.jpg`;
 
   return (
     <div className={`overflow-hidden rounded-xl border ${providerStyles[link.provider]}`} data-provider={link.provider}>
-      {thumbnailUrl !== null && !thumbnailFailed ? (
+      {thumbnailUrl !== null && !thumbnailRequested ? (
+        <div className={`grid place-items-center bg-slate-950 px-4 text-center ${compact ? "aspect-[16/7]" : "aspect-video"}`}>
+          <button
+            type="button"
+            draggable={false}
+            onClick={loadThumbnail}
+            onMouseDown={stopCardInteraction}
+            className="group/thumbnail-load inline-flex min-h-11 items-center gap-3 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-left text-white shadow-lg transition hover:border-white/25 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
+            aria-label="Load YouTube thumbnail (contacts YouTube)"
+          >
+            <span className="grid size-9 shrink-0 place-items-center rounded-full bg-red-600">
+              <Play className="ml-0.5 size-4 fill-current" aria-hidden="true" />
+            </span>
+            <span>
+              <span className="block text-sm font-semibold">Load video thumbnail</span>
+              <span className="block text-[11px] text-white/70">Contacts YouTube only when you choose</span>
+            </span>
+          </button>
+        </div>
+      ) : null}
+
+      {thumbnailUrl !== null && thumbnailRequested && !thumbnailFailed ? (
         <a
           href={link.url}
           target="_blank"
@@ -85,6 +112,12 @@ function LinkPreview({ link, compact }: { link: MessageLink; compact: boolean })
             </span>
           </span>
         </a>
+      ) : null}
+
+      {thumbnailUrl !== null && thumbnailRequested && thumbnailFailed ? (
+        <div className={`grid place-items-center bg-slate-950 px-4 text-center text-xs font-medium text-white/70 ${compact ? "aspect-[16/7]" : "aspect-video"}`}>
+          Thumbnail unavailable. You can still open the video below.
+        </div>
       ) : null}
 
       <div className="flex min-w-0 items-start gap-3 p-3">
@@ -169,7 +202,7 @@ export function MessageContent({ content, url, compact = false }: MessageContent
   return (
     <div className="space-y-3">
       {displayedText !== null ? <LinkedText text={displayedText} compact={compact} /> : null}
-      {analysis.link !== null ? <LinkPreview link={analysis.link} compact={compact} /> : null}
+      {analysis.link !== null ? <LinkPreview key={analysis.link.url} link={analysis.link} compact={compact} /> : null}
       {analysis.text === null && analysis.link === null ? (
         <p className="text-sm italic text-[hsl(var(--muted-foreground))]">No text or link content on this message.</p>
       ) : null}

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { MessageContent } from "@/components/messages/message-content";
@@ -22,7 +22,7 @@ describe("MessageContent", () => {
     );
   });
 
-  it("renders mixed text, linkifies the URL, and adds a YouTube preview", () => {
+  it("loads a YouTube thumbnail only after an explicit privacy choice", () => {
     render(
       <MessageContent
         content="Worth watching:\nhttps://www.youtube.com/watch?v=dQw4w9WgXcQ"
@@ -33,6 +33,10 @@ describe("MessageContent", () => {
     expect(screen.getByText(/Worth watching/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" })).toBeInTheDocument();
     expect(screen.getByText("YouTube")).toBeInTheDocument();
+    expect(document.querySelector("img")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Load YouTube thumbnail (contacts YouTube)" }));
+
     expect(document.querySelector("img")).toHaveAttribute(
       "src",
       "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",

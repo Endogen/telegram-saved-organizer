@@ -45,7 +45,17 @@ class TelegramVerifyRequest(BaseModel):
         return self
 
 
+class TelegramAccountSummary(BaseModel):
+    """Non-sensitive Telegram identity details safe to show in the UI."""
+
+    display_name: str | None = None
+    phone_masked: str | None = None
+    username: str | None = None
+
+
 class TelegramConnectionResponse(BaseModel):
-    """Durable state of the current user's Telegram connection."""
+    """Durable state and safely displayable identity for the connection."""
 
     state: TelegramConnectionState
+    phone_masked: str | None = None
+    account: TelegramAccountSummary | None = None

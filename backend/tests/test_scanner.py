@@ -389,6 +389,32 @@ def test_scanner_normalizes_document_sender_name_and_date_fallbacks() -> None:
     assert normalized.date.tzinfo == UTC
 
 
+def test_scanner_bounds_database_fields_without_changing_message_content() -> None:
+    scanner = SavedMessagesScanner()
+    long_url = f"https://example.com/{'x' * 2_100}"
+    content = f"Keep the complete note {long_url}"
+    normalized = scanner._normalize_message(
+        _FakeMessage(
+            id=7,
+            date=datetime.now(tz=UTC),
+            message=content,
+            document=_FakeDocument(
+                mime_type="x" * 150,
+                size=2**63,
+                attributes=[_FakeDocumentAttribute(file_name="f" * 300)],
+            ),
+            fwd_from=_FakeFwdFrom(from_name="Sender " * 60),
+        )
+    )
+
+    assert normalized.content == content
+    assert normalized.url is None
+    assert normalized.file_name == "f" * 255
+    assert normalized.mime_type == "x" * 100
+    assert normalized.sender_name == ("Sender " * 60).strip()[:255]
+    assert normalized.file_size is None
+
+
 def test_scanner_extract_file_name_returns_none_without_attributes() -> None:
     scanner = SavedMessagesScanner()
 
@@ -406,6 +432,19 @@ def test_scanner_minimum_message_id_ignores_invalid_values() -> None:
 def test_scanner_rejects_messages_without_valid_ids() -> None:
     scanner = SavedMessagesScanner()
     raw_message = SimpleNamespace(id=None, message="content", date=datetime.now(tz=UTC))
+
+    with pytest.raises(ValueError, match="without an id"):
+        scanner._normalize_message(raw_message)
+
+
+@pytest.mark.parametrize("telegram_id", [-(2**63) - 1, 2**63, True])
+def test_scanner_rejects_ids_outside_database_range(telegram_id: int) -> None:
+    scanner = SavedMessagesScanner()
+    raw_message = SimpleNamespace(
+        id=telegram_id,
+        message="content",
+        date=datetime.now(tz=UTC),
+    )
 
     with pytest.raises(ValueError, match="without an id"):
         scanner._normalize_message(raw_message)

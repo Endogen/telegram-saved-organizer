@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import AbuseRateLimitBucket, TelegramConnection
-from app.security import decrypt_secret
+from app.security import SecretDecryptionError, decrypt_secret
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,10 +108,16 @@ async def telegram_phone_subject(session: AsyncSession, *, user_id: str) -> str:
         # There is no phone to verify. Keep the fallback tenant-specific while
         # the broad IP rule still bounds rotating application accounts.
         return f"unavailable:{user_id}"
-    phone = decrypt_secret(
-        encrypted_phone,
-        context=f"telegram:{user_id}:phone",
-    )
+    try:
+        phone = decrypt_secret(
+            encrypted_phone,
+            context=f"telegram:{user_id}:phone",
+        )
+    except SecretDecryptionError:
+        # Keep the request inside the normal verification flow. The broad IP
+        # quota still applies, while TelegramAuthService can invalidate the
+        # corrupt challenge and return its existing non-sensitive API error.
+        return f"unavailable:{user_id}"
     return phone_subject(phone)
 
 

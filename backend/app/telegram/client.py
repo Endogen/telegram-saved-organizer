@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -15,10 +16,11 @@ from telethon.errors import RPCError
 from telethon.sessions import StringSession
 
 from app.config import settings
-from app.models import ScanJob, TelegramConnection
+from app.models import Message, ScanJob, TelegramConnection
 from app.security import SecretDecryptionError, decrypt_secret, encrypt_secret
 
 TELEGRAM_LOGOUT_TIMEOUT_SECONDS = 10.0
+logger = logging.getLogger(__name__)
 
 
 class TelegramConfigurationError(RuntimeError):
@@ -27,6 +29,10 @@ class TelegramConfigurationError(RuntimeError):
 
 class TelegramClientNotConnectedError(RuntimeError):
     """Raised when a user has no authorized Telegram connection."""
+
+
+class TelegramClientTimeoutError(RuntimeError):
+    """Raised when Telegram cannot be reached within the configured deadline."""
 
 
 class TelegramMessageDeleteError(RuntimeError):
@@ -56,7 +62,9 @@ class TelethonClientProtocol(Protocol):
 
     async def get_me(self) -> Any: ...
 
-    async def delete_messages(self, entity: str, message_ids: Sequence[int] | int) -> Any: ...
+    async def delete_messages(
+        self, entity: str, message_ids: Sequence[int] | int
+    ) -> Any: ...
 
     async def log_out(self) -> Any: ...
 
@@ -65,7 +73,9 @@ def _telegram_api_credentials() -> tuple[int, str]:
     api_id = getattr(settings, "telegram_api_id", None)
     api_hash = getattr(settings, "telegram_api_hash", None)
     if not api_id or not api_hash:
-        raise TelegramConfigurationError("Server Telegram API credentials are not configured.")
+        raise TelegramConfigurationError(
+            "Server Telegram API credentials are not configured."
+        )
     return int(api_id), str(api_hash)
 
 
@@ -74,17 +84,47 @@ async def short_lived_client(
     *,
     session_string: str | None,
     client_factory: type[TelegramClient] = TelegramClient,
+    connect_timeout_seconds: float | None = None,
+    disconnect_timeout_seconds: float | None = None,
 ) -> AsyncIterator[TelethonClientProtocol]:
-    """Create one client from StringSession and always disconnect it."""
+    """Create one client from StringSession with bounded connect and cleanup."""
 
     api_id, api_hash = _telegram_api_credentials()
     client = client_factory(StringSession(session_string), api_id, api_hash)
+    connect_deadline = float(
+        settings.telegram_connect_timeout_seconds
+        if connect_timeout_seconds is None
+        else connect_timeout_seconds
+    )
+    disconnect_deadline = float(
+        settings.telegram_disconnect_timeout_seconds
+        if disconnect_timeout_seconds is None
+        else disconnect_timeout_seconds
+    )
+    if connect_deadline <= 0 or disconnect_deadline <= 0:
+        raise ValueError("Telegram client timeouts must be positive.")
     try:
-        await client.connect()
+        try:
+            async with asyncio.timeout(connect_deadline):
+                await client.connect()
+        except TimeoutError as exc:
+            raise TelegramClientTimeoutError(
+                "Telegram did not respond before the connection timeout."
+            ) from exc
         yield client
     finally:
-        with suppress(Exception):
-            await client.disconnect()
+        try:
+            async with asyncio.timeout(disconnect_deadline):
+                await client.disconnect()
+        except TimeoutError:
+            logger.warning(
+                "Timed out disconnecting a Telegram client after %.1f seconds",
+                disconnect_deadline,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to disconnect a Telegram client cleanly", exc_info=True
+            )
 
 
 async def delete_saved_messages(
@@ -170,7 +210,9 @@ async def delete_saved_messages(
     except RPCError as exc:
         raise TelegramMessageDeleteError("Telegram rejected message deletion.") from exc
     except Exception as exc:
-        raise TelegramMessageDeleteError("Failed to delete Telegram message(s).") from exc
+        raise TelegramMessageDeleteError(
+            "Failed to delete Telegram message(s)."
+        ) from exc
 
     await session.flush()
 
@@ -192,6 +234,18 @@ async def _invalidate_authorization(
     connection.pending_phone_code_hash_encrypted = None
     connection.pending_expires_at = None
     now = datetime.now(tz=UTC)
+    active_job_ids = select(ScanJob.id).where(
+        ScanJob.user_id == user_id,
+        ScanJob.state.in_(("pending", "running", "stopping")),
+    )
+    await session.execute(
+        update(Message)
+        .where(
+            Message.user_id == user_id,
+            Message.last_seen_replacement_job_id.in_(active_job_ids),
+        )
+        .values(last_seen_replacement_job_id=None)
+    )
     await session.execute(
         update(ScanJob)
         .where(
@@ -221,6 +275,18 @@ async def revoke_telegram_connection(*, user_id: str, session: AsyncSession) -> 
         .with_for_update()
     )
     now = datetime.now(tz=UTC)
+    active_job_ids = select(ScanJob.id).where(
+        ScanJob.user_id == normalized_user_id,
+        ScanJob.state.in_(("pending", "running", "stopping")),
+    )
+    await session.execute(
+        update(Message)
+        .where(
+            Message.user_id == normalized_user_id,
+            Message.last_seen_replacement_job_id.in_(active_job_ids),
+        )
+        .values(last_seen_replacement_job_id=None)
+    )
     await session.execute(
         update(ScanJob)
         .where(

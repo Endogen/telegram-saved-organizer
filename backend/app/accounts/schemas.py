@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 def _validate_password(value: str) -> str:
@@ -55,13 +62,11 @@ class SessionStatusResponse(BaseModel):
 
 
 class AccountUpdateRequest(BaseModel):
-    display_name: str | None = Field(default=None, min_length=1, max_length=100)
+    display_name: str = Field(default=None, min_length=1, max_length=100)  # type: ignore[arg-type]
 
     @field_validator("display_name")
     @classmethod
-    def normalize_display_name(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
+    def normalize_display_name(cls, value: str) -> str:
         normalized = value.strip()
         if not normalized:
             raise ValueError("Display name must not be empty.")
@@ -86,7 +91,9 @@ class PasswordChangeRequest(BaseModel):
     @model_validator(mode="after")
     def require_different_password(self) -> PasswordChangeRequest:
         if self.current_password == self.new_password:
-            raise ValueError("New password must be different from the current password.")
+            raise ValueError(
+                "New password must be different from the current password."
+            )
         return self
 
 

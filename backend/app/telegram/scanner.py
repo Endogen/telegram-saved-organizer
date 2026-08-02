@@ -11,6 +11,12 @@ from typing import Any, Awaitable, Callable, Protocol
 URL_PATTERN = re.compile(r"(?:https?://|www\.)[^\s]+", re.IGNORECASE)
 SIMPLE_URL_TRAILING_PUNCTUATION = frozenset(".,!?;:\"'")
 URL_CLOSING_PAIRS = {")": "(", "]": "[", "}": "{"}
+MIN_DB_BIGINT = -(2**63)
+MAX_DB_BIGINT = 2**63 - 1
+MAX_FILE_NAME_LENGTH = 255
+MAX_MIME_TYPE_LENGTH = 100
+MAX_SENDER_NAME_LENGTH = 255
+MAX_URL_LENGTH = 2048
 SOURCE_EXHAUSTED = "source_exhausted"
 MESSAGE_LIMIT_REACHED = "message_limit_reached"
 RUNTIME_LIMIT_REACHED = "runtime_limit_reached"
@@ -353,8 +359,11 @@ class SavedMessagesScanner:
             return (
                 "document",
                 self._extract_file_name(document),
-                self._coerce_int(getattr(document, "size", None)),
-                self._coerce_str(getattr(document, "mime_type", None)),
+                self._coerce_db_bigint(getattr(document, "size", None), minimum=0),
+                self._coerce_str(
+                    getattr(document, "mime_type", None),
+                    max_length=MAX_MIME_TYPE_LENGTH,
+                ),
             )
         return (None, None, None, None)
 
@@ -366,13 +375,16 @@ class SavedMessagesScanner:
         for attribute in attributes:
             file_name = getattr(attribute, "file_name", None)
             if file_name:
-                return self._coerce_str(file_name)
+                return self._coerce_str(file_name, max_length=MAX_FILE_NAME_LENGTH)
         return None
 
     def _extract_sender_name(self, raw_message: Any) -> str | None:
         forwarded_from = getattr(raw_message, "fwd_from", None)
         if forwarded_from is not None:
-            forwarded_name = self._coerce_str(getattr(forwarded_from, "from_name", None))
+            forwarded_name = self._coerce_str(
+                getattr(forwarded_from, "from_name", None),
+                max_length=MAX_SENDER_NAME_LENGTH,
+            )
             if forwarded_name:
                 return forwarded_name
 
@@ -384,9 +396,12 @@ class SavedMessagesScanner:
         last_name = self._coerce_str(getattr(sender, "last_name", None))
         full_name = " ".join(part for part in (first_name, last_name) if part).strip()
         if full_name:
-            return full_name
+            return full_name[:MAX_SENDER_NAME_LENGTH]
 
-        return self._coerce_str(getattr(sender, "username", None))
+        return self._coerce_str(
+            getattr(sender, "username", None),
+            max_length=MAX_SENDER_NAME_LENGTH,
+        )
 
     @staticmethod
     def _extract_raw_data(*, telegram_id: int) -> dict[str, Any]:
@@ -407,7 +422,15 @@ class SavedMessagesScanner:
         if not matched:
             return None
         extracted_url = _trim_url_punctuation(matched.group(0))
-        return f"https://{extracted_url}" if extracted_url.lower().startswith("www.") else extracted_url
+        normalized_url = (
+            f"https://{extracted_url}"
+            if extracted_url.lower().startswith("www.")
+            else extracted_url
+        )
+        # Do not silently turn a long destination into a different URL. The
+        # original text remains available in message content without risking a
+        # bounded database column failure.
+        return normalized_url if len(normalized_url) <= MAX_URL_LENGTH else None
 
     def _extract_date(self, raw_message: Any) -> datetime:
         date_value = getattr(raw_message, "date", None)
@@ -425,7 +448,10 @@ class SavedMessagesScanner:
         return min(valid_message_ids)
 
     def _required_telegram_id(self, raw_message: Any) -> int:
-        telegram_id = self._coerce_int(getattr(raw_message, "id", None))
+        telegram_id = self._coerce_db_bigint(
+            getattr(raw_message, "id", None),
+            minimum=MIN_DB_BIGINT,
+        )
         if telegram_id is None:
             raise ValueError("Encountered a Telegram message without an id.")
         return telegram_id
@@ -446,10 +472,16 @@ class SavedMessagesScanner:
         except (TypeError, ValueError):
             return None
 
-    def _coerce_str(self, value: Any) -> str | None:
+    def _coerce_db_bigint(self, value: Any, *, minimum: int) -> int | None:
+        integer = self._coerce_int(value)
+        if integer is None or integer < minimum or integer > MAX_DB_BIGINT:
+            return None
+        return integer
+
+    def _coerce_str(self, value: Any, *, max_length: int | None = None) -> str | None:
         if value is None:
             return None
         string_value = str(value).strip()
         if not string_value:
             return None
-        return string_value
+        return string_value if max_length is None else string_value[:max_length]

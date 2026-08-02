@@ -234,6 +234,12 @@ class ScanJob(Base):
     )
     state: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
     stop_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    replace_existing: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
     messages_scanned: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     pages_scanned: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     page_size: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
@@ -350,6 +356,11 @@ class Message(Base):
         ),
         Index("ix_messages_user_id_category_id_date", "user_id", "category_id", "date"),
         Index("ix_messages_user_id_date_id", "user_id", "date", "id"),
+        Index(
+            "ix_messages_user_id_last_seen_replacement_job_id",
+            "user_id",
+            "last_seen_replacement_job_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -359,6 +370,11 @@ class Message(Base):
     telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     telegram_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     connection_generation: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_seen_replacement_job_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("scan_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     media_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

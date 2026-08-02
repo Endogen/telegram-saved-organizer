@@ -16,11 +16,21 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from app.models import Base, Category, Message, ScanJob, TelegramConnection, User
+from app.models import (
+    Base,
+    Category,
+    Message,
+    MessageTag,
+    ScanJob,
+    Tag,
+    TelegramConnection,
+    User,
+)
 from app.security import decrypt_secret, encrypt_secret
 from app.telegram import service as service_module
 from app.telegram.client import TelegramClientNotConnectedError
 from app.telegram.scanner import (
+    MESSAGE_LIMIT_REACHED,
     RUNTIME_LIMIT_REACHED,
     SLICE_PAGE_LIMIT,
     SOURCE_EXHAUSTED,
@@ -39,6 +49,7 @@ from app.telegram.service import (
     _finalize_scan_job,
     _persist_refreshed_session,
     _persist_scan_page,
+    _release_interrupted_scan,
     _requeue_scan_job,
     _renew_scan_lease,
     _run_with_lease_heartbeat,
@@ -124,6 +135,7 @@ def _lease(
     max_messages: int = 1_000,
     max_runtime_seconds: int = 3_600,
     started_at: datetime | None = None,
+    replace_existing: bool = False,
 ) -> ScanLease:
     return ScanLease(
         job_id=job_id,
@@ -137,6 +149,7 @@ def _lease(
         max_runtime_seconds=max_runtime_seconds,
         started_at=started_at or datetime.now(tz=UTC),
         owner=owner,
+        replace_existing=replace_existing,
     )
 
 
@@ -148,6 +161,20 @@ async def test_start_rejects_existing_active_job_for_same_user() -> None:
 
     with pytest.raises(ScanAlreadyRunningError):
         await service.start(page_size=25)
+
+
+@pytest.mark.asyncio
+async def test_start_rejects_reclaimable_job_with_different_replacement_intent() -> None:
+    active = SimpleNamespace(
+        state="pending",
+        lease_expires_at=None,
+        replace_existing=True,
+    )
+    session = _FakeSession([SimpleNamespace(id="user-a"), active])
+    service = TelegramScanService(session=session, user_id="user-a")  # type: ignore[arg-type]
+
+    with pytest.raises(ScanAlreadyRunningError, match="different replacement mode"):
+        await service.start(page_size=25, clear_existing=False)
 
 
 @pytest.mark.asyncio
@@ -186,7 +213,7 @@ async def test_start_snapshots_server_resource_limits(
 
 
 @pytest.mark.asyncio
-async def test_clear_and_rescan_deletes_messages_in_job_creation_transaction(
+async def test_clear_and_rescan_preserves_library_until_scan_completes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -233,10 +260,14 @@ async def test_clear_and_rescan_deletes_messages_in_job_creation_transaction(
             job = await service.start(page_size=25, clear_existing=True)
 
         async with sessions() as session:
-            assert list(await session.scalars(select(Message))) == []
+            messages = list(await session.scalars(select(Message)))
+            assert len(messages) == 1
+            assert messages[0].content == "old import"
+            assert messages[0].last_seen_replacement_job_id is None
             persisted_job = await session.get(ScanJob, job.id)
             assert persisted_job is not None
             assert persisted_job.state == "pending"
+            assert persisted_job.replace_existing is True
 
 
 @pytest.mark.asyncio
@@ -451,8 +482,14 @@ async def test_heartbeat_and_terminalization_are_fenced_by_owner(
 
         assert await _renew_scan_lease(lease=stale) is False
         assert await _renew_scan_lease(lease=correct) is True
-        assert await _finalize_scan_job(lease=stale, state="completed", error=None) is False
-        assert await _finalize_scan_job(lease=correct, state="completed", error=None) is True
+        assert (
+            await _finalize_scan_job(lease=stale, state="completed", error=None)
+            is False
+        )
+        assert (
+            await _finalize_scan_job(lease=correct, state="completed", error=None)
+            is True
+        )
 
         async with sessions() as session:
             job = await session.get(ScanJob, "job-a")
@@ -728,12 +765,15 @@ async def test_requeue_is_fenced_and_preserves_resume_progress(
             await session.commit()
 
         assert await _requeue_scan_job(lease=_lease(owner="wrong-worker")) is False
-        assert await _requeue_scan_job(
-            lease=_lease(
-                owner="worker-a",
-                connection_generation=CONNECTION_GENERATION + 1,
+        assert (
+            await _requeue_scan_job(
+                lease=_lease(
+                    owner="worker-a",
+                    connection_generation=CONNECTION_GENERATION + 1,
+                )
             )
-        ) is False
+            is False
+        )
         assert await _requeue_scan_job(lease=_lease(owner="worker-a")) is True
 
         async with sessions() as session:
@@ -792,6 +832,60 @@ async def test_next_job_uses_least_recently_serviced_fair_order(
 
 
 @pytest.mark.asyncio
+async def test_next_job_retries_immediately_after_losing_a_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _scan_database(tmp_path=tmp_path, monkeypatch=monkeypatch) as sessions:
+        async with sessions() as session:
+            for user_id, heartbeat in (
+                ("user-first", _past_lease()),
+                ("user-second", datetime.now(tz=UTC)),
+            ):
+                session.add(
+                    User(
+                        id=user_id,
+                        email=f"{user_id}@example.com",
+                        normalized_email=f"{user_id}@example.com",
+                        display_name=user_id,
+                        password_hash="hash",
+                    )
+                )
+                session.add(
+                    ScanJob(
+                        id=f"job-{user_id}",
+                        user_id=user_id,
+                        state="pending",
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        connection_generation=CONNECTION_GENERATION,
+                        heartbeat_at=heartbeat,
+                    )
+                )
+            await session.commit()
+
+        selected: list[str] = []
+
+        async def process(job_id: str) -> bool:
+            selected.append(job_id)
+            if len(selected) == 1:
+                # Model a concurrent worker winning this claim after our select.
+                async with sessions() as session:
+                    claimed_elsewhere = await session.get(ScanJob, job_id)
+                    assert claimed_elsewhere is not None
+                    claimed_elsewhere.state = "running"
+                    claimed_elsewhere.lease_owner = "other-worker"
+                    claimed_elsewhere.lease_expires_at = _future_lease()
+                    await session.commit()
+                return False
+            return True
+
+        monkeypatch.setattr(service_module, "process_scan_job", process)
+
+        assert await process_next_scan_job() is True
+        assert selected == ["job-user-first", "job-user-second"]
+
+
+@pytest.mark.asyncio
 async def test_refreshed_telegram_session_write_requires_current_lease(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -833,10 +927,13 @@ async def test_refreshed_telegram_session_write_requires_current_lease(
                 select(TelegramConnection).where(TelegramConnection.user_id == "user-a")
             )
             assert connection is not None
-            assert decrypt_secret(
-                connection.session_encrypted,
-                context="telegram:user-a:session",
-            ) == "refreshed"
+            assert (
+                decrypt_secret(
+                    connection.session_encrypted,
+                    context="telegram:user-a:session",
+                )
+                == "refreshed"
+            )
 
 
 @pytest.mark.asyncio
@@ -881,10 +978,13 @@ async def test_reconnected_generation_rejects_stale_session_refresh(
                 select(TelegramConnection).where(TelegramConnection.user_id == "user-a")
             )
             assert connection is not None
-            assert decrypt_secret(
-                connection.session_encrypted,
-                context="telegram:user-a:session",
-            ) == "current"
+            assert (
+                decrypt_secret(
+                    connection.session_encrypted,
+                    context="telegram:user-a:session",
+                )
+                == "current"
+            )
 
 
 @pytest.mark.asyncio
@@ -980,13 +1080,17 @@ async def test_scan_page_persistence_is_tenant_scoped_and_lease_fenced(
             )
 
         async with sessions() as session:
-            rows = list(await session.scalars(select(Message).order_by(Message.user_id)))
+            rows = list(
+                await session.scalars(select(Message).order_by(Message.user_id))
+            )
             assert [(message.user_id, message.telegram_id) for message in rows] == [
                 ("user-a", 42),
                 ("user-b", 42),
             ]
             assert [message.telegram_user_id for message in rows] == [101, 202]
-            jobs = list(await session.scalars(select(ScanJob).order_by(ScanJob.user_id)))
+            jobs = list(
+                await session.scalars(select(ScanJob).order_by(ScanJob.user_id))
+            )
             assert [(job.user_id, job.messages_scanned) for job in jobs] == [
                 ("user-a", 1),
                 ("user-b", 1),
@@ -1057,3 +1161,429 @@ async def test_reconnected_generation_rejects_stale_scan_page(
 
         async with sessions() as session:
             assert list(await session.scalars(select(Message))) == []
+
+
+@pytest.mark.asyncio
+async def test_source_exhausted_replacement_prunes_only_unseen_messages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _scan_database(tmp_path=tmp_path, monkeypatch=monkeypatch) as sessions:
+        await _seed_user(sessions)
+        async with sessions() as session:
+            organized = Category(
+                user_id="user-a",
+                name="Keep organized",
+                normalized_name="keep organized",
+                slug="keep-organized",
+                icon="folder",
+                color="#123456",
+                position=1,
+                is_default=False,
+            )
+            fallback = Category(
+                user_id="user-a",
+                name="Other",
+                normalized_name="other",
+                slug="other",
+                system_key="other",
+                icon="archive",
+                color="#64748B",
+                position=2,
+                is_default=True,
+            )
+            tag = Tag(
+                user_id="user-a",
+                name="Important",
+                normalized_name="important",
+                color="#ff0000",
+            )
+            session.add_all([organized, fallback, tag])
+            await session.flush()
+            seen = Message(
+                user_id="user-a",
+                telegram_id=1,
+                telegram_user_id=TELEGRAM_USER_ID,
+                connection_generation=1,
+                content="stale metadata",
+                date=datetime.now(tz=UTC) - timedelta(days=1),
+                category_id=organized.id,
+                raw_data={"stale": True},
+            )
+            unseen = Message(
+                user_id="user-a",
+                telegram_id=2,
+                telegram_user_id=TELEGRAM_USER_ID,
+                connection_generation=1,
+                content="deleted in Telegram",
+                date=datetime.now(tz=UTC) - timedelta(days=2),
+                category_id=fallback.id,
+                raw_data={},
+            )
+            session.add_all([seen, unseen])
+            await session.flush()
+            session.add_all(
+                [
+                    MessageTag(
+                        user_id="user-a",
+                        message_id=seen.id,
+                        tag_id=tag.id,
+                    ),
+                    TelegramConnection(
+                        user_id="user-a",
+                        state="connected",
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        generation=CONNECTION_GENERATION,
+                        session_encrypted="session",
+                    ),
+                    ScanJob(
+                        id="job-a",
+                        user_id="user-a",
+                        state="running",
+                        replace_existing=True,
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        connection_generation=CONNECTION_GENERATION,
+                        lease_owner="worker-a",
+                        lease_expires_at=_future_lease(),
+                    ),
+                ]
+            )
+            await session.commit()
+
+        refreshed_at = datetime.now(tz=UTC)
+        page = ScanPage(
+            messages=(
+                ScannedMessage(
+                    telegram_id=1,
+                    content="fresh metadata",
+                    media_type=None,
+                    file_name=None,
+                    file_size=None,
+                    mime_type=None,
+                    url="https://example.com/fresh",
+                    sender_name="Saved Messages",
+                    date=refreshed_at,
+                    raw_data={"fresh": True},
+                ),
+                ScannedMessage(
+                    telegram_id=3,
+                    content="new message",
+                    media_type=None,
+                    file_name=None,
+                    file_size=None,
+                    mime_type=None,
+                    url=None,
+                    sender_name=None,
+                    date=refreshed_at,
+                    raw_data={"id": 3},
+                ),
+            ),
+            has_more=False,
+            next_offset_id=1,
+        )
+        lease = _lease(owner="worker-a", replace_existing=True)
+        await _persist_scan_page(lease=lease, page=page)
+
+        async with sessions() as session:
+            staged = list(
+                await session.scalars(select(Message).order_by(Message.telegram_id))
+            )
+            assert [message.telegram_id for message in staged] == [1, 2, 3]
+            assert [message.last_seen_replacement_job_id for message in staged] == [
+                "job-a",
+                None,
+                "job-a",
+            ]
+
+        assert await _finalize_scan_job(
+            lease=lease,
+            state="completed",
+            error=None,
+            completion_reason=SOURCE_EXHAUSTED,
+        )
+
+        async with sessions() as session:
+            retained = list(
+                await session.scalars(select(Message).order_by(Message.telegram_id))
+            )
+            assert [message.telegram_id for message in retained] == [1, 3]
+            assert retained[0].content == "fresh metadata"
+            assert retained[0].raw_data == {"fresh": True}
+            assert retained[0].category_id == organized.id
+            assert all(
+                message.last_seen_replacement_job_id is None for message in retained
+            )
+            assignments = list(await session.scalars(select(MessageTag)))
+            assert len(assignments) == 1
+            assert assignments[0].message_id == retained[0].id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "completion_reason"),
+    [
+        ("failed", None),
+        ("cancelled", "stopped_by_user"),
+        ("completed", RUNTIME_LIMIT_REACHED),
+        ("completed", MESSAGE_LIMIT_REACHED),
+    ],
+)
+async def test_incomplete_replacement_preserves_library_and_clears_markers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    state: str,
+    completion_reason: str | None,
+) -> None:
+    async with _scan_database(tmp_path=tmp_path, monkeypatch=monkeypatch) as sessions:
+        await _seed_user(sessions)
+        async with sessions() as session:
+            category = Category(
+                user_id="user-a",
+                name="Other",
+                normalized_name="other",
+                slug="other",
+                system_key="other",
+                icon="archive",
+                color="#64748B",
+                position=1,
+                is_default=True,
+            )
+            session.add(category)
+            await session.flush()
+            session.add_all(
+                [
+                    Message(
+                        user_id="user-a",
+                        telegram_id=1,
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        connection_generation=CONNECTION_GENERATION,
+                        content="seen",
+                        date=datetime.now(tz=UTC),
+                        category_id=category.id,
+                        raw_data={},
+                        last_seen_replacement_job_id="job-a",
+                    ),
+                    Message(
+                        user_id="user-a",
+                        telegram_id=2,
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        connection_generation=CONNECTION_GENERATION,
+                        content="unseen",
+                        date=datetime.now(tz=UTC),
+                        category_id=category.id,
+                        raw_data={},
+                    ),
+                    ScanJob(
+                        id="job-a",
+                        user_id="user-a",
+                        state="running",
+                        replace_existing=True,
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        connection_generation=CONNECTION_GENERATION,
+                        lease_owner="worker-a",
+                        lease_expires_at=_future_lease(),
+                    ),
+                ]
+            )
+            await session.commit()
+
+        assert await _finalize_scan_job(
+            lease=_lease(owner="worker-a", replace_existing=True),
+            state=state,
+            error=SCAN_FAILURE_MESSAGE if state == "failed" else None,
+            completion_reason=completion_reason,
+        )
+
+        async with sessions() as session:
+            messages = list(
+                await session.scalars(select(Message).order_by(Message.telegram_id))
+            )
+            assert [message.telegram_id for message in messages] == [1, 2]
+            assert all(
+                message.last_seen_replacement_job_id is None for message in messages
+            )
+
+
+@pytest.mark.asyncio
+async def test_interrupted_replacement_keeps_markers_for_safe_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _scan_database(tmp_path=tmp_path, monkeypatch=monkeypatch) as sessions:
+        await _seed_user(sessions)
+        async with sessions() as session:
+            category = Category(
+                user_id="user-a",
+                name="Other",
+                normalized_name="other",
+                slug="other",
+                system_key="other",
+                icon="archive",
+                color="#64748B",
+                position=1,
+                is_default=True,
+            )
+            session.add(category)
+            await session.flush()
+            session.add_all(
+                [
+                    Message(
+                        user_id="user-a",
+                        telegram_id=1,
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        connection_generation=CONNECTION_GENERATION,
+                        content="already scanned",
+                        date=datetime.now(tz=UTC),
+                        category_id=category.id,
+                        raw_data={},
+                        last_seen_replacement_job_id="job-a",
+                    ),
+                    ScanJob(
+                        id="job-a",
+                        user_id="user-a",
+                        state="running",
+                        replace_existing=True,
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        connection_generation=CONNECTION_GENERATION,
+                        lease_owner="worker-a",
+                        lease_expires_at=_future_lease(),
+                    ),
+                ]
+            )
+            await session.commit()
+
+        assert await _release_interrupted_scan(
+            lease=_lease(owner="worker-a", replace_existing=True)
+        )
+
+        async with sessions() as session:
+            job = await session.get(ScanJob, "job-a")
+            message = await session.scalar(select(Message))
+            assert job is not None and job.state == "pending"
+            assert message is not None
+            assert message.last_seen_replacement_job_id == "job-a"
+
+
+@pytest.mark.asyncio
+async def test_incremental_scan_refreshes_source_metadata_but_preserves_organization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _scan_database(tmp_path=tmp_path, monkeypatch=monkeypatch) as sessions:
+        await _seed_user(sessions)
+        async with sessions() as session:
+            organized = Category(
+                user_id="user-a",
+                name="My folder",
+                normalized_name="my folder",
+                slug="my-folder",
+                icon="folder",
+                color="#123456",
+                position=1,
+                is_default=False,
+            )
+            fallback = Category(
+                user_id="user-a",
+                name="Other",
+                normalized_name="other",
+                slug="other",
+                system_key="other",
+                icon="archive",
+                color="#64748B",
+                position=2,
+                is_default=True,
+            )
+            tag = Tag(
+                user_id="user-a",
+                name="Keep me",
+                normalized_name="keep me",
+                color=None,
+            )
+            session.add_all([organized, fallback, tag])
+            await session.flush()
+            message = Message(
+                user_id="user-a",
+                telegram_id=1,
+                telegram_user_id=TELEGRAM_USER_ID,
+                connection_generation=1,
+                content="stale",
+                media_type="document",
+                file_name="old.txt",
+                file_size=1,
+                mime_type="text/plain",
+                url=None,
+                sender_name="Old sender",
+                date=datetime.now(tz=UTC) - timedelta(days=1),
+                category_id=organized.id,
+                raw_data={"stale": True},
+            )
+            session.add(message)
+            await session.flush()
+            session.add_all(
+                [
+                    MessageTag(
+                        user_id="user-a",
+                        message_id=message.id,
+                        tag_id=tag.id,
+                    ),
+                    TelegramConnection(
+                        user_id="user-a",
+                        state="connected",
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        generation=CONNECTION_GENERATION,
+                        session_encrypted="session",
+                    ),
+                    ScanJob(
+                        id="job-a",
+                        user_id="user-a",
+                        state="running",
+                        replace_existing=False,
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        connection_generation=CONNECTION_GENERATION,
+                        lease_owner="worker-a",
+                        lease_expires_at=_future_lease(),
+                    ),
+                ]
+            )
+            await session.commit()
+
+        refreshed_at = datetime.now(tz=UTC)
+        await _persist_scan_page(
+            lease=_lease(owner="worker-a"),
+            page=ScanPage(
+                messages=(
+                    ScannedMessage(
+                        telegram_id=1,
+                        content="fresh",
+                        media_type="photo",
+                        file_name="new.jpg",
+                        file_size=42,
+                        mime_type="image/jpeg",
+                        url="https://example.com/new",
+                        sender_name="New sender",
+                        date=refreshed_at,
+                        raw_data={"fresh": True},
+                    ),
+                ),
+                has_more=False,
+                next_offset_id=1,
+            ),
+        )
+
+        async with sessions() as session:
+            refreshed = await session.scalar(select(Message))
+            assignments = list(await session.scalars(select(MessageTag)))
+            assert refreshed is not None
+            assert refreshed.content == "fresh"
+            assert refreshed.media_type == "photo"
+            assert refreshed.file_name == "new.jpg"
+            assert refreshed.file_size == 42
+            assert refreshed.mime_type == "image/jpeg"
+            assert refreshed.url == "https://example.com/new"
+            assert refreshed.sender_name == "New sender"
+            assert refreshed.raw_data == {"fresh": True}
+            assert refreshed.connection_generation == CONNECTION_GENERATION
+            assert refreshed.category_id == organized.id
+            assert refreshed.last_seen_replacement_job_id is None
+            assert len(assignments) == 1
+            assert assignments[0].message_id == refreshed.id

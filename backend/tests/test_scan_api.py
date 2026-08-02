@@ -4,9 +4,10 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 
 from app.telegram import router as router_module
+from app.telegram.client import TelegramClientTimeoutError
 from app.telegram.router import _format_sse_event, scan_status, start_scan, stop_scan
 from app.telegram.schemas import SCAN_FAILURE_MESSAGE
 
@@ -73,6 +74,24 @@ async def test_start_scan_returns_persisted_job_and_schedules_processing(
 
 
 @pytest.mark.asyncio
+async def test_start_scan_forwards_replacement_intent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _FakeService()
+    monkeypatch.setattr(router_module, "_service", lambda **_: service)
+
+    await start_scan(
+        background_tasks=BackgroundTasks(),
+        user=SimpleNamespace(id="user-a"),
+        session=object(),  # type: ignore[arg-type]
+        page_size=100,
+        clear_existing=True,
+    )
+
+    assert service.clear_existing is True
+
+
+@pytest.mark.asyncio
 async def test_start_scan_leaves_processing_to_worker_when_in_api_processing_is_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -98,7 +117,32 @@ async def test_start_scan_leaves_processing_to_worker_when_in_api_processing_is_
 
 
 @pytest.mark.asyncio
-async def test_scan_status_and_stop_are_service_backed(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_start_scan_reports_telegram_connection_timeout_as_temporary_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _TimedOutService(_FakeService):
+        async def start(self, *, page_size: int, clear_existing: bool = False):
+            raise TelegramClientTimeoutError("connection timeout")
+
+    monkeypatch.setattr(router_module, "_service", lambda **_: _TimedOutService())
+
+    with pytest.raises(HTTPException) as caught:
+        await start_scan(
+            background_tasks=BackgroundTasks(),
+            user=SimpleNamespace(id="user-a"),
+            session=object(),  # type: ignore[arg-type]
+            page_size=25,
+            clear_existing=False,
+        )
+
+    assert caught.value.status_code == 503
+    assert caught.value.detail == "telegram_temporarily_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_scan_status_and_stop_are_service_backed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service = _FakeService()
     monkeypatch.setattr(router_module, "_service", lambda **_: service)
     user = SimpleNamespace(id="user-a")

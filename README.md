@@ -48,6 +48,7 @@ The included Compose topology runs PostgreSQL, a one-shot migration service, two
 
    ```bash
    install -m 600 .env.production.example .env
+   openssl rand -base64 48  # paste this one-line output into TSO_MASTER_KEY
    ```
 2. Terminate TLS in a reverse proxy on the same host in front of the loopback-bound `TSO_HTTP_PORT`.
 3. Preserve the original `Host`, forward the HTTPS scheme, overwrite `X-Forwarded-For` with the client chain, and set `TSO_PUBLIC_ORIGIN` to the exact external HTTPS origin.
@@ -55,7 +56,7 @@ The included Compose topology runs PostgreSQL, a one-shot migration service, two
 5. Confirm `https://your-host/api/ready` returns `{"status":"ready"}`. The separate
    `/api/health` endpoint is a process-only liveness check.
 
-The production config requires HTTPS, secure cookies, an explicit public origin, and a master encryption key. Keep both the PostgreSQL volume and `TSO_MASTER_KEY` backed up: losing the key makes stored Telegram sessions intentionally unrecoverable. Rotate the Telegram API hash and master key only with a planned credential migration; existing AES-GCM ciphertext is bound to the current key and tenant context.
+The production config requires HTTPS, secure cookies, an explicit public origin, and a master encryption key encoded from exactly 48 random bytes. Keep both the PostgreSQL volume and `TSO_MASTER_KEY` backed up: losing the key makes stored Telegram sessions intentionally unrecoverable. Follow the [backup and restore runbook](docs/backup-and-restore.md) for verified database archives, separate key custody, and safe fresh-database restores. Rotate the Telegram API hash and master key only with a planned credential migration; existing AES-GCM ciphertext is bound to the current key and tenant context.
 
 Registration can be closed with `TSO_ALLOW_REGISTRATION=false` after the intended accounts are created. The edge config rate-limits sign-in, registration, Telegram verification, and general API traffic. For a horizontally scaled deployment, use the same environment values for every API/worker replica and a shared PostgreSQL database.
 
@@ -66,7 +67,7 @@ This branch introduces a new tenant schema and intentionally refuses to adopt th
 | Variable | Purpose | Production behavior |
 | --- | --- | --- |
 | `TSO_DATABASE_URL` | SQLAlchemy async database URL | Set by Compose to PostgreSQL |
-| `TSO_MASTER_KEY` | Encryption root for Telegram secrets | Required, at least 43 characters |
+| `TSO_MASTER_KEY` | Encryption root for Telegram secrets | Required base64/base64url encoding of exactly 48 random bytes |
 | `TSO_PUBLIC_ORIGIN` | Exact browser origin | Required HTTPS origin |
 | `TSO_ALLOWED_HOSTS` | Comma-separated accepted Host names | Defaults to public-origin host |
 | `TSO_COOKIE_SECURE` | Enables `Secure` and `__Host-` cookies | Must be true |
@@ -82,6 +83,8 @@ This branch introduces a new tenant schema and intentionally refuses to adopt th
 | `TSO_SCAN_SLICE_MAX_PAGES` | Maximum pages processed before yielding to another job | Defaults to 5 |
 | `TSO_SCAN_SLICE_SECONDS` | Maximum duration of one worker slice | Defaults to 30 seconds |
 | `TSO_SCAN_MAX_STREAMS_PER_USER` | Concurrent durable status streams per account | Defaults to 3 |
+| `TSO_TELEGRAM_CONNECT_TIMEOUT_SECONDS` | Deadline for establishing a Telegram client connection | Defaults to 15 seconds |
+| `TSO_TELEGRAM_DISCONNECT_TIMEOUT_SECONDS` | Deadline for Telegram client cleanup | Defaults to 5 seconds |
 
 ## Verification
 

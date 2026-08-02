@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.tags.service import TagWithCount
 
@@ -48,7 +48,7 @@ class TagCreateRequest(BaseModel):
 class TagUpdateRequest(BaseModel):
     """Request payload for updating tags."""
 
-    name: Annotated[str, Field(min_length=1, max_length=100)] | None = None
+    name: Annotated[str, Field(min_length=1, max_length=100)] = None  # type: ignore[assignment]
     color: Annotated[str, Field(pattern=HEX_COLOR_REGEX)] | None = None
 
     @model_validator(mode="after")
@@ -75,3 +75,22 @@ class MessageTagsResponse(BaseModel):
 
     message_id: PositiveIdentifier
     tags: list[TagResponse]
+
+
+class MessageBulkTagRequest(BaseModel):
+    """Request payload for attaching tags to several messages."""
+
+    message_ids: list[PositiveIdentifier] = Field(min_length=1, max_length=200)
+    tag_ids: list[PositiveIdentifier] = Field(min_length=1, max_length=100)
+
+    @field_validator("message_ids", "tag_ids")
+    @classmethod
+    def deduplicate_ids(cls, values: list[int]) -> list[int]:
+        return list(dict.fromkeys(values))
+
+
+class MessageBulkTagResponse(BaseModel):
+    """Compact summary of newly created tag assignments."""
+
+    updated_count: int = Field(ge=0)
+    assignment_count: int = Field(ge=0)

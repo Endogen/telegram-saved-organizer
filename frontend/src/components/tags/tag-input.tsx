@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Tags, X } from "lucide-react";
+import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { ModalPortal } from "@/components/ui/modal-portal";
@@ -73,10 +74,10 @@ export function TagInputDialog({
 
   return (
     <ModalPortal>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4" role="presentation">
+      <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 px-4 py-4 sm:items-center" role="presentation">
         <div className="absolute inset-0" onClick={onClose} aria-hidden="true" />
         <div
-          className="relative z-10 w-full max-w-xl rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-2xl"
+          className="relative z-10 max-h-[calc(100dvh-2rem)] w-full max-w-xl overflow-y-auto overscroll-contain rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-2xl"
           role="dialog"
           aria-modal="true"
           aria-labelledby="tag-dialog-title"
@@ -86,9 +87,9 @@ export function TagInputDialog({
             <Tags className="size-4" />
           </span>
           <div>
-            <h3 id="tag-dialog-title" className="text-base font-semibold text-[hsl(var(--foreground))]">Manage tags</h3>
+            <h3 id="tag-dialog-title" className="text-base font-semibold text-[hsl(var(--foreground))]">Tags for this message</h3>
             <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
-              Add existing tags or remove tags on this message.
+              Add, create, or remove tags for this message.
             </p>
           </div>
         </div>
@@ -171,7 +172,14 @@ export function TagInputDialog({
           <p role="alert" className="mt-3 rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">{errorMessage}</p>
         ) : null}
 
-        <div className="mt-4 flex justify-end">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+          <Link
+            to="/settings/tags"
+            onClick={onClose}
+            className="text-sm font-semibold text-[hsl(var(--primary))] underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+          >
+            Manage all tags
+          </Link>
           <Button type="button" variant="ghost" onClick={onClose} disabled={isSubmitting}>
             Close
           </Button>

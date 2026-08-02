@@ -125,6 +125,28 @@ async def test_duplicate_tenant_relative_values_are_allowed_and_services_are_iso
                 message_id=second_message.id,
                 tag_ids=[first_tag.id],
             )
+        with pytest.raises(TagMessageNotFoundError):
+            await first_tags.bulk_add_tags_to_messages(
+                message_ids=[first_message.id, second_message.id],
+                tag_ids=[first_tag.id],
+            )
+        with pytest.raises(TagNotFoundError):
+            await first_tags.bulk_add_tags_to_messages(
+                message_ids=[first_message.id],
+                tag_ids=[first_tag.id, second_tag.id],
+            )
+
+        unchanged_links = list(
+            await session.scalars(
+                select(MessageTag).order_by(MessageTag.user_id, MessageTag.message_id)
+            )
+        )
+        assert [
+            (link.user_id, link.message_id, link.tag_id) for link in unchanged_links
+        ] == [
+            (first_user.id, first_message.id, first_tag.id),
+            (second_user.id, second_message.id, second_tag.id),
+        ]
 
         assert await first_messages.clear_all_messages() == 1
         remaining_message_ids = list(await session.scalars(select(Message.id)))

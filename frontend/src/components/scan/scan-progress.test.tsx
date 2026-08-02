@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ScanStatus } from "@/types/scan";
@@ -11,8 +11,13 @@ vi.mock("@/api/scan", () => ({
   subscribeToScanStatus: vi.fn(),
 }));
 
+vi.mock("@/hooks/use-categories", () => ({
+  notifyCategoriesChanged: vi.fn(),
+}));
+
 import { fetchScanStatus, startScan, stopScan, subscribeToScanStatus } from "@/api/scan";
 import { ScanProgress } from "@/components/scan/scan-progress";
+import { notifyCategoriesChanged } from "@/hooks/use-categories";
 
 const idleScanStatus: ScanStatus = {
   job_id: null,
@@ -51,9 +56,17 @@ const errorScanStatus: ScanStatus = {
   error: "Connection timed out.",
 };
 
+const originalEventSourceDescriptor = Object.getOwnPropertyDescriptor(window, "EventSource");
+
 describe("ScanProgress", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    Object.defineProperty(window, "EventSource", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(),
+    });
     vi.mocked(subscribeToScanStatus).mockReturnValue({ close: vi.fn() });
     vi.mocked(fetchScanStatus).mockResolvedValue(idleScanStatus);
     vi.mocked(startScan).mockResolvedValue({
@@ -69,19 +82,28 @@ describe("ScanProgress", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    if (originalEventSourceDescriptor) {
+      Object.defineProperty(window, "EventSource", originalEventSourceDescriptor);
+    } else {
+      Reflect.deleteProperty(window, "EventSource");
+    }
   });
 
   it("shows loading state initially then renders idle status", async () => {
     render(<ScanProgress />);
 
-    expect(screen.getByText("Loading scan status...")).toBeInTheDocument();
+    expect(screen.getByText("Checking import status...")).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByText("Ready to scan")).toBeInTheDocument();
+      expect(screen.getByText("Ready to import")).toBeInTheDocument();
     });
 
-    expect(screen.getAllByText("0").length).toBeGreaterThanOrEqual(1); // messages/pages scanned
-    expect(screen.getByRole("button", { name: "Start" })).toBeInTheDocument();
+    expect(screen.getAllByText("0").length).toBeGreaterThanOrEqual(1); // messages/batches checked
+    expect(screen.getByText("Import Saved Messages")).toBeInTheDocument();
+    expect(screen.getByText("Find new messages in Telegram and add them to your organizer.")).toBeInTheDocument();
+    expect(screen.getByText("Checking for active imports")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Scan for new messages" })).toBeInTheDocument();
+    expect(subscribeToScanStatus).not.toHaveBeenCalled();
   });
 
   it("renders complete status", async () => {
@@ -90,12 +112,15 @@ describe("ScanProgress", () => {
     render(<ScanProgress />);
 
     await waitFor(() => {
-      expect(screen.getByText("Scan complete")).toBeInTheDocument();
+      expect(screen.getByText("Import complete")).toBeInTheDocument();
     });
 
     expect(screen.getByText("150")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
     expect(screen.getByText("All available Saved Messages were imported.")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Saved Messages import progress" })).toHaveAttribute("aria-valuenow", "100");
+    expect(screen.getByRole("link", { name: "Browse messages" })).toHaveAttribute("href", "/messages");
+    await waitFor(() => expect(notifyCategoriesChanged).toHaveBeenCalledTimes(1));
   });
 
   it("explains when a server quota completes the scan", async () => {
@@ -108,7 +133,7 @@ describe("ScanProgress", () => {
     render(<ScanProgress />);
 
     await waitFor(() => {
-      expect(screen.getByText("The server message limit of 10000 was reached.")).toBeInTheDocument();
+      expect(screen.getByText("This scan reached its message limit of 10000. Scan again to continue.")).toBeInTheDocument();
     });
   });
 
@@ -118,10 +143,11 @@ describe("ScanProgress", () => {
     render(<ScanProgress />);
 
     await waitFor(() => {
-      expect(screen.getByText("Scan failed")).toBeInTheDocument();
+      expect(screen.getByText("Import failed")).toBeInTheDocument();
     });
 
     expect(screen.getByText("Connection timed out.")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Connection timed out.");
   });
 
   it("handles fetch status failure", async () => {
@@ -134,9 +160,15 @@ describe("ScanProgress", () => {
     });
   });
 
-  it("subscribes to SSE and cleans up", async () => {
+  it("subscribes to live updates only while a scan is active and cleans up", async () => {
     const closeFn = vi.fn();
     vi.mocked(subscribeToScanStatus).mockReturnValue({ close: closeFn });
+    vi.mocked(fetchScanStatus).mockResolvedValue({
+      ...idleScanStatus,
+      job_id: "job-a",
+      state: "running",
+      started_at: "2026-02-15T10:00:00.000Z",
+    });
 
     const { unmount } = render(<ScanProgress />);
 
@@ -145,7 +177,29 @@ describe("ScanProgress", () => {
     });
 
     unmount();
-    expect(closeFn).toHaveBeenCalled();
+    expect(closeFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("discovers a scan started in another tab before opening live updates", async () => {
+    vi.mocked(fetchScanStatus)
+      .mockResolvedValueOnce(idleScanStatus)
+      .mockResolvedValue({
+        ...idleScanStatus,
+        job_id: "job-cross-tab",
+        state: "running",
+        started_at: "2026-02-15T10:00:00.000Z",
+      });
+
+    render(<ScanProgress />);
+    await screen.findByText("Ready to import");
+    expect(subscribeToScanStatus).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8_000);
+    });
+
+    await waitFor(() => expect(subscribeToScanStatus).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("Importing Saved Messages")).toBeInTheDocument();
   });
 
   it("renders running state with stop button enabled", async () => {
@@ -161,12 +215,13 @@ describe("ScanProgress", () => {
     render(<ScanProgress />);
 
     await waitFor(() => {
-      expect(screen.getByText("Scanning Saved Messages")).toBeInTheDocument();
+      expect(screen.getByText("Importing Saved Messages")).toBeInTheDocument();
     });
 
     expect(screen.getByText("42")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Scan for new messages" })).toBeDisabled();
+    expect(screen.getByRole("progressbar", { name: "Saved Messages import progress" })).not.toHaveAttribute("aria-valuenow");
   });
 
   it("renders stopping state", async () => {
@@ -183,7 +238,7 @@ describe("ScanProgress", () => {
     render(<ScanProgress />);
 
     await waitFor(() => {
-      expect(screen.getByText("Stopping scan")).toBeInTheDocument();
+      expect(screen.getByText("Stopping import")).toBeInTheDocument();
     });
   });
 
@@ -191,11 +246,11 @@ describe("ScanProgress", () => {
     render(<ScanProgress />);
 
     await waitFor(() => {
-      expect(screen.getByText("Ready to scan")).toBeInTheDocument();
+      expect(screen.getByText("Ready to import")).toBeInTheDocument();
     });
 
     const { fireEvent } = await import("@testing-library/react");
-    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    fireEvent.click(screen.getByRole("button", { name: "Scan for new messages" }));
 
     await waitFor(() => {
       expect(startScan).toHaveBeenCalledWith(100);
@@ -230,11 +285,11 @@ describe("ScanProgress", () => {
     render(<ScanProgress />);
 
     await waitFor(() => {
-      expect(screen.getByText("Ready to scan")).toBeInTheDocument();
+      expect(screen.getByText("Ready to import")).toBeInTheDocument();
     });
 
     const { fireEvent } = await import("@testing-library/react");
-    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    fireEvent.click(screen.getByRole("button", { name: "Scan for new messages" }));
 
     await waitFor(() => {
       expect(screen.getByText("Start failed")).toBeInTheDocument();
@@ -244,22 +299,28 @@ describe("ScanProgress", () => {
   it("offers a Telegram connection link when starting disconnected", async () => {
     vi.mocked(startScan).mockRejectedValue(new Error("Connect Telegram before starting a scan."));
     render(<ScanProgress />);
-    await screen.findByText("Ready to scan");
+    await screen.findByText("Ready to import");
 
     const { fireEvent } = await import("@testing-library/react");
-    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    fireEvent.click(screen.getByRole("button", { name: "Scan for new messages" }));
 
     const link = await screen.findByRole("link", { name: "Connect Telegram" });
     expect(link).toHaveAttribute("href", "/settings/telegram");
   });
 
-  it("uses one atomic request for clear and rescan", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+  it("starts a staged full-library refresh after explaining its safe replacement behavior", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<ScanProgress />);
-    await screen.findByText("Ready to scan");
+    await screen.findByText("Ready to import");
 
-    const { fireEvent } = await import("@testing-library/react");
-    fireEvent.click(screen.getByRole("button", { name: "Clear & Rescan" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh full library" }));
+
+    const confirmation = String(confirmSpy.mock.calls[0]?.[0]);
+    expect(confirmation).toContain("current library stays available while Telegram is imported");
+    expect(confirmation).toContain("Categories and tags on messages that remain are preserved");
+    expect(confirmation).toContain("removed only after a complete, successful import");
+    expect(confirmation).toContain("stop the import, it fails, or it reaches a limit");
+    expect(confirmation).toContain("existing library stays unchanged");
 
     await waitFor(() => expect(startScan).toHaveBeenCalledWith(100, true));
   });
@@ -291,7 +352,7 @@ describe("ScanProgress", () => {
     render(<ScanProgress />);
 
     await waitFor(() => {
-      expect(screen.getByText("Ready to scan")).toBeInTheDocument();
+      expect(screen.getByText("Ready to import")).toBeInTheDocument();
     });
 
     vi.mocked(fetchScanStatus).mockResolvedValue(completeScanStatus);
@@ -300,7 +361,7 @@ describe("ScanProgress", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Scan complete")).toBeInTheDocument();
+      expect(screen.getByText("Import complete")).toBeInTheDocument();
     });
   });
 
@@ -312,6 +373,12 @@ describe("ScanProgress", () => {
       onStatusCallback = handlers.onStatus;
       onErrorCallback = handlers.onError;
       return { close: vi.fn() };
+    });
+    vi.mocked(fetchScanStatus).mockResolvedValue({
+      ...idleScanStatus,
+      job_id: "job-a",
+      state: "running",
+      started_at: "2026-02-15T10:00:00.000Z",
     });
 
     render(<ScanProgress />);
@@ -341,7 +408,103 @@ describe("ScanProgress", () => {
     }
 
     await waitFor(() => {
-      expect(screen.getByText("Live stream fallback")).toBeInTheDocument();
+      expect(screen.getByText("Live updates interrupted — checking automatically")).toBeInTheDocument();
     });
+  });
+
+  it("closes live updates immediately when they report a terminal state", async () => {
+    let onStatusCallback: ((status: ScanStatus) => void) | undefined;
+    const closeFn = vi.fn();
+    vi.mocked(fetchScanStatus).mockResolvedValue({
+      ...idleScanStatus,
+      job_id: "job-a",
+      state: "running",
+      started_at: "2026-02-15T10:00:00.000Z",
+    });
+    vi.mocked(subscribeToScanStatus).mockImplementation((handlers: any) => {
+      onStatusCallback = handlers.onStatus;
+      return { close: closeFn };
+    });
+
+    render(<ScanProgress />);
+    await waitFor(() => expect(subscribeToScanStatus).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      onStatusCallback?.(completeScanStatus);
+    });
+
+    await waitFor(() => expect(closeFn).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("Import complete")).toBeInTheDocument();
+    expect(screen.getByText("Checking for active imports")).toBeInTheDocument();
+  });
+
+  it("refreshes category counts once when polling observes a terminal scan", async () => {
+    vi.mocked(fetchScanStatus)
+      .mockResolvedValueOnce(idleScanStatus)
+      .mockResolvedValue(completeScanStatus);
+
+    render(<ScanProgress />);
+    await screen.findByText("Ready to import");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8_000);
+    });
+    await waitFor(() => expect(notifyCategoriesChanged).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8_000);
+    });
+    expect(notifyCategoriesChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes category counts once for each failed or cancelled terminal transition", async () => {
+    let onStatusCallback: ((status: ScanStatus) => void) | undefined;
+    vi.mocked(fetchScanStatus).mockResolvedValue({
+      ...idleScanStatus,
+      job_id: "job-running",
+      state: "running",
+      started_at: "2026-02-15T10:00:00.000Z",
+    });
+    vi.mocked(subscribeToScanStatus).mockImplementation((handlers: any) => {
+      onStatusCallback = handlers.onStatus;
+      return { close: vi.fn() };
+    });
+
+    render(<ScanProgress />);
+    await screen.findByText("Importing Saved Messages");
+
+    act(() => {
+      onStatusCallback?.({
+        ...idleScanStatus,
+        job_id: "job-failed",
+        state: "failed",
+        finished_at: "2026-02-15T10:05:00.000Z",
+        error: "Telegram request failed.",
+      });
+    });
+    await waitFor(() => expect(notifyCategoriesChanged).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("alert")).toHaveTextContent("Telegram request failed.");
+
+    act(() => {
+      onStatusCallback?.({
+        ...idleScanStatus,
+        job_id: "job-failed",
+        state: "failed",
+        finished_at: "2026-02-15T10:05:00.000Z",
+        error: "Telegram request failed.",
+      });
+    });
+    expect(notifyCategoriesChanged).toHaveBeenCalledTimes(1);
+
+    vi.mocked(fetchScanStatus).mockResolvedValue({
+      ...idleScanStatus,
+      job_id: "job-cancelled",
+      state: "cancelled",
+      finished_at: "2026-02-15T10:06:00.000Z",
+      completion_reason: "stopped_by_user",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(notifyCategoriesChanged).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("The import was stopped.")).toHaveAttribute("role", "status");
   });
 });

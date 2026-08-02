@@ -17,6 +17,7 @@ OTHER_CATEGORY_SLUG = "other"
 HEX_COLOR_PATTERN = re.compile(r"^#[0-9A-F]{6}$")
 SLUG_SANITIZE_PATTERN = re.compile(r"[\W_]+")
 MAX_SLUG_LENGTH = 100
+MAX_NORMALIZED_NAME_LENGTH = 100
 
 
 class CategoryNotFoundError(RuntimeError):
@@ -61,7 +62,8 @@ class CategoryService:
             select(Category, func.count(Message.id))
             .outerjoin(
                 Message,
-                (Message.category_id == Category.id) & (Message.user_id == self.user_id),
+                (Message.category_id == Category.id)
+                & (Message.user_id == self.user_id),
             )
             .where(Category.user_id == self.user_id)
             .group_by(Category.id)
@@ -84,18 +86,23 @@ class CategoryService:
         """Create a custom category."""
 
         normalized_name = self._normalize_name(name)
+        normalized_name_key = self._normalize_name_key(normalized_name)
         normalized_icon = self._normalize_icon(icon)
         normalized_color = self._normalize_color(color)
         normalized_slug = self._slugify(normalized_name)
         normalized_position = await self._resolve_position(position=position)
 
-        await self._ensure_name_available(name=normalized_name, exclude_category_id=None)
-        await self._ensure_slug_available(slug=normalized_slug, exclude_category_id=None)
+        await self._ensure_name_available(
+            name=normalized_name, exclude_category_id=None
+        )
+        await self._ensure_slug_available(
+            slug=normalized_slug, exclude_category_id=None
+        )
 
         category = Category(
             user_id=self.user_id,
             name=normalized_name,
-            normalized_name=normalized_name.casefold(),
+            normalized_name=normalized_name_key,
             slug=normalized_slug,
             icon=normalized_icon,
             color=normalized_color,
@@ -106,7 +113,9 @@ class CategoryService:
         await self._commit_with_conflict_handling()
         return category
 
-    async def update_category(self, *, category_id: int, updates: Mapping[str, Any]) -> Category:
+    async def update_category(
+        self, *, category_id: int, updates: Mapping[str, Any]
+    ) -> Category:
         """Update mutable category fields."""
 
         if not updates:
@@ -123,11 +132,16 @@ class CategoryService:
 
         if "name" in updates:
             normalized_name = self._normalize_name(updates["name"])
+            normalized_name_key = self._normalize_name_key(normalized_name)
             normalized_slug = self._slugify(normalized_name)
-            await self._ensure_name_available(name=normalized_name, exclude_category_id=category_id)
-            await self._ensure_slug_available(slug=normalized_slug, exclude_category_id=category_id)
+            await self._ensure_name_available(
+                name=normalized_name, exclude_category_id=category_id
+            )
+            await self._ensure_slug_available(
+                slug=normalized_slug, exclude_category_id=category_id
+            )
             category.name = normalized_name
-            category.normalized_name = normalized_name.casefold()
+            category.normalized_name = normalized_name_key
             category.slug = normalized_slug
 
         if "icon" in updates:
@@ -151,7 +165,9 @@ class CategoryService:
         if category.is_default or category.system_key is not None:
             raise CategoryProtectedError("Default categories cannot be deleted.")
 
-        fallback_category = await self._load_fallback_category(excluded_category_id=category.id)
+        fallback_category = await self._load_fallback_category(
+            excluded_category_id=category.id
+        )
         if fallback_category is None:
             raise CategoryNotFoundError(
                 "Fallback category 'other' was not found. Re-seed default categories before deleting."
@@ -182,7 +198,9 @@ class CategoryService:
             )
         )
 
-    async def _load_fallback_category(self, *, excluded_category_id: int) -> Category | None:
+    async def _load_fallback_category(
+        self, *, excluded_category_id: int
+    ) -> Category | None:
         statement = select(Category).where(
             Category.user_id == self.user_id,
             Category.system_key == OTHER_CATEGORY_SLUG,
@@ -190,10 +208,12 @@ class CategoryService:
         )
         return await self.session.scalar(statement)
 
-    async def _ensure_name_available(self, *, name: str, exclude_category_id: int | None) -> None:
+    async def _ensure_name_available(
+        self, *, name: str, exclude_category_id: int | None
+    ) -> None:
         statement = select(Category).where(
             Category.user_id == self.user_id,
-            Category.normalized_name == name.casefold(),
+            Category.normalized_name == self._normalize_name_key(name),
         )
         if exclude_category_id is not None:
             statement = statement.where(Category.id != exclude_category_id)
@@ -201,7 +221,9 @@ class CategoryService:
         if existing_category is not None:
             raise CategoryConflictError(f"Category name '{name}' already exists.")
 
-    async def _ensure_slug_available(self, *, slug: str, exclude_category_id: int | None) -> None:
+    async def _ensure_slug_available(
+        self, *, slug: str, exclude_category_id: int | None
+    ) -> None:
         statement = select(Category).where(
             Category.user_id == self.user_id,
             Category.slug == slug,
@@ -226,10 +248,22 @@ class CategoryService:
             await self.session.commit()
         except IntegrityError as exc:
             await self.session.rollback()
-            raise CategoryConflictError("Category name or slug already exists.") from exc
+            raise CategoryConflictError(
+                "Category name or slug already exists."
+            ) from exc
 
     def _normalize_name(self, value: Any) -> str:
-        return self._normalize_non_empty_string(value=value, field_name="name")
+        normalized_name = self._normalize_non_empty_string(
+            value=value,
+            field_name="name",
+        )
+        return unicodedata.normalize("NFC", normalized_name)
+
+    def _normalize_name_key(self, value: str) -> str:
+        normalized_key = unicodedata.normalize("NFC", value.casefold())
+        if len(normalized_key) > MAX_NORMALIZED_NAME_LENGTH:
+            raise ValueError("name is too long after Unicode normalization.")
+        return normalized_key
 
     def _normalize_icon(self, value: Any) -> str:
         return self._normalize_non_empty_string(value=value, field_name="icon")

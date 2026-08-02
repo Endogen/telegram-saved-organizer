@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -13,6 +14,7 @@ from app.telegram import client as client_module
 from app.models import Base, TelegramConnection, User
 from app.telegram.client import (
     TelegramClientNotConnectedError,
+    TelegramClientTimeoutError,
     TelegramMessageProvenanceError,
     delete_saved_messages,
     revoke_telegram_connection,
@@ -75,22 +77,98 @@ class _FakeSession:
 
 
 @pytest.mark.asyncio
-async def test_short_lived_client_always_disconnects(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_short_lived_client_always_disconnects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     created: list[_FakeClient] = []
 
     def factory(session: object, api_id: int, api_hash: str) -> _FakeClient:
         created.append(_FakeClient(session, api_id, api_hash))
         return created[-1]
 
-    monkeypatch.setattr(client_module, "_telegram_api_credentials", lambda: (123, "server-hash"))
+    monkeypatch.setattr(
+        client_module, "_telegram_api_credentials", lambda: (123, "server-hash")
+    )
 
     with pytest.raises(RuntimeError, match="boom"):
-        async with short_lived_client(session_string=None, client_factory=factory) as client:
+        async with short_lived_client(
+            session_string=None, client_factory=factory
+        ) as client:
             assert client.connected is True
             raise RuntimeError("boom")
 
     assert created[0].disconnected is True
     assert created[0].credentials == (123, "server-hash")
+
+
+@pytest.mark.asyncio
+async def test_short_lived_client_bounds_connect_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _HangingConnectClient(_FakeClient):
+        async def connect(self) -> None:
+            await asyncio.Event().wait()
+
+    created: list[_HangingConnectClient] = []
+
+    def factory(
+        session: object,
+        api_id: int,
+        api_hash: str,
+    ) -> _HangingConnectClient:
+        created.append(_HangingConnectClient(session, api_id, api_hash))
+        return created[-1]
+
+    monkeypatch.setattr(
+        client_module, "_telegram_api_credentials", lambda: (123, "hash")
+    )
+
+    with pytest.raises(TelegramClientTimeoutError, match="connection timeout"):
+        async with short_lived_client(
+            session_string=None,
+            client_factory=factory,
+            connect_timeout_seconds=0.01,
+            disconnect_timeout_seconds=0.01,
+        ):
+            pytest.fail("A timed-out Telegram connection must not yield a client.")
+
+    assert created[0].disconnected is True
+
+
+@pytest.mark.asyncio
+async def test_short_lived_client_bounds_disconnect_time_without_masking_success(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    disconnect_started = asyncio.Event()
+
+    class _HangingDisconnectClient(_FakeClient):
+        async def disconnect(self) -> None:
+            disconnect_started.set()
+            await asyncio.Event().wait()
+
+    def factory(
+        session: object,
+        api_id: int,
+        api_hash: str,
+    ) -> _HangingDisconnectClient:
+        return _HangingDisconnectClient(session, api_id, api_hash)
+
+    monkeypatch.setattr(
+        client_module, "_telegram_api_credentials", lambda: (123, "hash")
+    )
+
+    with caplog.at_level(logging.WARNING):
+        async with short_lived_client(
+            session_string=None,
+            client_factory=factory,
+            connect_timeout_seconds=0.01,
+            disconnect_timeout_seconds=0.01,
+        ) as client:
+            assert client.connected is True
+
+    assert disconnect_started.is_set()
+    assert "Timed out disconnecting a Telegram client" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -113,8 +191,12 @@ async def test_delete_saved_messages_is_user_scoped_and_refreshes_session(
     async def fake_client(**_: Any):
         yield telegram_client
 
-    monkeypatch.setattr(client_module, "decrypt_secret", lambda value, *, context: "plain-session")
-    monkeypatch.setattr(client_module, "encrypt_secret", lambda value, *, context: f"encrypted:{value}")
+    monkeypatch.setattr(
+        client_module, "decrypt_secret", lambda value, *, context: "plain-session"
+    )
+    monkeypatch.setattr(
+        client_module, "encrypt_secret", lambda value, *, context: f"encrypted:{value}"
+    )
     monkeypatch.setattr(client_module, "short_lived_client", fake_client)
 
     await delete_saved_messages(
@@ -192,7 +274,9 @@ async def test_delete_saved_messages_rejects_session_with_wrong_telegram_princip
     async def fake_client(**_: Any):
         yield telegram_client
 
-    monkeypatch.setattr(client_module, "decrypt_secret", lambda value, *, context: "plain-session")
+    monkeypatch.setattr(
+        client_module, "decrypt_secret", lambda value, *, context: "plain-session"
+    )
     monkeypatch.setattr(client_module, "short_lived_client", fake_client)
 
     with pytest.raises(TelegramMessageProvenanceError):
@@ -232,7 +316,9 @@ async def test_delete_saved_messages_downgrades_revoked_authorization(
     async def fake_client(**_: Any):
         yield telegram_client
 
-    monkeypatch.setattr(client_module, "decrypt_secret", lambda value, *, context: "plain-session")
+    monkeypatch.setattr(
+        client_module, "decrypt_secret", lambda value, *, context: "plain-session"
+    )
     monkeypatch.setattr(client_module, "short_lived_client", fake_client)
 
     with pytest.raises(TelegramClientNotConnectedError):
@@ -366,7 +452,9 @@ async def test_revoke_connection_commits_before_bounded_remote_logout(
     async def fake_client(**_: Any):
         yield telegram_client
 
-    monkeypatch.setattr(client_module, "decrypt_secret", lambda value, *, context: "plain-session")
+    monkeypatch.setattr(
+        client_module, "decrypt_secret", lambda value, *, context: "plain-session"
+    )
     monkeypatch.setattr(client_module, "short_lived_client", fake_client)
     monkeypatch.setattr(client_module, "TELEGRAM_LOGOUT_TIMEOUT_SECONDS", 0.01)
 

@@ -1,4 +1,4 @@
-import { type DragEvent, useEffect, useRef, useState } from "react";
+import { type DragEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import {
   Archive,
@@ -34,6 +34,8 @@ const categoryIconMap: Record<string, LucideIcon> = {
   "message-square": MessageSquareText,
   archive: Archive,
 };
+
+const ACTION_MENU_ITEM_SELECTOR = '[role="menuitem"]';
 
 function resolveCategoryIcon(iconName: string): LucideIcon {
   return categoryIconMap[iconName.toLowerCase()] ?? FolderKanban;
@@ -146,7 +148,9 @@ export function MessageCard({
   onSelectionChange,
 }: MessageCardProps) {
   const shouldReduceMotion = useReducedMotion();
+  const actionMenuId = useId();
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const actionTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [isActionsOpen, setIsActionsOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const CategoryIcon = resolveCategoryIcon(message.category.icon);
@@ -183,6 +187,7 @@ export function MessageCard({
     function handleEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setIsActionsOpen(false);
+        window.requestAnimationFrame(() => actionTriggerRef.current?.focus());
       }
     }
 
@@ -193,6 +198,64 @@ export function MessageCard({
       document.removeEventListener("keydown", handleEscape);
     };
   }, [isActionsOpen]);
+
+  function openActionsMenu(focusTarget: "first" | "last" = "first") {
+    setIsActionsOpen(true);
+    window.requestAnimationFrame(() => {
+      const items = Array.from(
+        menuRef.current?.querySelectorAll<HTMLElement>(ACTION_MENU_ITEM_SELECTOR) ?? [],
+      ).filter((item) => item.getAttribute("aria-disabled") !== "true" && !item.hasAttribute("disabled"));
+      const target = focusTarget === "last" ? items.at(-1) : items[0];
+      target?.focus();
+    });
+  }
+
+  function closeActionsMenu({ restoreFocus = false } = {}) {
+    setIsActionsOpen(false);
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => actionTriggerRef.current?.focus());
+    }
+  }
+
+  function handleTriggerKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+      return;
+    }
+    event.preventDefault();
+    openActionsMenu(event.key === "ArrowUp" ? "last" : "first");
+  }
+
+  function handleActionsMenuKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeActionsMenu({ restoreFocus: true });
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      return;
+    }
+
+    const items = Array.from(
+      menuRef.current?.querySelectorAll<HTMLElement>(ACTION_MENU_ITEM_SELECTOR) ?? [],
+    ).filter((item) => item.getAttribute("aria-disabled") !== "true" && !item.hasAttribute("disabled"));
+    if (items.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    const currentIndex = items.indexOf(document.activeElement as HTMLElement);
+    let nextIndex: number;
+    if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = items.length - 1;
+    } else if (event.key === "ArrowDown") {
+      nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length;
+    } else {
+      nextIndex = currentIndex <= 0 ? items.length - 1 : currentIndex - 1;
+    }
+    items[nextIndex]?.focus();
+  }
 
   function handleDragStart(event: DragEvent<HTMLElement>) {
     if (isDeletePending) {
@@ -258,14 +321,13 @@ export function MessageCard({
           </label>
 
           <span
-            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold"
+            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold text-[hsl(var(--foreground))]"
             style={{
-              color: message.category.color,
               borderColor: withAlpha(message.category.color, "66") ?? "hsl(var(--border))",
               backgroundColor: withAlpha(message.category.color, "1A") ?? "hsl(var(--muted))",
             }}
           >
-            <CategoryIcon className="size-3.5" />
+            <CategoryIcon className="size-3.5" style={{ color: message.category.color }} aria-hidden="true" />
             {message.category.name}
           </span>
         </div>
@@ -279,19 +341,37 @@ export function MessageCard({
             {formatRelativeDate(message.date)}
           </time>
           <button
+            ref={actionTriggerRef}
             type="button"
             draggable="false"
             aria-label="Message actions"
             aria-expanded={isActionsOpen}
             aria-haspopup="menu"
+            aria-controls={actionMenuId}
             className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
-            onClick={(e) => { e.stopPropagation(); setIsActionsOpen((previous) => !previous); }}
+            onKeyDown={handleTriggerKeyDown}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (isActionsOpen) {
+                closeActionsMenu({ restoreFocus: true });
+              } else {
+                openActionsMenu();
+              }
+            }}
           >
             <MoreHorizontal className="size-4" />
           </button>
 
           {isActionsOpen ? (
-            <div className="absolute right-0 top-8 z-50 w-44 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-1 shadow-xl" role="menu" draggable="false" onMouseDown={(e) => e.stopPropagation()}>
+            <div
+              id={actionMenuId}
+              className="absolute right-0 top-8 z-50 w-44 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-1 shadow-xl"
+              role="menu"
+              aria-label="Message actions"
+              draggable="false"
+              onKeyDown={handleActionsMenuKeyDown}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
               <button
                 type="button"
                 draggable="false"
@@ -332,7 +412,7 @@ export function MessageCard({
                 role="menuitem"
               >
                 <Tags className="size-3.5" />
-                Manage tags
+                Edit message tags
               </button>
               <button
                 type="button"
@@ -383,13 +463,17 @@ export function MessageCard({
           {message.tags.map((tag) => (
             <li
               key={tag.id}
-              className="rounded-full border px-2 py-0.5 text-xs font-medium"
+              className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium text-[hsl(var(--foreground))]"
               style={{
-                color: tag.color ?? "hsl(var(--muted-foreground))",
                 borderColor: withAlpha(tag.color, "66") ?? "hsl(var(--border))",
                 backgroundColor: withAlpha(tag.color, "14") ?? "hsl(var(--muted))",
               }}
             >
+              <span
+                className="size-1.5 shrink-0 rounded-full bg-[hsl(var(--muted-foreground))]"
+                style={{ backgroundColor: tag.color ?? undefined }}
+                aria-hidden="true"
+              />
               #{tag.name}
             </li>
           ))}

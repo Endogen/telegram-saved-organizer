@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,14 +13,16 @@ import {
 } from "@/api/messages";
 import {
   addTagsToMessage,
+  bulkAddTagsToMessages,
   createTag,
   listTags,
   removeTagFromMessage,
 } from "@/api/tags";
 import { useCategories } from "@/hooks/use-categories";
+import { notifyOrganizationChanged } from "@/lib/organization-events";
 import { MessagesPage } from "@/pages/messages-page";
 import type { CategoryWithCount } from "@/types/category";
-import type { MessageListItem, MessageTag } from "@/types/message";
+import type { MessageListItem, MessageListResponse, MessageTag } from "@/types/message";
 
 vi.mock("@/api/messages", () => ({
   TelegramConnectionChangedError: class TelegramConnectionChangedError extends Error {},
@@ -36,11 +38,13 @@ vi.mock("@/api/tags", () => ({
   listTags: vi.fn(),
   createTag: vi.fn(),
   addTagsToMessage: vi.fn(),
+  bulkAddTagsToMessages: vi.fn(),
   removeTagFromMessage: vi.fn(),
 }));
 
 vi.mock("@/hooks/use-categories", () => ({
   useCategories: vi.fn(),
+  notifyCategoriesChanged: vi.fn(),
 }));
 
 const categoriesFixture: CategoryWithCount[] = [
@@ -48,6 +52,7 @@ const categoriesFixture: CategoryWithCount[] = [
     id: 2,
     name: "Audio",
     slug: "audio",
+    system_key: "audio",
     icon: "music",
     color: "#2563EB",
     position: 2,
@@ -58,6 +63,7 @@ const categoriesFixture: CategoryWithCount[] = [
     id: 3,
     name: "Links",
     slug: "links",
+    system_key: "links",
     icon: "link",
     color: "#0EA5E9",
     position: 3,
@@ -68,6 +74,7 @@ const categoriesFixture: CategoryWithCount[] = [
     id: 7,
     name: "Text",
     slug: "text",
+    system_key: "text",
     icon: "message-square",
     color: "#6B7280",
     position: 7,
@@ -170,6 +177,14 @@ const knownTagsFixture: MessageTag[] = [
   { id: 12, name: "frontend", color: "#0EA5E9" },
   { id: 13, name: "meeting", color: null },
 ];
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 function mockMessageServer(items: MessageListItem[] = messagesFixture) {
   vi.mocked(listMessages).mockImplementation(async (query = {}) => {
@@ -275,7 +290,12 @@ describe("MessagesPage empty state", () => {
       expect(screen.getByText("No messages yet.")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("Connect Telegram and run a scan to import Saved Messages.")).toBeInTheDocument();
+    expect(screen.getByText(
+      "Import Saved Messages from the Dashboard scanner, or review your Telegram connection first.",
+    )).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open scanner" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "Telegram connection" }))
+      .toHaveAttribute("href", "/settings/telegram");
   });
 });
 
@@ -293,6 +313,7 @@ describe("MessagesPage filters", () => {
     vi.mocked(deleteMessage).mockResolvedValue();
     vi.mocked(bulkDeleteMessages).mockResolvedValue({ deleted_count: 0 });
     vi.mocked(bulkMoveMessages).mockResolvedValue({ moved_count: 0, category_id: categoriesFixture[0].id });
+    vi.mocked(bulkAddTagsToMessages).mockResolvedValue({ updated_count: 0, assignment_count: 0 });
     vi.mocked(addTagsToMessage).mockResolvedValue(knownTagsFixture);
     vi.mocked(removeTagFromMessage).mockResolvedValue(knownTagsFixture);
     vi.mocked(createTag).mockResolvedValue({ id: 99, name: "new", color: null });
@@ -320,6 +341,55 @@ describe("MessagesPage filters", () => {
       expect(screen.getByText("React animation reference")).toBeInTheDocument();
       expect(screen.getByText("Weekly standup audio")).toBeInTheDocument();
     });
+  });
+
+  it("keeps controls and current results usable during a background filter refresh", async () => {
+    const refresh = deferred<MessageListResponse>();
+    vi.mocked(listMessages)
+      .mockReset()
+      .mockResolvedValueOnce({ items: messagesFixture, total: 3, page: 1, per_page: 60 })
+      .mockReturnValueOnce(refresh.promise);
+
+    renderMessagesPage();
+    await screen.findByText("3 messages");
+
+    const searchInput = screen.getByPlaceholderText("Search by text, URL, sender, or tag...");
+    fireEvent.change(searchInput, { target: { value: "react" } });
+
+    await waitFor(() => expect(listMessages).toHaveBeenCalledTimes(2));
+    expect(searchInput).toBeEnabled();
+    expect(screen.getByText("Backend checklist")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: /updating/i })).toBeInTheDocument();
+
+    await act(async () => {
+      refresh.resolve({ items: [messagesFixture[1]], total: 1, page: 1, per_page: 60 });
+      await refresh.promise;
+    });
+    await waitFor(() => expect(screen.queryByRole("status", { name: /updating/i })).not.toBeInTheDocument());
+    expect(screen.getByText("React animation reference")).toBeInTheDocument();
+  });
+
+  it("refreshes the reusable tag catalogue when another view changes tags", async () => {
+    const renamedTag: MessageTag = { id: 12, name: "ui", color: "#14B8A6" };
+    vi.mocked(listTags)
+      .mockReset()
+      .mockResolvedValueOnce(knownTagsFixture)
+      .mockResolvedValueOnce([
+        knownTagsFixture[0],
+        knownTagsFixture[1],
+        renamedTag,
+        knownTagsFixture[3],
+      ]);
+
+    renderMessagesPage();
+    await screen.findByText("3 messages");
+    expect(screen.getByRole("button", { name: "#frontend" })).toBeInTheDocument();
+
+    act(() => notifyOrganizationChanged("tags"));
+
+    await waitFor(() => expect(listTags).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("button", { name: "#ui" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "#frontend" })).not.toBeInTheDocument();
   });
 
   it("applies category and tag filters from controls", async () => {
@@ -429,6 +499,22 @@ describe("MessagesPage filters", () => {
     });
   });
 
+  it("uses a compact mobile page indicator while retaining desktop page shortcuts", async () => {
+    vi.mocked(listMessages).mockResolvedValue({
+      items: messagesFixture,
+      total: 130,
+      page: 1,
+      per_page: 60,
+    });
+    renderMessagesPage();
+
+    const navigation = await screen.findByRole("navigation", { name: "Message pages" });
+    expect(within(navigation).getByLabelText("Current page, 1 of 3")).toHaveClass("sm:hidden");
+    const pageNumbers = within(navigation).getByLabelText("Pagination page numbers");
+    expect(pageNumbers).toHaveClass("hidden", "sm:flex");
+    expect(within(pageNumbers).getByRole("button", { name: "Page 2" })).toBeInTheDocument();
+  });
+
   it("reorders visible cards when sort option changes", async () => {
     const { container } = renderMessagesPage();
     await screen.findByText("3 messages");
@@ -459,6 +545,7 @@ describe("MessagesPage actions", () => {
     vi.mocked(deleteMessage).mockResolvedValue();
     vi.mocked(bulkDeleteMessages).mockResolvedValue({ deleted_count: 0 });
     vi.mocked(bulkMoveMessages).mockResolvedValue({ moved_count: 0, category_id: categoriesFixture[0].id });
+    vi.mocked(bulkAddTagsToMessages).mockResolvedValue({ updated_count: 0, assignment_count: 0 });
     vi.mocked(addTagsToMessage).mockResolvedValue(knownTagsFixture);
     vi.mocked(removeTagFromMessage).mockResolvedValue(knownTagsFixture);
     vi.mocked(createTag).mockResolvedValue({ id: 99, name: "new", color: null });
@@ -512,10 +599,10 @@ describe("MessagesPage actions", () => {
 
     const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
     fireEvent.click(menuButtons[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Manage tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Manage tags")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Tags for this message" })).toBeInTheDocument();
     });
   });
 
@@ -665,10 +752,10 @@ describe("MessagesPage actions", () => {
 
     const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
     fireEvent.click(menuButtons[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Manage tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Manage tags")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Tags for this message" })).toBeInTheDocument();
     });
 
     // Click available tag to add
@@ -688,10 +775,10 @@ describe("MessagesPage actions", () => {
 
     const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
     fireEvent.click(menuButtons[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Manage tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Manage tags")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Tags for this message" })).toBeInTheDocument();
     });
 
     // Remove attached tag
@@ -711,10 +798,10 @@ describe("MessagesPage actions", () => {
 
     const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
     fireEvent.click(menuButtons[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Manage tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Manage tags")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Tags for this message" })).toBeInTheDocument();
     });
 
     const input = screen.getByPlaceholderText("e.g. read-later");
@@ -724,6 +811,30 @@ describe("MessagesPage actions", () => {
     await waitFor(() => {
       expect(createTag).toHaveBeenCalledWith({ name: "new-tag" });
     });
+  });
+
+  it("keeps a created tag available when attaching it fails", async () => {
+    vi.mocked(createTag).mockResolvedValue({ id: 99, name: "new-tag", color: null });
+    vi.mocked(addTagsToMessage).mockRejectedValueOnce(new Error("Attach failed."));
+    renderMessagesPage();
+    await screen.findByText("3 messages");
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Message actions" })[0]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
+    const input = await screen.findByPlaceholderText("e.g. read-later");
+    fireEvent.change(input, { target: { value: "new-tag" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add tag" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Created #new-tag, but it could not be attached. Attach failed.",
+    );
+    expect(input).toHaveValue("");
+    const retryButton = screen.getByRole("button", { name: "+ #new-tag" });
+    expect(retryButton).toBeEnabled();
+    fireEvent.click(retryButton);
+
+    await waitFor(() => expect(addTagsToMessage).toHaveBeenNthCalledWith(2, 101, [99]));
+    expect(createTag).toHaveBeenCalledTimes(1);
   });
 
   it("enters bulk selection mode and selects messages", async () => {
@@ -790,6 +901,53 @@ describe("MessagesPage actions", () => {
     await waitFor(() => {
       expect(bulkMoveMessages).toHaveBeenCalled();
     });
+  });
+
+  it("bulk-tags selected messages and applies tags locally without duplicates", async () => {
+    vi.mocked(bulkAddTagsToMessages)
+      .mockResolvedValueOnce({ updated_count: 2, assignment_count: 2 })
+      .mockResolvedValueOnce({ updated_count: 0, assignment_count: 0 });
+
+    renderMessagesPage();
+    await screen.findByText("3 messages");
+    fireEvent.click(screen.getByRole("button", { name: "Bulk select" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select visible (3)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Tag selected" }));
+
+    await waitFor(() => {
+      expect(bulkAddTagsToMessages).toHaveBeenCalledWith([101, 102, 103], [10]);
+    });
+    expect(await screen.findByText("Added #backend to 2 selected messages.")).toBeInTheDocument();
+    for (const article of screen.getAllByRole("article")) {
+      expect(within(article).getAllByText("#backend")).toHaveLength(1);
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "Tag selected" }));
+    expect(await screen.findByText(
+      "#backend was already attached to all 3 selected messages.",
+    )).toBeInTheDocument();
+    for (const article of screen.getAllByRole("article")) {
+      expect(within(article).getAllByText("#backend")).toHaveLength(1);
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear selection" }));
+    expect(screen.queryByText("#backend was already attached to all 3 selected messages."))
+      .not.toBeInTheDocument();
+  });
+
+  it("restores bulk controls and shows the API error when tagging fails", async () => {
+    vi.mocked(bulkAddTagsToMessages).mockRejectedValue(new Error("Bulk tag failed."));
+
+    renderMessagesPage();
+    await screen.findByText("3 messages");
+    fireEvent.click(screen.getByRole("button", { name: "Bulk select" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select visible (3)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Tag selected" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Bulk tag failed.");
+    expect(screen.getByRole("button", { name: "Tag selected" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Move selected" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Delete selected" })).toBeEnabled();
   });
 
   it("exits bulk selection mode", async () => {
@@ -862,10 +1020,10 @@ describe("MessagesPage actions", () => {
 
     const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
     fireEvent.click(menuButtons[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Manage tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Manage tags")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Tags for this message" })).toBeInTheDocument();
     });
 
     const addButtons = screen.getAllByRole("button").filter((btn) => btn.textContent?.startsWith("+ #"));
@@ -886,10 +1044,10 @@ describe("MessagesPage actions", () => {
 
     const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
     fireEvent.click(menuButtons[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Manage tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Manage tags")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Tags for this message" })).toBeInTheDocument();
     });
 
     const input = screen.getByPlaceholderText("e.g. read-later");
@@ -909,10 +1067,10 @@ describe("MessagesPage actions", () => {
 
     const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
     fireEvent.click(menuButtons[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Manage tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Manage tags")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Tags for this message" })).toBeInTheDocument();
     });
 
     const removeBtns = screen.getAllByTitle("Remove tag");

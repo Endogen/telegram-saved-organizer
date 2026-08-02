@@ -28,10 +28,14 @@ const INITIAL_SCAN_STATUS: ScanStatus = {
 };
 
 type RefreshMode = "initial" | "manual" | "poll";
-type StreamConnectionState = "unsupported" | "connecting" | "connected" | "fallback";
+type StreamConnectionState = "idle" | "unsupported" | "connecting" | "connected" | "fallback";
 
 function isActiveScan(status: ScanStatus): boolean {
   return status.state === "pending" || status.state === "running" || status.state === "stopping";
+}
+
+function isTerminalScan(status: ScanStatus): boolean {
+  return status.state === "completed" || status.state === "failed" || status.state === "cancelled";
 }
 
 function completionReasonLabel(status: ScanStatus): string | null {
@@ -39,13 +43,13 @@ function completionReasonLabel(status: ScanStatus): string | null {
     return "All available Saved Messages were imported.";
   }
   if (status.completion_reason === "message_limit_reached") {
-    return `The server message limit${status.max_messages === null ? "" : ` of ${status.max_messages}`} was reached.`;
+    return `This scan reached its message limit${status.max_messages === null ? "" : ` of ${status.max_messages}`}. Scan again to continue.`;
   }
   if (status.completion_reason === "runtime_limit_reached") {
-    return `The server runtime limit${status.max_runtime_seconds === null ? "" : ` of ${status.max_runtime_seconds} seconds`} was reached.`;
+    return `This scan reached its time limit${status.max_runtime_seconds === null ? "" : ` of ${status.max_runtime_seconds} seconds`}. Scan again to continue.`;
   }
   if (status.completion_reason === "stopped_by_user") {
-    return "The scan was stopped by request.";
+    return "The import was stopped.";
   }
   return null;
 }
@@ -54,7 +58,7 @@ function toErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
   }
-  return "Scan request failed. Check backend logs and try again.";
+  return "Import request failed. Please try again.";
 }
 
 function clampPageSize(rawValue: number): number {
@@ -114,13 +118,10 @@ export function ScanProgress() {
   const [isStopping, setIsStopping] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const [streamConnectionState, setStreamConnectionState] = useState<StreamConnectionState>(() => {
-    if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
-      return "unsupported";
-    }
-    return "connecting";
-  });
+  const [streamConnectionState, setStreamConnectionState] = useState<StreamConnectionState>("idle");
   const inFlightRef = useRef(false);
+  const notifiedTerminalKeysRef = useRef(new Set<string>());
+  const scanIsActive = isActiveScan(status);
 
   const refreshStatus = useCallback(async (mode: RefreshMode) => {
     if (inFlightRef.current) {
@@ -163,7 +164,24 @@ export function ScanProgress() {
   }, [refreshStatus]);
 
   useEffect(() => {
-    const subscription = subscribeToScanStatus({
+    if (!scanIsActive) {
+      setStreamConnectionState("idle");
+      return;
+    }
+
+    if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
+      setStreamConnectionState("unsupported");
+      return;
+    }
+
+    setStreamConnectionState("connecting");
+    let subscription: ReturnType<typeof subscribeToScanStatus> | null = null;
+    const closeSubscription = () => {
+      subscription?.close();
+      subscription = null;
+    };
+
+    subscription = subscribeToScanStatus({
       onOpen: () => {
         setStreamConnectionState("connected");
       },
@@ -179,9 +197,11 @@ export function ScanProgress() {
         setNow(Date.now());
         setRequestError(null);
         setIsInitialLoading(false);
-        setStreamConnectionState("connected");
-        if (nextStatus.state === "completed") {
-          notifyCategoriesChanged();
+        if (isTerminalScan(nextStatus)) {
+          closeSubscription();
+          setStreamConnectionState("idle");
+        } else {
+          setStreamConnectionState("connected");
         }
       },
       onError: () => {
@@ -194,10 +214,21 @@ export function ScanProgress() {
       },
     });
 
-    return () => {
-      subscription.close();
-    };
-  }, []);
+    return closeSubscription;
+  }, [scanIsActive, status.job_id]);
+
+  useEffect(() => {
+    if (!isTerminalScan(status)) {
+      return;
+    }
+
+    const terminalKey = [status.job_id ?? "no-job", status.state, status.finished_at ?? "no-finish"].join(":");
+    if (notifiedTerminalKeysRef.current.has(terminalKey)) {
+      return;
+    }
+    notifiedTerminalKeysRef.current.add(terminalKey);
+    notifyCategoriesChanged();
+  }, [status.finished_at, status.job_id, status.state]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -283,18 +314,18 @@ export function ScanProgress() {
     }
   }, []);
 
-  const [isClearing, setIsClearing] = useState(false);
+  const [isRefreshingLibrary, setIsRefreshingLibrary] = useState(false);
 
-  const handleClearAndRescan = useCallback(async () => {
+  const handleRefreshLibrary = useCallback(async () => {
     const confirmed = window.confirm(
-      "This will delete all imported messages from the organizer and start a fresh scan. Messages in Telegram are not affected. Continue?",
+      "Refresh your full library? Your current library stays available while Telegram is imported. Categories and tags on messages that remain are preserved. Messages no longer found in Telegram are removed only after a complete, successful import. If you stop the import, it fails, or it reaches a limit, your existing library stays unchanged.",
     );
     if (!confirmed) {
       return;
     }
 
     setRequestError(null);
-    setIsClearing(true);
+    setIsRefreshingLibrary(true);
 
     try {
       const normalizedPageSize = clampPageSize(Number.parseInt(pageSizeInput, 10));
@@ -308,12 +339,12 @@ export function ScanProgress() {
     } catch (error) {
       setRequestError(toErrorMessage(error));
     } finally {
-      setIsClearing(false);
+      setIsRefreshingLibrary(false);
     }
   }, [pageSizeInput]);
 
   const statusTone = useMemo(() => {
-    if (status.error) {
+    if (status.error || status.state === "failed") {
       return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
     }
     if (isActiveScan(status)) {
@@ -326,35 +357,38 @@ export function ScanProgress() {
   }, [status]);
 
   const statusLabel = useMemo(() => {
-    if (status.error) {
-      return "Scan failed";
+    if (status.error || status.state === "failed") {
+      return "Import failed";
     }
     if (status.state === "stopping" || (isActiveScan(status) && status.stop_requested)) {
-      return "Stopping scan";
+      return "Stopping import";
     }
     if (isActiveScan(status)) {
-      return "Scanning Saved Messages";
+      return "Importing Saved Messages";
     }
     if (status.state === "completed") {
-      return "Scan complete";
+      return "Import complete";
     }
     if (status.state === "cancelled") {
-      return "Scan stopped";
+      return "Import stopped";
     }
-    return "Ready to scan";
+    return "Ready to import";
   }, [status]);
 
   const streamStatusLabel = useMemo(() => {
+    if (streamConnectionState === "idle") {
+      return "Checking for active imports";
+    }
     if (streamConnectionState === "connected") {
-      return "Live updates connected";
+      return "Updates are live";
     }
     if (streamConnectionState === "connecting") {
-      return "Connecting live updates";
+      return "Connecting updates";
     }
     if (streamConnectionState === "unsupported") {
-      return "Polling mode";
+      return "Live updates unavailable — checking automatically";
     }
-    return "Live stream fallback";
+    return "Live updates interrupted — checking automatically";
   }, [streamConnectionState]);
 
   const streamStatusTone = useMemo(() => {
@@ -369,8 +403,8 @@ export function ScanProgress() {
 
   const duration = formatDuration(status.started_at, status.finished_at, now);
   const completionMessage = completionReasonLabel(status);
-  const scanIsActive = isActiveScan(status);
-  const isBusy = isInitialLoading || isStarting || isStopping || isClearing || isRefreshing;
+  const scannerError = status.error ?? (status.state === "failed" ? "The import ended before it could complete." : requestError);
+  const isBusy = isInitialLoading || isStarting || isStopping || isRefreshingLibrary || isRefreshing;
   const canStart = !isBusy && !scanIsActive;
   const canStop = !isBusy && scanIsActive && !status.stop_requested;
 
@@ -379,11 +413,11 @@ export function ScanProgress() {
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[hsl(var(--muted-foreground))]">
-            Scanner
+            Import
           </p>
-          <h3 className="mt-1 text-lg font-semibold text-[hsl(var(--foreground))]">Saved Messages Scan Progress</h3>
+          <h3 className="mt-1 text-lg font-semibold text-[hsl(var(--foreground))]">Import Saved Messages</h3>
           <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
-            Live status stream with automatic polling fallback from Telegram scanner endpoints.
+            Find new messages in Telegram and add them to your organizer.
           </p>
           <p
             className={`mt-2 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${streamStatusTone}`}
@@ -394,7 +428,7 @@ export function ScanProgress() {
 
         <div className="flex flex-wrap items-center gap-2">
           <label className="inline-flex items-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background)/0.72)] px-2.5 py-1.5 text-xs font-semibold text-[hsl(var(--muted-foreground))]">
-            Page size
+            Messages per batch
             <input
               type="number"
               min={1}
@@ -420,7 +454,7 @@ export function ScanProgress() {
 
           <Button size="sm" onClick={() => void handleStartScan()} disabled={!canStart} className="gap-1.5">
             {isStarting ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}
-            {isStarting ? "Starting..." : "Start"}
+            {isStarting ? "Starting scan..." : "Scan for new messages"}
           </Button>
 
           <Button variant="outline" size="sm" onClick={() => void handleStopScan()} disabled={!canStop} className="gap-1.5">
@@ -431,12 +465,12 @@ export function ScanProgress() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void handleClearAndRescan()}
-            disabled={scanIsActive || isStarting || isStopping || isClearing}
+            onClick={() => void handleRefreshLibrary()}
+            disabled={scanIsActive || isStarting || isStopping || isRefreshingLibrary}
             className="gap-1.5"
           >
-            {isClearing ? <LoaderCircle className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
-            {isClearing ? "Clearing..." : "Clear & Rescan"}
+            {isRefreshingLibrary ? <LoaderCircle className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
+            {isRefreshingLibrary ? "Refreshing library..." : "Refresh full library"}
           </Button>
         </div>
       </div>
@@ -444,13 +478,28 @@ export function ScanProgress() {
       {isInitialLoading ? (
         <div className="mt-4 flex items-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background)/0.6)] px-3 py-2 text-sm text-[hsl(var(--muted-foreground))]">
           <LoaderCircle className="size-4 animate-spin" />
-          Loading scan status...
+          Checking import status...
         </div>
       ) : (
         <>
-          <div className={`mt-4 rounded-lg border px-3 py-2 text-sm font-medium ${statusTone}`}>{statusLabel}</div>
+          <div
+            className={`mt-4 rounded-lg border px-3 py-2 text-sm font-medium ${statusTone}`}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {statusLabel}
+          </div>
 
-          <div className="mt-3 h-2 overflow-hidden rounded-full bg-[hsl(var(--muted))]">
+          <div
+            className="mt-3 h-2 overflow-hidden rounded-full bg-[hsl(var(--muted))]"
+            role="progressbar"
+            aria-label="Saved Messages import progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={status.state === "completed" ? 100 : undefined}
+            aria-valuetext={statusLabel}
+          >
             {scanIsActive ? (
               <motion.div
                 className="h-full w-1/3 rounded-full bg-[hsl(var(--primary))]"
@@ -470,14 +519,14 @@ export function ScanProgress() {
           <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <article className="rounded-lg border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--background)/0.7)] px-3 py-2">
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[hsl(var(--muted-foreground))]">
-                Messages Scanned
+                Messages Checked
               </p>
               <p className="mt-1 text-lg font-semibold text-[hsl(var(--foreground))]">{status.messages_scanned}</p>
             </article>
 
             <article className="rounded-lg border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--background)/0.7)] px-3 py-2">
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[hsl(var(--muted-foreground))]">
-                Pages Processed
+                Batches Checked
               </p>
               <p className="mt-1 text-lg font-semibold text-[hsl(var(--foreground))]">{status.pages_scanned}</p>
             </article>
@@ -524,18 +573,19 @@ export function ScanProgress() {
       )}
 
       <AnimatePresence>
-        {status.error || requestError ? (
+        {scannerError ? (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
             className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300"
+            role="alert"
           >
             <p className="flex items-center gap-2 font-medium">
               <CircleAlert className="size-4" />
-              {status.error ? "Scanner reported an error." : "Request failed."}
+              {status.error || status.state === "failed" ? "Import could not finish." : "Import request failed."}
             </p>
-            <p className="mt-1">{status.error ?? requestError}</p>
+            <p className="mt-1">{scannerError}</p>
             {requestError === "Connect Telegram before starting a scan." ? (
               <a
                 href="/settings/telegram"
@@ -548,9 +598,21 @@ export function ScanProgress() {
         ) : null}
       </AnimatePresence>
 
-      {!status.error && !requestError && completionMessage ? (
-        <div className="mt-4 inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-          <CheckCircle2 className="size-3.5" />
+      {!scannerError && status.state === "completed" ? (
+        <div className="mt-4 flex flex-wrap items-center gap-3" role="status" aria-live="polite">
+          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+            <CheckCircle2 className="size-3.5" />
+            {completionMessage ?? "Your imported messages are ready."}
+          </span>
+          <a
+            href="/messages"
+            className="inline-flex h-9 items-center justify-center rounded-md bg-[hsl(var(--primary))] px-3 text-sm font-semibold text-[hsl(var(--primary-foreground))] transition-colors hover:bg-[hsl(var(--primary)/0.92)]"
+          >
+            Browse messages
+          </a>
+        </div>
+      ) : !scannerError && status.state === "cancelled" && completionMessage ? (
+        <div className="mt-4 inline-flex items-center gap-1 rounded-full bg-[hsl(var(--muted))] px-2.5 py-1 text-xs font-semibold text-[hsl(var(--muted-foreground))]" role="status" aria-live="polite">
           {completionMessage}
         </div>
       ) : null}

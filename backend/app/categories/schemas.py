@@ -20,6 +20,7 @@ class CategoryResponse(BaseModel):
     id: int
     name: str
     slug: str
+    system_key: str | None = None
     icon: str
     color: str
     position: int
@@ -38,6 +39,7 @@ class CategoryWithCountResponse(CategoryResponse):
             id=category.id,
             name=category.name,
             slug=category.slug,
+            system_key=category.system_key,
             icon=category.icon,
             color=category.color,
             position=category.position,
@@ -63,10 +65,13 @@ class CategoryCreateRequest(BaseModel):
 class CategoryUpdateRequest(BaseModel):
     """Request payload for updating categories."""
 
-    name: NameField | None = None
-    icon: IconField | None = None
-    color: ColorField | None = None
-    position: int | None = Field(default=None, ge=0, le=MAX_DB_INTEGER, strict=True)
+    # A ``None`` default makes each field optional to omit, while the non-null
+    # annotation rejects an explicit JSON null for values that the database does
+    # not allow to be cleared.
+    name: NameField = None  # type: ignore[assignment]
+    icon: IconField = None  # type: ignore[assignment]
+    color: ColorField = None  # type: ignore[assignment]
+    position: int = Field(default=None, ge=0, le=MAX_DB_INTEGER, strict=True)  # type: ignore[arg-type]
 
     @model_validator(mode="after")
     def validate_has_update_fields(self) -> "CategoryUpdateRequest":

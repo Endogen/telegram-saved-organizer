@@ -5,6 +5,7 @@ import { Link, useLocation, useNavigate } from "react-router";
 import { ApiRequestError } from "@/api/client";
 import { useAuth } from "@/components/auth/auth-provider";
 import { Button } from "@/components/ui/button";
+import { PASSWORD_POLICY_HELP, passwordPolicyError } from "@/lib/password-validation";
 
 type RegistrationField = "displayName" | "email" | "password" | "passwordConfirmation";
 type FieldErrors = Partial<Record<RegistrationField, string>>;
@@ -64,8 +65,9 @@ export function RegisterPage() {
     } else if (!EMAIL_PATTERN.test(normalizedEmail)) {
       nextFieldErrors.email = "Enter a valid email address.";
     }
-    if (password.length < 12) {
-      nextFieldErrors.password = "Use at least 12 characters.";
+    const passwordError = passwordPolicyError(password);
+    if (passwordError !== null) {
+      nextFieldErrors.password = passwordError;
     }
     if (passwordConfirmation !== password) {
       nextFieldErrors.passwordConfirmation = "The passwords do not match.";
@@ -181,7 +183,7 @@ export function RegisterPage() {
               {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
             </button>
           </div>
-          <p id="register-password-help" className="mt-2 text-xs text-[hsl(var(--muted-foreground))]">Use at least 12 characters.</p>
+          <p id="register-password-help" className="mt-2 text-xs text-[hsl(var(--muted-foreground))]">{PASSWORD_POLICY_HELP}</p>
           {fieldErrors.password ? <p id="register-password-error" className="mt-1 text-sm text-red-700 dark:text-red-300">{fieldErrors.password}</p> : null}
         </div>
 

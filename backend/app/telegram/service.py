@@ -41,6 +41,7 @@ ACTIVE_SCAN_STATES = ("pending", "running", "stopping")
 TERMINAL_SCAN_STATES = ("completed", "failed", "cancelled")
 SCAN_LEASE_SECONDS = 90
 SCAN_HEARTBEAT_SECONDS = 20
+SCAN_CLAIM_RETRY_LIMIT = 3
 
 _ResultT = TypeVar("_ResultT")
 
@@ -66,6 +67,7 @@ class ScanLease:
     max_runtime_seconds: int
     started_at: datetime
     owner: str
+    replace_existing: bool = False
 
 
 class TelegramScanService:
@@ -75,7 +77,9 @@ class TelegramScanService:
         self._session = session
         self._user_id = str(user_id)
 
-    async def start(self, *, page_size: int = 100, clear_existing: bool = False) -> ScanJob:
+    async def start(
+        self, *, page_size: int = 100, clear_existing: bool = False
+    ) -> ScanJob:
         if page_size <= 0:
             raise ValueError("page_size must be a positive integer.")
 
@@ -95,14 +99,31 @@ class TelegramScanService:
             if active_job.state == "pending" or (
                 active_job.state == "running" and _lease_is_expired(active_job, now=now)
             ):
+                if bool(getattr(active_job, "replace_existing", False)) != bool(
+                    clear_existing
+                ):
+                    raise ScanAlreadyRunningError(
+                        "An active scan has a different replacement mode."
+                    )
                 # Re-scheduling is safe: every processor still has to win the
                 # fenced atomic claim below.
                 return active_job
-            if active_job.state == "stopping" and _lease_is_expired(active_job, now=now):
+            if active_job.state == "stopping" and _lease_is_expired(
+                active_job, now=now
+            ):
                 active_job.state = "cancelled"
                 active_job.completion_reason = STOPPED_BY_USER
                 active_job.finished_at = now
                 _clear_lease(active_job)
+                if bool(getattr(active_job, "replace_existing", False)):
+                    await self._session.execute(
+                        update(Message)
+                        .where(
+                            Message.user_id == self._user_id,
+                            Message.last_seen_replacement_job_id == active_job.id,
+                        )
+                        .values(last_seen_replacement_job_id=None)
+                    )
                 await self._session.commit()
             else:
                 raise ScanAlreadyRunningError("A scan is already active for this user.")
@@ -113,18 +134,18 @@ class TelegramScanService:
                 "Telegram identity is unavailable for this connection."
             )
         if clear_existing:
-            # Keep clearing and job creation in the same transaction. A fresh
-            # scan must never leave an empty library merely because starting
-            # the replacement job failed afterwards.
+            # A terminal job should never leave a marker behind, but clearing
+            # stale markers here makes replacement scans self-healing after an
+            # abrupt process or authorization interruption.
             await self._session.execute(
-                delete(MessageTag).where(MessageTag.user_id == self._user_id)
-            )
-            await self._session.execute(
-                delete(Message).where(Message.user_id == self._user_id)
+                update(Message)
+                .where(Message.user_id == self._user_id)
+                .values(last_seen_replacement_job_id=None)
             )
         job = ScanJob(
             user_id=self._user_id,
             state="pending",
+            replace_existing=clear_existing,
             page_size=page_size,
             telegram_user_id=connection.telegram_user_id,
             connection_generation=connection.generation,
@@ -136,7 +157,9 @@ class TelegramScanService:
             await self._session.commit()
         except IntegrityError as exc:
             await self._session.rollback()
-            raise ScanAlreadyRunningError("A scan is already active for this user.") from exc
+            raise ScanAlreadyRunningError(
+                "A scan is already active for this user."
+            ) from exc
         await self._session.refresh(job)
         return job
 
@@ -169,6 +192,15 @@ class TelegramScanService:
             job.completion_reason = STOPPED_BY_USER
             job.finished_at = now
             _clear_lease(job)
+            if bool(getattr(job, "replace_existing", False)):
+                await self._session.execute(
+                    update(Message)
+                    .where(
+                        Message.user_id == self._user_id,
+                        Message.last_seen_replacement_job_id == job.id,
+                    )
+                    .values(last_seen_replacement_job_id=None)
+                )
         else:
             job.state = "stopping"
         await self._session.commit()
@@ -181,7 +213,11 @@ class TelegramScanService:
             .where(TelegramConnection.user_id == self._user_id)
             .with_for_update()
         )
-        if connection is None or connection.state != "connected" or not connection.session_encrypted:
+        if (
+            connection is None
+            or connection.state != "connected"
+            or not connection.session_encrypted
+        ):
             raise TelegramClientNotConnectedError("Connect Telegram before scanning.")
 
         try:
@@ -219,7 +255,9 @@ class TelegramScanService:
             connection.pending_phone_code_hash_encrypted = None
             connection.pending_expires_at = None
             await self._session.commit()
-            raise TelegramClientNotConnectedError("Telegram authorization is no longer valid.")
+            raise TelegramClientNotConnectedError(
+                "Telegram authorization is no longer valid."
+            )
         actual_telegram_user_id = getattr(identity, "id", None)
         if isinstance(actual_telegram_user_id, bool) or not isinstance(
             actual_telegram_user_id, int
@@ -230,7 +268,9 @@ class TelegramScanService:
             connection.phone_encrypted = None
             connection.session_encrypted = None
             await self._session.commit()
-            raise TelegramClientNotConnectedError("Telegram identity could not be verified.")
+            raise TelegramClientNotConnectedError(
+                "Telegram identity could not be verified."
+            )
         if connection.telegram_user_id is None:
             connection.telegram_user_id = actual_telegram_user_id
             connection.generation += 1
@@ -274,7 +314,9 @@ async def process_scan_job(job_id: str) -> bool:
             completion_reason = RUNTIME_LIMIT_REACHED
         elif completion_reason in (SLICE_PAGE_LIMIT, SLICE_TIME_LIMIT):
             if not await _requeue_scan_job(lease=lease):
-                raise ScanLeaseLostError("Scan lease was lost before the slice requeued.")
+                raise ScanLeaseLostError(
+                    "Scan lease was lost before the slice requeued."
+                )
             return True
         else:
             raise RuntimeError("Scan slice ended without a completion disposition.")
@@ -310,34 +352,43 @@ async def process_scan_job(job_id: str) -> bool:
 
 
 async def process_next_scan_job() -> bool:
-    """Process the oldest claimable job, for use by a dedicated worker."""
+    """Process the oldest claimable job without sleeping on claim contention."""
 
     await _terminalize_expired_stopping_jobs()
-    now = _utcnow()
-    async with SessionLocal() as session:
-        job_id = await session.scalar(
-            select(ScanJob.id)
-            .where(
-                or_(
-                    ScanJob.state == "pending",
-                    (
-                        (ScanJob.state == "running")
-                        & or_(
-                            ScanJob.lease_expires_at.is_(None),
-                            ScanJob.lease_expires_at <= now,
-                        )
-                    ),
+    for _ in range(SCAN_CLAIM_RETRY_LIMIT):
+        now = _utcnow()
+        async with SessionLocal() as session:
+            job_id = await session.scalar(
+                select(ScanJob.id)
+                .where(
+                    or_(
+                        ScanJob.state == "pending",
+                        (
+                            (ScanJob.state == "running")
+                            & or_(
+                                ScanJob.lease_expires_at.is_(None),
+                                ScanJob.lease_expires_at <= now,
+                            )
+                        ),
+                    )
                 )
+                .order_by(
+                    func.coalesce(ScanJob.heartbeat_at, ScanJob.created_at).asc(),
+                    ScanJob.created_at.asc(),
+                )
+                .limit(1)
             )
-            .order_by(
-                func.coalesce(ScanJob.heartbeat_at, ScanJob.created_at).asc(),
-                ScanJob.created_at.asc(),
-            )
-            .limit(1)
-        )
-    if job_id is None:
-        return False
-    return await process_scan_job(job_id)
+        if job_id is None:
+            return False
+        if await process_scan_job(job_id):
+            return True
+        # Another worker won the fenced claim after our read. Yield so its
+        # transaction becomes visible, then select another queued job promptly.
+        await asyncio.sleep(0)
+
+    # Contention is not an empty queue. Tell the worker to try again immediately
+    # rather than applying its idle sleep while work may still be waiting.
+    return True
 
 
 async def process_scan_queue() -> None:
@@ -376,7 +427,9 @@ async def _claim_scan_job(*, job_id: str, owner: str | None = None) -> ScanLease
             .where(
                 ScanJob.id == job_id,
                 ScanJob.state == "stopping",
-                or_(ScanJob.lease_expires_at.is_(None), ScanJob.lease_expires_at <= now),
+                or_(
+                    ScanJob.lease_expires_at.is_(None), ScanJob.lease_expires_at <= now
+                ),
             )
             .values(
                 state="cancelled",
@@ -385,6 +438,19 @@ async def _claim_scan_job(*, job_id: str, owner: str | None = None) -> ScanLease
                 lease_owner=None,
                 lease_expires_at=None,
             )
+        )
+        await session.execute(
+            update(Message)
+            .where(
+                Message.last_seen_replacement_job_id == job_id,
+                Message.last_seen_replacement_job_id.in_(
+                    select(ScanJob.id).where(
+                        ScanJob.id == job_id,
+                        ScanJob.state.in_(("failed", "cancelled")),
+                    )
+                ),
+            )
+            .values(last_seen_replacement_job_id=None)
         )
         result = await session.execute(
             update(ScanJob)
@@ -444,6 +510,7 @@ async def _claim_scan_job(*, job_id: str, owner: str | None = None) -> ScanLease
             max_runtime_seconds=job.max_runtime_seconds,
             started_at=_as_utc(job.started_at or now),
             owner=lease_owner,
+            replace_existing=job.replace_existing,
         )
 
 
@@ -507,7 +574,9 @@ async def _run_with_lease_heartbeat(
         result = await operation_task
         stop.set()
         if not await heartbeat_task:
-            raise ScanLeaseLostError("Scan lease expired before the operation completed.")
+            raise ScanLeaseLostError(
+                "Scan lease expired before the operation completed."
+            )
         return result
     finally:
         stop.set()
@@ -542,8 +611,14 @@ async def _execute_claimed_scan(*, lease: ScanLease) -> ScanProgress:
                 TelegramConnection.generation == lease.connection_generation,
             )
         )
-        if connection is None or connection.state != "connected" or not connection.session_encrypted:
-            raise TelegramClientNotConnectedError("Telegram is not connected for this scan.")
+        if (
+            connection is None
+            or connection.state != "connected"
+            or not connection.session_encrypted
+        ):
+            raise TelegramClientNotConnectedError(
+                "Telegram is not connected for this scan."
+            )
         try:
             session_string = decrypt_secret(
                 connection.session_encrypted,
@@ -557,7 +632,9 @@ async def _execute_claimed_scan(*, lease: ScanLease) -> ScanProgress:
     async with short_lived_client(session_string=session_string) as client:
         if not await client.is_user_authorized():
             await _downgrade_connection(lease=lease)
-            raise TelegramClientNotConnectedError("Telegram authorization is no longer valid.")
+            raise TelegramClientNotConnectedError(
+                "Telegram authorization is no longer valid."
+            )
         identity = await client.get_me()
         if getattr(identity, "id", None) != lease.telegram_user_id:
             await _downgrade_connection(lease=lease)
@@ -728,8 +805,44 @@ async def _finalize_scan_job(
                 lease_expires_at=None,
             )
         )
+        if int(result.rowcount or 0) != 1:
+            await session.rollback()
+            return False
+
+        if lease.replace_existing:
+            if state == "completed" and completion_reason == SOURCE_EXHAUSTED:
+                unseen_message_ids = select(Message.id).where(
+                    Message.user_id == lease.user_id,
+                    or_(
+                        Message.last_seen_replacement_job_id.is_(None),
+                        Message.last_seen_replacement_job_id != lease.job_id,
+                    ),
+                )
+                await session.execute(
+                    delete(MessageTag).where(
+                        MessageTag.user_id == lease.user_id,
+                        MessageTag.message_id.in_(unseen_message_ids),
+                    )
+                )
+                await session.execute(
+                    delete(Message).where(
+                        Message.user_id == lease.user_id,
+                        or_(
+                            Message.last_seen_replacement_job_id.is_(None),
+                            Message.last_seen_replacement_job_id != lease.job_id,
+                        ),
+                    )
+                )
+            await session.execute(
+                update(Message)
+                .where(
+                    Message.user_id == lease.user_id,
+                    Message.last_seen_replacement_job_id == lease.job_id,
+                )
+                .values(last_seen_replacement_job_id=None)
+            )
         await session.commit()
-        return int(result.rowcount or 0) == 1
+        return True
 
 
 async def _requeue_scan_job(*, lease: ScanLease) -> bool:
@@ -737,6 +850,28 @@ async def _requeue_scan_job(*, lease: ScanLease) -> bool:
 
     now = _utcnow()
     async with SessionLocal() as session:
+        if lease.replace_existing:
+            cancelling_job_ids = select(ScanJob.id).where(
+                ScanJob.id == lease.job_id,
+                ScanJob.user_id == lease.user_id,
+                ScanJob.telegram_user_id == lease.telegram_user_id,
+                ScanJob.connection_generation == lease.connection_generation,
+                ScanJob.lease_owner == lease.owner,
+                ScanJob.state.in_(("running", "stopping")),
+                ScanJob.lease_expires_at > now,
+                or_(
+                    ScanJob.stop_requested.is_(True),
+                    ScanJob.state == "stopping",
+                ),
+            )
+            await session.execute(
+                update(Message)
+                .where(
+                    Message.user_id == lease.user_id,
+                    Message.last_seen_replacement_job_id.in_(cancelling_job_ids),
+                )
+                .values(last_seen_replacement_job_id=None)
+            )
         result = await session.execute(
             update(ScanJob)
             .where(
@@ -776,6 +911,27 @@ async def _requeue_scan_job(*, lease: ScanLease) -> bool:
 async def _release_interrupted_scan(*, lease: ScanLease) -> bool:
     now = _utcnow()
     async with SessionLocal() as session:
+        if lease.replace_existing:
+            cancelling_job_ids = select(ScanJob.id).where(
+                ScanJob.id == lease.job_id,
+                ScanJob.user_id == lease.user_id,
+                ScanJob.telegram_user_id == lease.telegram_user_id,
+                ScanJob.connection_generation == lease.connection_generation,
+                ScanJob.lease_owner == lease.owner,
+                ScanJob.state.in_(("running", "stopping")),
+                or_(
+                    ScanJob.stop_requested.is_(True),
+                    ScanJob.state == "stopping",
+                ),
+            )
+            await session.execute(
+                update(Message)
+                .where(
+                    Message.user_id == lease.user_id,
+                    Message.last_seen_replacement_job_id.in_(cancelling_job_ids),
+                )
+                .values(last_seen_replacement_job_id=None)
+            )
         result = await session.execute(
             update(ScanJob)
             .where(
@@ -787,7 +943,9 @@ async def _release_interrupted_scan(*, lease: ScanLease) -> bool:
                 ScanJob.state.in_(("running", "stopping")),
             )
             .values(
-                state=case((ScanJob.stop_requested.is_(True), "cancelled"), else_="pending"),
+                state=case(
+                    (ScanJob.stop_requested.is_(True), "cancelled"), else_="pending"
+                ),
                 finished_at=case(
                     (ScanJob.stop_requested.is_(True), now),
                     else_=None,
@@ -807,11 +965,25 @@ async def _release_interrupted_scan(*, lease: ScanLease) -> bool:
 async def _terminalize_expired_stopping_jobs() -> int:
     now = _utcnow()
     async with SessionLocal() as session:
+        expired_job_ids = select(ScanJob.id).where(
+            ScanJob.state == "stopping",
+            or_(
+                ScanJob.lease_expires_at.is_(None),
+                ScanJob.lease_expires_at <= now,
+            ),
+        )
+        await session.execute(
+            update(Message)
+            .where(Message.last_seen_replacement_job_id.in_(expired_job_ids))
+            .values(last_seen_replacement_job_id=None)
+        )
         result = await session.execute(
             update(ScanJob)
             .where(
                 ScanJob.state == "stopping",
-                or_(ScanJob.lease_expires_at.is_(None), ScanJob.lease_expires_at <= now),
+                or_(
+                    ScanJob.lease_expires_at.is_(None), ScanJob.lease_expires_at <= now
+                ),
             )
             .values(
                 state="cancelled",
@@ -847,6 +1019,20 @@ async def _downgrade_connection(*, lease: ScanLease) -> None:
             connection.password_required = False
             connection.pending_phone_code_hash_encrypted = None
             connection.pending_expires_at = None
+            active_job_ids = select(ScanJob.id).where(
+                ScanJob.user_id == lease.user_id,
+                ScanJob.telegram_user_id == lease.telegram_user_id,
+                ScanJob.connection_generation == lease.connection_generation,
+                ScanJob.state.in_(ACTIVE_SCAN_STATES),
+            )
+            await session.execute(
+                update(Message)
+                .where(
+                    Message.user_id == lease.user_id,
+                    Message.last_seen_replacement_job_id.in_(active_job_ids),
+                )
+                .values(last_seen_replacement_job_id=None)
+            )
             await session.execute(
                 update(ScanJob)
                 .where(
@@ -901,7 +1087,9 @@ async def _persist_scan_page(*, lease: ScanLease, page: ScanPage) -> None:
                 .with_for_update()
             )
             if job_id is None:
-                raise ScanLeaseLostError("Scan page arrived after lease ownership was lost.")
+                raise ScanLeaseLostError(
+                    "Scan page arrived after lease ownership was lost."
+                )
 
             category_rows = await session.execute(
                 select(Category.system_key, Category.slug, Category.id).where(
@@ -928,9 +1116,19 @@ async def _persist_scan_page(*, lease: ScanLease, page: ScanPage) -> None:
             seen_ids = set(existing_by_id)
             for scanned in page.messages:
                 if scanned.telegram_id in seen_ids:
-                    existing_by_id[scanned.telegram_id].connection_generation = (
-                        lease.connection_generation
-                    )
+                    existing = existing_by_id[scanned.telegram_id]
+                    existing.connection_generation = lease.connection_generation
+                    existing.content = scanned.content
+                    existing.media_type = scanned.media_type
+                    existing.file_name = scanned.file_name
+                    existing.file_size = scanned.file_size
+                    existing.mime_type = scanned.mime_type
+                    existing.url = scanned.url
+                    existing.sender_name = scanned.sender_name
+                    existing.date = scanned.date
+                    existing.raw_data = scanned.raw_data
+                    if lease.replace_existing:
+                        existing.last_seen_replacement_job_id = lease.job_id
                     continue
                 seen_ids.add(scanned.telegram_id)
                 category_slug = categorize_scanned_message(scanned)
@@ -948,8 +1146,13 @@ async def _persist_scan_page(*, lease: ScanLease, page: ScanPage) -> None:
                         url=scanned.url,
                         sender_name=scanned.sender_name,
                         date=scanned.date,
-                        category_id=category_map.get(category_slug, category_map["other"]),
+                        category_id=category_map.get(
+                            category_slug, category_map["other"]
+                        ),
                         raw_data=scanned.raw_data,
+                        last_seen_replacement_job_id=(
+                            lease.job_id if lease.replace_existing else None
+                        ),
                     )
                 )
 
@@ -990,7 +1193,9 @@ def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
-def _remaining_runtime_seconds(*, lease: ScanLease, now: datetime | None = None) -> float:
+def _remaining_runtime_seconds(
+    *, lease: ScanLease, now: datetime | None = None
+) -> float:
     elapsed = (_as_utc(now or _utcnow()) - _as_utc(lease.started_at)).total_seconds()
     return max(0.0, float(lease.max_runtime_seconds) - elapsed)
 

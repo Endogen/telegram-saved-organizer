@@ -90,7 +90,7 @@ describe("ConnectPage", () => {
     expect(await screen.findByRole("heading", { name: "Ada Lovelace is ready" })).toBeInTheDocument();
     expect(screen.getByText("@ada · +1 ••• ••• 1234")).toBeInTheDocument();
     expect(screen.getByText(/does not remove messages already imported/)).toBeInTheDocument();
-    expect(screen.getByText("Ready to scan")).toBeInTheDocument();
+    expect(screen.getByText("Ready to import")).toBeInTheDocument();
   });
 
   it("completes the phone, code, and connected flow using response states", async () => {
@@ -233,7 +233,7 @@ describe("ConnectPage", () => {
 
     expect(disconnectTelegram).not.toHaveBeenCalled();
     expect(screen.getByRole("heading", { name: "Ada Lovelace is ready" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open scanner dashboard" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "Open import dashboard" })).toHaveAttribute("href", "/");
   });
 
   it("prevents overlapping connection submissions", async () => {

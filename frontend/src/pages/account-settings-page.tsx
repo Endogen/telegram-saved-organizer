@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { KeyRound, LoaderCircle, Save, Trash2, UserRound } from "lucide-react";
 
 import { changePassword, deleteAccount, fetchAccount, updateAccount } from "@/api/account";
@@ -6,6 +6,7 @@ import { API_UNAUTHORIZED_EVENT, ApiRequestError } from "@/api/client";
 import { useAuth } from "@/components/auth/auth-provider";
 import { Button } from "@/components/ui/button";
 import { StatePanel } from "@/components/ui/state-panel";
+import { PASSWORD_POLICY_HELP, passwordPolicyError } from "@/lib/password-validation";
 import type { AccountUser } from "@/types/account";
 
 const INPUT_CLASS_NAME =
@@ -43,6 +44,22 @@ export function AccountSettingsPage() {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const deleteTriggerRef = useRef<HTMLButtonElement>(null);
+  const deletePasswordRef = useRef<HTMLInputElement>(null);
+  const deleteConfirmationRef = useRef<HTMLInputElement>(null);
+  const shouldRestoreDeleteFocusRef = useRef(false);
+
+  useEffect(() => {
+    if (isConfirmingDelete) {
+      deletePasswordRef.current?.focus();
+      return;
+    }
+
+    if (shouldRestoreDeleteFocusRef.current) {
+      deleteTriggerRef.current?.focus();
+      shouldRestoreDeleteFocusRef.current = false;
+    }
+  }, [isConfirmingDelete]);
 
   const loadAccount = useCallback(async (signal?: AbortSignal) => {
     setIsLoading(true);
@@ -107,8 +124,9 @@ export function AccountSettingsPage() {
       setPasswordError("Enter your current password.");
       return;
     }
-    if (newPassword.length < 12) {
-      setPasswordError("Your new password must be at least 12 characters.");
+    const policyError = passwordPolicyError(newPassword);
+    if (policyError !== null) {
+      setPasswordError(policyError);
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -137,10 +155,12 @@ export function AccountSettingsPage() {
   async function handleDeleteAccount() {
     if (deletePassword.length === 0) {
       setDeleteError("Enter your current password.");
+      deletePasswordRef.current?.focus();
       return;
     }
     if (deleteConfirmation !== "DELETE") {
       setDeleteError('Type "DELETE" exactly to confirm.');
+      deleteConfirmationRef.current?.focus();
       return;
     }
 
@@ -249,7 +269,7 @@ export function AccountSettingsPage() {
           <h3 className="text-lg font-semibold text-[hsl(var(--foreground))]">Change password</h3>
         </div>
         <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
-          Use at least 12 characters. Spaces are preserved exactly as entered.
+          {PASSWORD_POLICY_HELP} Spaces are preserved exactly as entered.
         </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <label className="text-sm font-semibold text-[hsl(var(--foreground))] sm:col-span-2">
@@ -320,6 +340,7 @@ export function AccountSettingsPage() {
             <label className="text-sm font-semibold text-[hsl(var(--foreground))]">
               Current password for deletion
               <input
+                ref={deletePasswordRef}
                 type="password"
                 value={deletePassword}
                 onChange={(event) => {
@@ -336,6 +357,7 @@ export function AccountSettingsPage() {
             <label className="text-sm font-semibold text-[hsl(var(--foreground))]">
               Type DELETE to confirm
               <input
+                ref={deleteConfirmationRef}
                 value={deleteConfirmation}
                 onChange={(event) => {
                   setDeleteConfirmation(event.target.value);
@@ -377,9 +399,13 @@ export function AccountSettingsPage() {
           </div>
         ) : (
           <Button
+            ref={deleteTriggerRef}
             variant="outline"
             className="mt-4 gap-2 border-red-500/35 text-red-700 hover:bg-red-500/10 dark:text-red-300"
-            onClick={() => setIsConfirmingDelete(true)}
+            onClick={() => {
+              shouldRestoreDeleteFocusRef.current = true;
+              setIsConfirmingDelete(true);
+            }}
           >
             <Trash2 className="size-4" />
             Delete account

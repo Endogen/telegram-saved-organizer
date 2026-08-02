@@ -107,7 +107,9 @@ def _build_category(
     )
 
 
-def _build_message(*, message_id: int, category_id: int, user_id: str = USER_ID) -> Message:
+def _build_message(
+    *, message_id: int, category_id: int, user_id: str = USER_ID
+) -> Message:
     timestamp = datetime(2026, 2, 1, 9, 0, tzinfo=UTC)
     return Message(
         id=message_id,
@@ -142,13 +144,18 @@ def _build_user() -> User:
 async def test_list_categories_returns_counts_in_position_order() -> None:
     session = _FakeSession()
     first = _build_category(category_id=3, name="Audio", slug="audio", position=2)
-    second = _build_category(category_id=9, name="Other", slug="other", position=8, is_default=True)
+    second = _build_category(
+        category_id=9, name="Other", slug="other", position=8, is_default=True
+    )
     session.execute_values = [[(first, 5), (second, 11)]]
 
     service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
     result = await service.list_categories()
 
-    assert [(item.category.slug, item.message_count) for item in result] == [("audio", 5), ("other", 11)]
+    assert [(item.category.slug, item.message_count) for item in result] == [
+        ("audio", 5),
+        ("other", 11),
+    ]
     statement = session.execute_calls[0]
     assert "LEFT OUTER JOIN messages" in str(statement)
     assert "categories.user_id =" in str(statement)
@@ -211,22 +218,39 @@ async def test_create_category_builds_unicode_aware_slugs(
 
 
 @pytest.mark.asyncio
-async def test_create_category_limits_casefold_expansion_to_slug_column_length() -> None:
+async def test_create_category_rejects_casefold_expansion_beyond_name_key_limit() -> (
+    None
+):
+    session = _FakeSession()
+    service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="too long after Unicode normalization"):
+        await service.create_category(
+            name="ß" * 100,
+            icon="bookmark",
+            color="#22C55E",
+            position=3,
+        )
+
+    assert session.add_calls == []
+    assert service._slugify(("ß" * 49) + "A_" + ("ß" * 49)) == ("s" * 98) + "a"
+
+
+@pytest.mark.asyncio
+async def test_create_category_stores_canonical_unicode_name_and_key() -> None:
     session = _FakeSession()
     session.scalar_values = [None, None]
     service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
 
     category = await service.create_category(
-        name="ß" * 100,
+        name="  CAFE\u0301 \u01f0  ",
         icon="bookmark",
         color="#22C55E",
         position=3,
     )
 
-    assert category.slug == "s" * 100
-    assert len(category.slug) == 100
-    assert not category.slug.endswith("-")
-    assert service._slugify(("ß" * 49) + "A_" + ("ß" * 49)) == ("s" * 98) + "a"
+    assert category.name == "CAFÉ ǰ"
+    assert category.normalized_name == "café ǰ"
 
 
 @pytest.mark.asyncio
@@ -240,7 +264,9 @@ async def test_create_category_detects_unicode_slug_collision() -> None:
     session.scalar_values = [None, existing]
     service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
 
-    with pytest.raises(CategoryConflictError, match="Category slug '稍后-阅读' already exists."):
+    with pytest.raises(
+        CategoryConflictError, match="Category slug '稍后-阅读' already exists."
+    ):
         await service.create_category(
             name="稍后___阅读",
             icon="bookmark",
@@ -318,7 +344,9 @@ async def test_update_category_rejects_unknown_update_fields() -> None:
     session.scalar_values = [category]
     service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
 
-    with pytest.raises(ValueError, match="Unsupported update field\\(s\\): is_default."):
+    with pytest.raises(
+        ValueError, match="Unsupported update field\\(s\\): is_default."
+    ):
         await service.update_category(category_id=3, updates={"is_default": True})
 
 
@@ -335,7 +363,9 @@ async def test_delete_category_raises_when_category_missing() -> None:
 async def test_delete_category_moves_messages_to_other_and_deletes() -> None:
     session = _FakeSession()
     source = _build_category(category_id=2, name="Links", slug="links", position=2)
-    other = _build_category(category_id=8, name="Other", slug="other", position=8, is_default=True)
+    other = _build_category(
+        category_id=8, name="Other", slug="other", position=8, is_default=True
+    )
     session.scalar_values = [source, other]
     session.execute_rowcounts = [2]
     service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
@@ -363,7 +393,9 @@ async def test_delete_category_reassigns_messages_before_deleting_with_sqlite() 
 
         async with session_factory() as session:
             session.add(_build_user())
-            source = _build_category(category_id=None, name="Temporary", slug="temporary")
+            source = _build_category(
+                category_id=None, name="Temporary", slug="temporary"
+            )
             fallback = _build_category(
                 category_id=None,
                 name="Other",
@@ -384,14 +416,16 @@ async def test_delete_category_reassigns_messages_before_deleting_with_sqlite() 
             await session.commit()
 
         async with session_factory() as session:
-            result = await CategoryService(session=session, user_id=USER_ID).delete_category(
-                category_id=source_id
-            )
+            result = await CategoryService(
+                session=session, user_id=USER_ID
+            ).delete_category(category_id=source_id)
 
             assert result.moved_message_count == 2
             assert result.destination_category_id == fallback_id
             assert await session.get(Category, source_id) is None
-            category_ids = await session.scalars(select(Message.category_id).order_by(Message.id))
+            category_ids = await session.scalars(
+                select(Message.category_id).order_by(Message.id)
+            )
             assert list(category_ids) == [fallback_id, fallback_id]
     finally:
         await engine.dispose()
@@ -400,7 +434,9 @@ async def test_delete_category_reassigns_messages_before_deleting_with_sqlite() 
 @pytest.mark.asyncio
 async def test_delete_category_rejects_other_category() -> None:
     session = _FakeSession()
-    other = _build_category(category_id=8, name="Other", slug="other", position=8, is_default=True)
+    other = _build_category(
+        category_id=8, name="Other", slug="other", position=8, is_default=True
+    )
     session.scalar_values = [other]
     service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
 
@@ -413,11 +449,15 @@ async def test_delete_category_rejects_other_category() -> None:
 @pytest.mark.asyncio
 async def test_delete_category_rejects_every_default_category() -> None:
     session = _FakeSession()
-    built_in = _build_category(category_id=2, name="Links", slug="links", position=2, is_default=True)
+    built_in = _build_category(
+        category_id=2, name="Links", slug="links", position=2, is_default=True
+    )
     session.scalar_values = [built_in]
     service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
 
-    with pytest.raises(CategoryProtectedError, match="Default categories cannot be deleted"):
+    with pytest.raises(
+        CategoryProtectedError, match="Default categories cannot be deleted"
+    ):
         await service.delete_category(category_id=2)
 
     assert session.commit_calls == 0
@@ -430,7 +470,9 @@ async def test_delete_category_raises_when_fallback_is_missing() -> None:
     session.scalar_values = [source, None]
     service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
 
-    with pytest.raises(CategoryNotFoundError, match="Fallback category 'other' was not found."):
+    with pytest.raises(
+        CategoryNotFoundError, match="Fallback category 'other' was not found."
+    ):
         await service.delete_category(category_id=4)
 
     assert session.commit_calls == 0
@@ -443,7 +485,9 @@ async def test_create_category_raises_conflict_when_slug_exists() -> None:
     session.scalar_values = [7, None, existing]
     service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
 
-    with pytest.raises(CategoryConflictError, match="Category slug 'read-later' already exists."):
+    with pytest.raises(
+        CategoryConflictError, match="Category slug 'read-later' already exists."
+    ):
         await service.create_category(
             name="Read Later",
             icon="bookmark",
@@ -453,13 +497,17 @@ async def test_create_category_raises_conflict_when_slug_exists() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_category_rolls_back_and_raises_conflict_on_integrity_error() -> None:
+async def test_create_category_rolls_back_and_raises_conflict_on_integrity_error() -> (
+    None
+):
     session = _FakeSession()
     session.scalar_values = [7, None, None]
     session.commit_error = IntegrityError("insert", {}, Exception("duplicate"))
     service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
 
-    with pytest.raises(CategoryConflictError, match="Category name or slug already exists."):
+    with pytest.raises(
+        CategoryConflictError, match="Category name or slug already exists."
+    ):
         await service.create_category(
             name="Read Later",
             icon="bookmark",
@@ -502,7 +550,9 @@ async def test_create_category_rejects_invalid_color_pattern() -> None:
     session = _FakeSession()
     service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
 
-    with pytest.raises(ValueError, match="color must be a valid hex value like #22C55E."):
+    with pytest.raises(
+        ValueError, match="color must be a valid hex value like #22C55E."
+    ):
         await service.create_category(name="Notes", icon="note", color="#GGGGGG")
 
 
@@ -512,7 +562,9 @@ async def test_create_category_rejects_negative_position() -> None:
     service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
 
     with pytest.raises(ValueError, match="position must be a non-negative integer."):
-        await service.create_category(name="Notes", icon="note", color="#22C55E", position=-1)
+        await service.create_category(
+            name="Notes", icon="note", color="#22C55E", position=-1
+        )
 
 
 @pytest.mark.asyncio
@@ -520,5 +572,7 @@ async def test_create_category_rejects_name_without_alphanumeric_characters() ->
     session = _FakeSession()
     service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
 
-    with pytest.raises(ValueError, match="name must include at least one alphanumeric character."):
+    with pytest.raises(
+        ValueError, match="name must include at least one alphanumeric character."
+    ):
         await service.create_category(name="!!!", icon="note", color="#22C55E")

@@ -10,8 +10,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon.errors import SessionPasswordNeededError
 
-from app.auth.schemas import TelegramConnectionState
-from app.models import ScanJob, TelegramConnection
+from app.auth.schemas import (
+    TelegramAccountSummary,
+    TelegramConnectionResponse,
+    TelegramConnectionState,
+)
+from app.models import Message, ScanJob, TelegramConnection
 from app.security import SecretDecryptionError, decrypt_secret, encrypt_secret
 from app.telegram.client import revoke_telegram_connection, short_lived_client
 
@@ -45,7 +49,9 @@ class TelegramAuthService:
         connection = await self._load_connection()
         if connection is None or not connection.session_encrypted:
             return TelegramConnectionState.DISCONNECTED
-        if connection.state == "pending" and self._challenge_expired(connection.pending_expires_at):
+        if connection.state == "pending" and self._challenge_expired(
+            connection.pending_expires_at
+        ):
             self._erase_expired_challenge(connection)
             await self._session.commit()
             return TelegramConnectionState.DISCONNECTED
@@ -77,7 +83,9 @@ class TelegramAuthService:
             session_string = None
         async with short_lived_client(session_string=session_string) as client:
             if await client.is_user_authorized():
-                await self._bind_authorized_principal(connection=connection, client=client)
+                await self._bind_authorized_principal(
+                    connection=connection, client=client
+                )
                 self._clear_challenge(connection)
                 connection.state = "connected"
                 self._persist_client_session(connection=connection, client=client)
@@ -87,7 +95,9 @@ class TelegramAuthService:
             sent_code = await client.send_code_request(normalized_phone)
             phone_code_hash = getattr(sent_code, "phone_code_hash", None)
             if not phone_code_hash:
-                raise TelegramVerificationError("Telegram did not return a verification challenge.")
+                raise TelegramVerificationError(
+                    "Telegram did not return a verification challenge."
+                )
             connection.phone_encrypted = encrypt_secret(
                 normalized_phone,
                 context=self._secret_context("phone"),
@@ -107,10 +117,14 @@ class TelegramAuthService:
         await self._commit_connection()
         return TelegramConnectionState.CODE_REQUIRED
 
-    async def verify(self, *, code: str | None, password: str | None) -> TelegramConnectionState:
+    async def verify(
+        self, *, code: str | None, password: str | None
+    ) -> TelegramConnectionState:
         connection = await self._load_connection(for_update=True)
         if connection is None or not connection.session_encrypted:
-            raise TelegramConnectionNotFoundError("Telegram verification has not been started.")
+            raise TelegramConnectionNotFoundError(
+                "Telegram verification has not been started."
+            )
 
         # Verification requests can be retried by browsers and reverse proxies.
         # Once the connection is complete, treat a duplicate request as an
@@ -119,12 +133,16 @@ class TelegramAuthService:
         if connection.state == "connected":
             return TelegramConnectionState.CONNECTED
         if connection.state != "pending":
-            raise TelegramConnectionNotFoundError("Telegram verification has not been started.")
+            raise TelegramConnectionNotFoundError(
+                "Telegram verification has not been started."
+            )
 
         if self._challenge_expired(connection.pending_expires_at):
             self._erase_expired_challenge(connection)
             await self._session.commit()
-            raise TelegramChallengeExpiredError("Telegram verification challenge expired.")
+            raise TelegramChallengeExpiredError(
+                "Telegram verification challenge expired."
+            )
 
         try:
             phone = self._decrypt_required(connection.phone_encrypted, purpose="phone")
@@ -161,12 +179,16 @@ class TelegramAuthService:
 
             authorized = await client.is_user_authorized()
             if authorized:
-                await self._bind_authorized_principal(connection=connection, client=client)
+                await self._bind_authorized_principal(
+                    connection=connection, client=client
+                )
             self._persist_client_session(connection=connection, client=client)
 
         if not authorized:
             await self._session.commit()
-            raise TelegramVerificationError("Telegram did not authorize this connection.")
+            raise TelegramVerificationError(
+                "Telegram did not authorize this connection."
+            )
 
         self._clear_challenge(connection)
         connection.state = "connected"
@@ -178,13 +200,52 @@ class TelegramAuthService:
         await self._session.commit()
         return TelegramConnectionState.DISCONNECTED
 
-    async def _load_connection(self, *, for_update: bool = False) -> TelegramConnection | None:
-        statement = select(TelegramConnection).where(TelegramConnection.user_id == self._user_id)
+    async def response(
+        self,
+        *,
+        state: TelegramConnectionState,
+    ) -> TelegramConnectionResponse:
+        """Build a UI-safe response without exposing persisted phone plaintext."""
+
+        if state is TelegramConnectionState.DISCONNECTED:
+            return TelegramConnectionResponse(state=state)
+
+        connection = await self._load_connection()
+        phone_masked: str | None = None
+        if connection is not None:
+            try:
+                phone = self._decrypt_optional(
+                    connection.phone_encrypted,
+                    purpose="phone",
+                )
+            except SecretDecryptionError:
+                phone = None
+            if phone is not None:
+                phone_masked = self._mask_phone(phone)
+
+        if state is TelegramConnectionState.CONNECTED:
+            account = (
+                TelegramAccountSummary(phone_masked=phone_masked)
+                if phone_masked is not None
+                else None
+            )
+            return TelegramConnectionResponse(state=state, account=account)
+
+        return TelegramConnectionResponse(state=state, phone_masked=phone_masked)
+
+    async def _load_connection(
+        self, *, for_update: bool = False
+    ) -> TelegramConnection | None:
+        statement = select(TelegramConnection).where(
+            TelegramConnection.user_id == self._user_id
+        )
         if for_update:
             statement = statement.with_for_update()
         return await self._session.scalar(statement)
 
-    def _persist_client_session(self, *, connection: TelegramConnection, client: Any) -> None:
+    def _persist_client_session(
+        self, *, connection: TelegramConnection, client: Any
+    ) -> None:
         serialized = client.session.save()
         connection.session_encrypted = encrypt_secret(
             serialized,
@@ -200,7 +261,9 @@ class TelegramAuthService:
         identity = await client.get_me()
         telegram_user_id = getattr(identity, "id", None)
         if isinstance(telegram_user_id, bool) or not isinstance(telegram_user_id, int):
-            raise TelegramVerificationError("Telegram did not return an account identity.")
+            raise TelegramVerificationError(
+                "Telegram did not return an account identity."
+            )
         conflict = await self._session.scalar(
             select(TelegramConnection.id).where(
                 TelegramConnection.telegram_user_id == telegram_user_id,
@@ -223,6 +286,18 @@ class TelegramAuthService:
         connection.telegram_user_id = telegram_user_id
 
     async def _cancel_active_scans(self) -> None:
+        active_job_ids = select(ScanJob.id).where(
+            ScanJob.user_id == self._user_id,
+            ScanJob.state.in_(("pending", "running", "stopping")),
+        )
+        await self._session.execute(
+            update(Message)
+            .where(
+                Message.user_id == self._user_id,
+                Message.last_seen_replacement_job_id.in_(active_job_ids),
+            )
+            .values(last_seen_replacement_job_id=None)
+        )
         await self._session.execute(
             update(ScanJob)
             .where(
@@ -269,11 +344,20 @@ class TelegramAuthService:
 
     def _decrypt_required(self, value: str | None, *, purpose: str) -> str:
         if not value:
-            raise TelegramConnectionNotFoundError("Telegram verification challenge is incomplete.")
+            raise TelegramConnectionNotFoundError(
+                "Telegram verification challenge is incomplete."
+            )
         return decrypt_secret(value, context=self._secret_context(purpose))
 
     def _secret_context(self, purpose: str) -> str:
         return f"telegram:{self._user_id}:{purpose}"
+
+    @staticmethod
+    def _mask_phone(phone: str) -> str:
+        digits = "".join(character for character in phone if character in "0123456789")
+        if len(digits) <= 4:
+            return "••••"
+        return f"••• ••• {digits[-4:]}"
 
     @staticmethod
     def _challenge_expired(expires_at: datetime | None) -> bool:

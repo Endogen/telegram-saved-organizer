@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from app.main import create_app
 from app.tags.router import get_tag_service
 from app.tags.service import (
+    BulkTagResult,
     MessageNotFoundError,
     TagAssignmentNotFoundError,
     TagConflictError,
@@ -33,6 +34,7 @@ class _FakeTagService:
         self.update_calls: list[tuple[int, dict[str, Any]]] = []
         self.delete_calls: list[int] = []
         self.add_calls: list[tuple[int, tuple[int, ...]]] = []
+        self.bulk_add_calls: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
         self.remove_calls: list[tuple[int, int]] = []
 
         self.list_error: Exception | None = None
@@ -40,6 +42,7 @@ class _FakeTagService:
         self.update_error: Exception | None = None
         self.delete_error: Exception | None = None
         self.add_error: Exception | None = None
+        self.bulk_add_error: Exception | None = None
         self.remove_error: Exception | None = None
 
         self.tags_result = [
@@ -49,6 +52,7 @@ class _FakeTagService:
         self.create_result = _FakeTag(id=4, name="archive", color="#14B8A6")
         self.update_result = _FakeTag(id=2, name="reading", color="#2563EB")
         self.add_result = self.tags_result
+        self.bulk_add_result = BulkTagResult(updated_count=2, assignment_count=4)
         self.remove_result = [_FakeTag(id=2, name="read-later", color="#22C55E")]
 
     async def list_tags(self) -> list[_FakeTag]:
@@ -88,6 +92,17 @@ class _FakeTagService:
         if self.add_error is not None:
             raise self.add_error
         return self.add_result
+
+    async def bulk_add_tags_to_messages(
+        self,
+        *,
+        message_ids: list[int],
+        tag_ids: list[int],
+    ) -> BulkTagResult:
+        self.bulk_add_calls.append((tuple(message_ids), tuple(tag_ids)))
+        if self.bulk_add_error is not None:
+            raise self.bulk_add_error
+        return self.bulk_add_result
 
     async def remove_tag_from_message(self, *, message_id: int, tag_id: int) -> list[_FakeTag]:
         self.remove_calls.append((message_id, tag_id))
@@ -273,6 +288,65 @@ async def test_add_tags_to_message_endpoint_returns_updated_tags(
         ],
     }
     assert service.add_calls == [(12, (2, 4))]
+
+
+@pytest.mark.asyncio
+async def test_bulk_add_tags_endpoint_deduplicates_ids_and_returns_summary(
+    tag_context: tuple[Any, _FakeTagService],
+) -> None:
+    app, service = tag_context
+    service.bulk_add_result = BulkTagResult(updated_count=2, assignment_count=3)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/messages/bulk-tags",
+            json={"message_ids": [12, 12, 13], "tag_ids": [2, 4, 2]},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"updated_count": 2, "assignment_count": 3}
+    assert service.bulk_add_calls == [((12, 13), (2, 4))]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        MessageNotFoundError("Message 999 was not found."),
+        TagNotFoundError("Tag 999 was not found."),
+    ],
+)
+async def test_bulk_add_tags_endpoint_returns_not_found_for_unowned_or_missing_ids(
+    tag_context: tuple[Any, _FakeTagService],
+    error: Exception,
+) -> None:
+    app, service = tag_context
+    service.bulk_add_error = error
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/messages/bulk-tags",
+            json={"message_ids": [12], "tag_ids": [2]},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == str(error)
+
+
+@pytest.mark.asyncio
+async def test_bulk_add_tags_endpoint_rejects_invalid_payload(
+    tag_context: tuple[Any, _FakeTagService],
+) -> None:
+    app, service = tag_context
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/messages/bulk-tags",
+            json={"message_ids": [], "tag_ids": [0]},
+        )
+
+    assert response.status_code == 422
+    assert service.bulk_add_calls == []
 
 
 @pytest.mark.asyncio

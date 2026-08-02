@@ -39,6 +39,7 @@ describe("AppLayout", () => {
           id: 1,
           name: "Text",
           slug: "text",
+          system_key: "text",
           icon: "message-square",
           color: "#6B7280",
           position: 1,

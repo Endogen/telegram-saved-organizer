@@ -33,6 +33,7 @@ export function CategoriesPage() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const suggestedPosition = categories.reduce((highest, category) => Math.max(highest, category.position), 0) + 1;
+  const fallbackCategoryName = categories.find((category) => category.system_key === "other")?.name ?? "Other";
 
   function openCreateDialog() {
     setEditingCategory(null);
@@ -102,7 +103,7 @@ export function CategoriesPage() {
       const deletedName = deletingCategory.name;
       const result = await deleteCategory(deletingCategory.id);
       const movedSummary = result.moved_message_count > 0
-        ? ` ${messageCountLabel(result.moved_message_count)} moved to Other.`
+        ? ` ${messageCountLabel(result.moved_message_count)} moved to ${fallbackCategoryName}.`
         : "";
       setSuccessMessage(`Deleted “${deletedName}”.${movedSummary}`);
       setDeletingCategory(null);
@@ -173,10 +174,11 @@ export function CategoriesPage() {
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex min-w-0 items-start gap-3">
                     <span
-                      className="inline-flex size-11 shrink-0 items-center justify-center rounded-xl border"
-                      style={{ color: category.color, borderColor: `${category.color}55`, backgroundColor: `${category.color}14` }}
+                      aria-hidden="true"
+                      className="inline-flex size-11 shrink-0 items-center justify-center rounded-xl border bg-[hsl(var(--muted))]"
+                      style={{ borderColor: `${category.color}55` }}
                     >
-                      <Icon className="size-5" aria-hidden="true" />
+                      <Icon className="size-5" style={{ color: category.color }} />
                     </span>
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
@@ -192,7 +194,13 @@ export function CategoriesPage() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                    <Button variant="outline" size="sm" className="gap-2" onClick={() => openEditDialog(category)}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => openEditDialog(category)}
+                      aria-label={`Edit ${category.name}`}
+                    >
                       <Pencil className="size-3.5" />
                       Edit
                     </Button>
@@ -202,13 +210,21 @@ export function CategoriesPage() {
                       className="gap-2 border-red-500/30 text-red-700 hover:bg-red-500/10 dark:text-red-300"
                       onClick={() => openDeleteDialog(category)}
                       disabled={category.is_default}
-                      title={category.is_default ? "Built-in categories cannot be deleted" : undefined}
+                      aria-label={`Delete ${category.name}`}
+                      aria-describedby={category.is_default ? `category-${category.id}-delete-description` : undefined}
+                      title={category.is_default ? `“${category.name}” is built in and cannot be deleted` : undefined}
                     >
                       <Trash2 className="size-3.5" />
                       Delete
                     </Button>
+                    {category.is_default ? (
+                      <span id={`category-${category.id}-delete-description`} className="sr-only">
+                        Built-in categories can be edited, but they cannot be deleted.
+                      </span>
+                    ) : null}
                     <Link
                       to={`/messages?category=${encodeURIComponent(category.slug)}`}
+                      aria-label={`View messages in ${category.name}`}
                       className="inline-flex h-9 items-center justify-center rounded-md px-3 text-sm font-semibold text-[hsl(var(--primary))] transition-colors hover:bg-[hsl(var(--primary)/0.1)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
                     >
                       View messages
@@ -235,7 +251,7 @@ export function CategoriesPage() {
         open={deletingCategory !== null}
         title={deletingCategory ? `Delete “${deletingCategory.name}”?` : "Delete category?"}
         description={deletingCategory
-          ? `${messageCountLabel(deletingCategory.message_count)} will be moved to Other. This category itself cannot be recovered.`
+          ? `${messageCountLabel(deletingCategory.message_count)} will be moved to ${fallbackCategoryName}. This category itself cannot be recovered.`
           : "This category cannot be recovered."}
         confirmLabel="Delete category"
         isSubmitting={isDeleting}
