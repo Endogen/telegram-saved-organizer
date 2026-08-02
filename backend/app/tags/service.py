@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +31,14 @@ class TagAssignmentNotFoundError(RuntimeError):
     """Raised when a message does not contain the requested tag."""
 
 
+@dataclass(slots=True, frozen=True)
+class TagWithCount:
+    """Tag paired with its number of message assignments."""
+
+    tag: Tag
+    message_count: int
+
+
 @dataclass(slots=True)
 class TagService:
     """CRUD operations for tags and message-tag associations."""
@@ -49,6 +57,25 @@ class TagService:
         tag_rows = await self.session.scalars(statement)
         return list(tag_rows)
 
+    async def list_tags_with_counts(self) -> list[TagWithCount]:
+        """Return all tags ordered by name with assignment counts."""
+
+        statement = (
+            select(Tag, func.count(MessageTag.message_id))
+            .outerjoin(
+                MessageTag,
+                (MessageTag.user_id == Tag.user_id) & (MessageTag.tag_id == Tag.id),
+            )
+            .where(Tag.user_id == self.user_id)
+            .group_by(Tag.id)
+            .order_by(Tag.normalized_name.asc(), Tag.id.asc())
+        )
+        rows = await self.session.execute(statement)
+        return [
+            TagWithCount(tag=tag, message_count=int(message_count or 0))
+            for tag, message_count in rows.all()
+        ]
+
     async def create_tag(self, *, name: str, color: str | None = None) -> Tag:
         """Create a tag."""
 
@@ -63,6 +90,37 @@ class TagService:
             color=normalized_color,
         )
         self.session.add(tag)
+        await self._commit_with_conflict_handling()
+        return tag
+
+    async def update_tag(self, *, tag_id: int, updates: Mapping[str, Any]) -> Tag:
+        """Update a tag's mutable fields."""
+
+        normalized_tag_id = self._normalize_positive_int(value=tag_id, field_name="tag_id")
+        if not updates:
+            raise ValueError("At least one update field must be provided.")
+
+        unknown_fields = set(updates) - {"name", "color"}
+        if unknown_fields:
+            unknown_field_list = ", ".join(sorted(unknown_fields))
+            raise ValueError(f"Unsupported update field(s): {unknown_field_list}.")
+
+        tag = await self._load_tag(tag_id=normalized_tag_id)
+        if tag is None:
+            raise TagNotFoundError(f"Tag {normalized_tag_id} was not found.")
+
+        if "name" in updates:
+            normalized_name = self._normalize_name(updates["name"])
+            await self._ensure_name_available(
+                name=normalized_name,
+                exclude_tag_id=normalized_tag_id,
+            )
+            tag.name = normalized_name
+            tag.normalized_name = normalized_name.casefold()
+
+        if "color" in updates:
+            tag.color = self._normalize_color(updates["color"])
+
         await self._commit_with_conflict_handling()
         return tag
 
@@ -106,7 +164,17 @@ class TagService:
                     )
                 )
 
-        await self._commit_with_conflict_handling()
+        try:
+            await self.session.commit()
+        except IntegrityError as exc:
+            await self.session.rollback()
+            # Two requests may race after both observe the assignment as
+            # absent. If the competing request won, the requested final state
+            # already exists and this operation is idempotently successful.
+            persisted_tags = await self._load_message_tags(message_id=normalized_message_id)
+            if set(normalized_tag_ids).issubset({tag.id for tag in persisted_tags}):
+                return persisted_tags
+            raise TagConflictError("A tag assignment changed concurrently.") from exc
         return await self._load_message_tags(message_id=normalized_message_id)
 
     async def remove_tag_from_message(self, *, message_id: int, tag_id: int) -> list[Tag]:

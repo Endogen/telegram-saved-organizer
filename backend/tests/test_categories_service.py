@@ -343,6 +343,19 @@ async def test_delete_category_rejects_other_category() -> None:
 
 
 @pytest.mark.asyncio
+async def test_delete_category_rejects_every_default_category() -> None:
+    session = _FakeSession()
+    built_in = _build_category(category_id=2, name="Links", slug="links", position=2, is_default=True)
+    session.scalar_values = [built_in]
+    service = CategoryService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    with pytest.raises(CategoryProtectedError, match="Default categories cannot be deleted"):
+        await service.delete_category(category_id=2)
+
+    assert session.commit_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_delete_category_raises_when_fallback_is_missing() -> None:
     session = _FakeSession()
     source = _build_category(category_id=4, name="Temp", slug="temp", position=10)

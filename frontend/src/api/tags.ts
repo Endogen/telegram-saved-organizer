@@ -13,6 +13,14 @@ type CreateTagRequest = {
   color?: string | null;
 };
 
+export type ManagedTag = MessageTag & {
+  message_count: number;
+};
+
+type DeleteTagResponse = {
+  deleted: boolean;
+};
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return requestApiJson<T>(`${TAGS_BASE_PATH}${path}`, init, {
     fallbackMessage: "Tag request failed.",
@@ -23,8 +31,12 @@ function normalizeTagName(name: string): string {
   return name.trim().replace(/\s+/g, " ");
 }
 
-export async function listTags(): Promise<MessageTag[]> {
-  return requestJson<MessageTag[]>("/tags");
+export async function listTags(signal?: AbortSignal): Promise<MessageTag[]> {
+  return requestJson<MessageTag[]>("/tags", { signal });
+}
+
+export async function listManagedTags(signal?: AbortSignal): Promise<ManagedTag[]> {
+  return requestJson<ManagedTag[]>("/tags", { signal });
 }
 
 export async function createTag(payload: CreateTagRequest): Promise<MessageTag> {
@@ -37,6 +49,25 @@ export async function createTag(payload: CreateTagRequest): Promise<MessageTag> 
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name: normalizedName, color: payload.color ?? null }),
+  });
+}
+
+export async function updateTag(tagId: number, payload: CreateTagRequest): Promise<MessageTag> {
+  const normalizedName = normalizeTagName(payload.name);
+  if (normalizedName.length === 0) {
+    throw new Error("Tag name is required.");
+  }
+
+  return requestJson<MessageTag>(`/tags/${tagId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: normalizedName, color: payload.color ?? null }),
+  });
+}
+
+export async function deleteTag(tagId: number): Promise<void> {
+  await requestJson<DeleteTagResponse>(`/tags/${tagId}`, {
+    method: "DELETE",
   });
 }
 

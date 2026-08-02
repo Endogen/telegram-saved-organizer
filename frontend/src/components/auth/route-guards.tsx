@@ -100,10 +100,10 @@ function CurrentSessionBoundary({ publicOnly }: { publicOnly: boolean }) {
 
   if (publicOnly) {
     if (status === "authenticated") {
-      const defaultDestination = location.pathname === "/register"
-        ? "/onboarding/telegram"
-        : "/";
-      return <Navigate to={getSafeReturnTo(location.state) ?? defaultDestination} replace />;
+      if (location.pathname === "/register") {
+        return <Navigate to="/onboarding/telegram" replace />;
+      }
+      return <Navigate to={getSafeReturnTo(location.state) ?? "/"} replace />;
     }
     return <Outlet />;
   }

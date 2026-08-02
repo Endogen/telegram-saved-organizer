@@ -7,7 +7,7 @@ COPY frontend/ ./
 RUN npm run build
 
 
-FROM nginx:1.27-alpine AS web
+FROM nginx:1.30.4-alpine AS web
 
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=frontend-build /build/frontend/dist/ /usr/share/nginx/html/

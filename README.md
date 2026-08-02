@@ -44,7 +44,11 @@ The API deliberately refuses to start if its database is not at the current Alem
 
 The included Compose topology runs PostgreSQL, a one-shot migration service, two API processes, a dedicated durable scan worker, and Nginx for the built React app and same-origin `/api` proxy.
 
-1. Copy `.env.production.example` to `.env` and replace every placeholder.
+1. Create a private production environment file and replace every placeholder:
+
+   ```bash
+   install -m 600 .env.production.example .env
+   ```
 2. Terminate TLS in a reverse proxy on the same host in front of the loopback-bound `TSO_HTTP_PORT`.
 3. Preserve the original `Host`, forward the HTTPS scheme, overwrite `X-Forwarded-For` with the client chain, and set `TSO_PUBLIC_ORIGIN` to the exact external HTTPS origin.
 4. Start the stack with `docker compose up --build -d`.
@@ -92,5 +96,5 @@ npm test
 npm run build
 
 cd ..
-docker compose config
+docker compose config --quiet
 ```

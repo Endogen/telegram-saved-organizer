@@ -1,4 +1,4 @@
-export type CategoryWithCount = {
+export type Category = {
   id: number;
   name: string;
   slug: string;
@@ -6,5 +6,8 @@ export type CategoryWithCount = {
   color: string;
   position: number;
   is_default: boolean;
+};
+
+export type CategoryWithCount = Category & {
   message_count: number;
 };

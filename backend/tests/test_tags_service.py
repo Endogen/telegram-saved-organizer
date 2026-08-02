@@ -26,6 +26,14 @@ class _FakeScalarResult:
         return iter(self._values)
 
 
+class _FakeRowsResult:
+    def __init__(self, values: list[Any]) -> None:
+        self._values = values
+
+    def all(self) -> list[Any]:
+        return self._values
+
+
 class _FakeSession:
     def __init__(self) -> None:
         self.scalar_values: list[Any] = []
@@ -36,6 +44,7 @@ class _FakeSession:
         self.add_calls: list[Any] = []
         self.delete_calls: list[Any] = []
         self.execute_calls: list[Any] = []
+        self.execute_values: list[list[Any]] = []
         self.commit_calls = 0
         self.rollback_calls = 0
         self.commit_error: Exception | None = None
@@ -60,8 +69,10 @@ class _FakeSession:
     async def delete(self, item: Any) -> None:
         self.delete_calls.append(item)
 
-    async def execute(self, statement: Any) -> None:
+    async def execute(self, statement: Any) -> _FakeRowsResult:
         self.execute_calls.append(statement)
+        values = self.execute_values.pop(0) if self.execute_values else []
+        return _FakeRowsResult(values)
 
     async def commit(self) -> None:
         if self.commit_error is not None:
@@ -120,6 +131,23 @@ async def test_list_tags_returns_name_ordered_tags() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_tags_with_counts_is_tenant_scoped_and_ordered() -> None:
+    session = _FakeSession()
+    first = _build_tag(tag_id=1, name="a")
+    second = _build_tag(tag_id=2, name="b")
+    session.execute_values = [[(first, 3), (second, 0)]]
+    service = TagService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    result = await service.list_tags_with_counts()
+
+    assert [(item.tag.id, item.message_count) for item in result] == [(1, 3), (2, 0)]
+    statement = str(session.execute_calls[0])
+    assert "LEFT OUTER JOIN message_tags" in statement
+    assert "WHERE tags.user_id =" in statement
+    assert "ORDER BY tags.normalized_name ASC, tags.id ASC" in statement
+
+
+@pytest.mark.asyncio
 async def test_create_tag_normalizes_fields_and_commits() -> None:
     session = _FakeSession()
     session.scalar_values = [None]
@@ -154,6 +182,53 @@ async def test_create_tag_raises_conflict_when_name_exists() -> None:
     with pytest.raises(TagConflictError, match="already exists"):
         await service.create_tag(name="Read Later", color="#22C55E")
 
+    assert session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_update_tag_normalizes_fields_and_commits() -> None:
+    session = _FakeSession()
+    tag = _build_tag(tag_id=3, name="urgent")
+    session.scalar_values = [tag, None]
+    service = TagService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    result = await service.update_tag(
+        tag_id=3,
+        updates={"name": "  Follow Up  ", "color": " #2563eb "},
+    )
+
+    assert result.name == "Follow Up"
+    assert result.normalized_name == "follow up"
+    assert result.color == "#2563EB"
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_update_tag_can_remove_color() -> None:
+    session = _FakeSession()
+    tag = _build_tag(tag_id=3, name="urgent")
+    session.scalar_values = [tag]
+    service = TagService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    result = await service.update_tag(tag_id=3, updates={"color": None})
+
+    assert result.color is None
+    assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_update_tag_rejects_missing_conflicting_and_unknown_updates() -> None:
+    service = TagService(session=_FakeSession(), user_id=USER_ID)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="At least one update field"):
+        await service.update_tag(tag_id=3, updates={})
+    with pytest.raises(ValueError, match="Unsupported update field"):
+        await service.update_tag(tag_id=3, updates={"user_id": "another-user"})
+
+    session = _FakeSession()
+    session.scalar_values = [_build_tag(tag_id=3), _build_tag(tag_id=4, name="taken")]
+    service = TagService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+    with pytest.raises(TagConflictError, match="already exists"):
+        await service.update_tag(tag_id=3, updates={"name": "taken"})
     assert session.commit_calls == 0
 
 
@@ -198,6 +273,27 @@ async def test_add_tags_to_message_appends_missing_tags_and_commits() -> None:
         (USER_ID, 7, 2)
     ]
     assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_add_tags_to_message_treats_a_concurrent_duplicate_as_success() -> None:
+    session = _FakeSession()
+    message = _build_message(message_id=7, tag_ids=(1,))
+    first_tag = _build_tag(tag_id=1, name="tag-1")
+    second_tag = _build_tag(tag_id=2, name="tag-2")
+    session.scalar_values = [message]
+    session.scalars_values = [
+        [first_tag, second_tag],
+        [1],
+        [first_tag, second_tag],
+    ]
+    session.commit_error = IntegrityError("insert", {}, Exception("duplicate"))
+    service = TagService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    tags = await service.add_tags_to_message(message_id=7, tag_ids=[1, 2])
+
+    assert [tag.id for tag in tags] == [1, 2]
+    assert session.rollback_calls == 1
 
 
 @pytest.mark.asyncio

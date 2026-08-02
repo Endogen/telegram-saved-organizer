@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Category
@@ -54,18 +54,21 @@ DEFAULT_CATEGORIES: tuple[DefaultCategorySeed, ...] = (
 async def seed_default_categories(session: AsyncSession, *, user_id: str) -> list[Category]:
     """Insert a user's built-in categories that are not already present."""
 
-    default_slugs = [seed.slug for seed in DEFAULT_CATEGORIES]
+    default_keys = [seed.slug for seed in DEFAULT_CATEGORIES]
     existing_categories = await session.scalars(
         select(Category).where(
             Category.user_id == user_id,
-            Category.slug.in_(default_slugs),
+            or_(
+                Category.system_key.in_(default_keys),
+                and_(Category.system_key.is_(None), Category.slug.in_(default_keys)),
+            ),
         )
     )
-    existing_slugs = {category.slug for category in existing_categories}
+    existing_keys = {category.system_key or category.slug for category in existing_categories}
 
     created_categories: list[Category] = []
     for seed in DEFAULT_CATEGORIES:
-        if seed.slug in existing_slugs:
+        if seed.slug in existing_keys:
             continue
         created_categories.append(
             Category(

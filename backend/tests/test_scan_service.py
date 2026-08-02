@@ -185,6 +185,60 @@ async def test_start_snapshots_server_resource_limits(
 
 
 @pytest.mark.asyncio
+async def test_clear_and_rescan_deletes_messages_in_job_creation_transaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _scan_database(tmp_path=tmp_path, monkeypatch=monkeypatch) as sessions:
+        await _seed_user(sessions)
+        async with sessions() as session:
+            category = Category(
+                user_id="user-a",
+                name="Text",
+                normalized_name="text",
+                slug="text",
+                system_key="text",
+                icon="message-square",
+                color="#6B7280",
+                position=1,
+                is_default=True,
+            )
+            session.add(category)
+            await session.flush()
+            session.add(
+                Message(
+                    user_id="user-a",
+                    telegram_id=1,
+                    telegram_user_id=TELEGRAM_USER_ID,
+                    connection_generation=CONNECTION_GENERATION,
+                    content="old import",
+                    date=datetime.now(tz=UTC),
+                    category_id=category.id,
+                    raw_data={},
+                )
+            )
+            await session.commit()
+
+        async with sessions() as session:
+            service = TelegramScanService(session=session, user_id="user-a")
+
+            async def validate() -> SimpleNamespace:
+                return SimpleNamespace(
+                    telegram_user_id=TELEGRAM_USER_ID,
+                    generation=CONNECTION_GENERATION,
+                )
+
+            monkeypatch.setattr(service, "_validate_authorized_connection", validate)
+            job = await service.start(page_size=25, clear_existing=True)
+
+        async with sessions() as session:
+            assert list(await session.scalars(select(Message))) == []
+            persisted_job = await session.get(ScanJob, job.id)
+            assert persisted_job is not None
+            assert persisted_job.state == "pending"
+
+
+@pytest.mark.asyncio
 async def test_stop_cancels_pending_job_durably() -> None:
     job = SimpleNamespace(
         id="job-a",

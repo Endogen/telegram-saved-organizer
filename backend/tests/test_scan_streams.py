@@ -112,7 +112,10 @@ async def test_stream_endpoint_returns_429_when_user_slots_are_full(
     with pytest.raises(HTTPException) as caught:
         await scan_status_stream(
             request=request,
-            user=SimpleNamespace(id="user-a"),
+            context=SimpleNamespace(
+                user=SimpleNamespace(id="user-a"),
+                web_session=SimpleNamespace(id="session-a"),
+            ),
             max_events=None,
         )
 

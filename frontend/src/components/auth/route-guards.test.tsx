@@ -78,6 +78,22 @@ describe("auth route guards", () => {
     expect(await screen.findByText("/onboarding/telegram|")).toBeInTheDocument();
   });
 
+  it("does not let a protected return path skip onboarding after registration", async () => {
+    authMocks.useAuth.mockReturnValue({ status: "authenticated" });
+    render(
+      <MemoryRouter initialEntries={[{ pathname: "/register", state: { returnTo: "/messages" } }]}>
+        <Routes>
+          <Route element={<PublicOnly />}><Route path="register" element={<div>Register</div>} /></Route>
+          <Route path="onboarding/telegram" element={<LocationProbe />} />
+          <Route path="messages" element={<div>Messages</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("/onboarding/telegram|")).toBeInTheDocument();
+    expect(screen.queryByText("Messages")).not.toBeInTheDocument();
+  });
+
   it("rejects external and recursive auth return targets", () => {
     expect(getSafeReturnTo({ returnTo: "https://example.com" })).toBeNull();
     expect(getSafeReturnTo({ returnTo: "//example.com" })).toBeNull();

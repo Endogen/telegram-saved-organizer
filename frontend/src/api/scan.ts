@@ -1,21 +1,29 @@
 import type { ScanStatus } from "@/types/scan";
-import { requestJson } from "@/api/client";
+import { ApiRequestError, requestJson } from "@/api/client";
 
 const SCAN_BASE_PATH = "/api/scan";
 
 async function requestScanStatus(path: string, init?: RequestInit): Promise<ScanStatus> {
-  return requestJson<ScanStatus>(`${SCAN_BASE_PATH}${path}`, init, {
-    fallbackMessage: "Scan request failed.",
-  });
+  try {
+    return await requestJson<ScanStatus>(`${SCAN_BASE_PATH}${path}`, init, {
+      fallbackMessage: "Scan request failed.",
+    });
+  } catch (error) {
+    if (error instanceof ApiRequestError && error.status === 409 && error.detail === "telegram_not_connected") {
+      throw new Error("Connect Telegram before starting a scan.");
+    }
+    throw error;
+  }
 }
 
 export async function fetchScanStatus(): Promise<ScanStatus> {
   return requestScanStatus("/status");
 }
 
-export async function startScan(pageSize = 100): Promise<ScanStatus> {
+export async function startScan(pageSize = 100, clearExisting = false): Promise<ScanStatus> {
   const normalizedPageSize = Number.isFinite(pageSize) ? Math.min(1000, Math.max(1, Math.trunc(pageSize))) : 100;
-  return requestScanStatus(`/start?page_size=${normalizedPageSize}`, {
+  const clearQuery = clearExisting ? "&clear_existing=true" : "";
+  return requestScanStatus(`/start?page_size=${normalizedPageSize}${clearQuery}`, {
     method: "POST",
   });
 }

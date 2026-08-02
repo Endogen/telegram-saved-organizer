@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.accounts.dependencies import get_current_user
@@ -23,6 +25,8 @@ from app.database import get_session
 from app.models import User
 
 router = APIRouter(prefix="/categories", tags=["categories"])
+MAX_DB_IDENTIFIER = 2**63 - 1
+CategoryIdentifier = Annotated[int, Path(ge=1, le=MAX_DB_IDENTIFIER)]
 
 
 async def get_category_service(
@@ -58,7 +62,7 @@ async def create_category(
 
 @router.patch("/{category_id}", response_model=CategoryResponse)
 async def update_category(
-    category_id: int,
+    category_id: CategoryIdentifier,
     payload: CategoryUpdateRequest,
     service: CategoryService = Depends(get_category_service),
 ) -> CategoryResponse:
@@ -78,7 +82,7 @@ async def update_category(
 
 @router.delete("/{category_id}", response_model=CategoryDeleteResponse)
 async def delete_category(
-    category_id: int,
+    category_id: CategoryIdentifier,
     service: CategoryService = Depends(get_category_service),
 ) -> CategoryDeleteResponse:
     try:

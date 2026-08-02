@@ -15,6 +15,8 @@ const LoginPage = lazy(() => import("@/pages/login-page").then((module) => ({ de
 const RegisterPage = lazy(() => import("@/pages/register-page").then((module) => ({ default: module.RegisterPage })));
 const AccountSettingsPage = lazy(() => import("@/pages/account-settings-page").then((module) => ({ default: module.AccountSettingsPage })));
 const SessionsPage = lazy(() => import("@/pages/sessions-page").then((module) => ({ default: module.SessionsPage })));
+const CategoriesPage = lazy(() => import("@/pages/categories-page").then((module) => ({ default: module.CategoriesPage })));
+const TagsPage = lazy(() => import("@/pages/tags-page").then((module) => ({ default: module.TagsPage })));
 const NotFoundPage = lazy(() => import("@/pages/not-found-page").then((module) => ({ default: module.NotFoundPage })));
 
 function lazyRoute(element: ReactNode) {
@@ -59,6 +61,8 @@ export const router = createBrowserRouter([
               { path: "settings/telegram", element: lazyRoute(<ConnectPage />) },
               { path: "settings/account", element: lazyRoute(<AccountSettingsPage />) },
               { path: "settings/sessions", element: lazyRoute(<SessionsPage />) },
+              { path: "settings/categories", element: lazyRoute(<CategoriesPage />) },
+              { path: "settings/tags", element: lazyRoute(<TagsPage />) },
               { path: "connect", element: <Navigate to="/settings/telegram" replace /> },
               { path: "*", element: lazyRoute(<NotFoundPage />) },
             ],

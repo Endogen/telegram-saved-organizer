@@ -5,15 +5,19 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.accounts.dependencies import get_current_user
+from app.accounts.dependencies import get_auth_context, get_current_user
+from app.accounts.service import AuthContext
 from app.config import settings
 from app.database import SessionLocal, get_session
+from app.models import WebSession
 from app.telegram.client import TelegramClientNotConnectedError
 from app.telegram.scanner import ScanAlreadyRunningError
 from app.telegram.schemas import ScanStatusResponse
@@ -40,9 +44,13 @@ async def start_scan(
     user: Annotated[Any, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
     page_size: int = Query(default=100, ge=1, le=1000),
+    clear_existing: bool = Query(default=False),
 ) -> ScanStatusResponse:
     try:
-        job = await _service(session=session, user=user).start(page_size=page_size)
+        job = await _service(session=session, user=user).start(
+            page_size=page_size,
+            clear_existing=clear_existing,
+        )
     except TelegramClientNotConnectedError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="telegram_not_connected") from exc
     except ScanAlreadyRunningError as exc:
@@ -65,13 +73,29 @@ def _format_sse_event(*, event: str, data: str) -> str:
     return f"event: {event}\ndata: {data}\n\n"
 
 
+async def _stream_session_is_active(*, session_id: str, user_id: str) -> bool:
+    now = datetime.now(tz=UTC)
+    async with SessionLocal() as session:
+        record_id = await session.scalar(
+            select(WebSession.id).where(
+                WebSession.id == session_id,
+                WebSession.user_id == user_id,
+                WebSession.revoked_at.is_(None),
+                WebSession.expires_at > now,
+                WebSession.idle_expires_at > now,
+            )
+        )
+    return record_id is not None
+
+
 @router.get("/stream")
 async def scan_status_stream(
     request: Request,
-    user: Annotated[Any, Depends(get_current_user)],
+    context: Annotated[AuthContext, Depends(get_auth_context)],
     max_events: int | None = Query(default=None, ge=1, le=500),
 ) -> StreamingResponse:
-    user_id = str(user.id)
+    user_id = str(context.user.id)
+    session_id = str(context.web_session.id)
     stream_lease = await claim_scan_stream(user_id=user_id)
     if stream_lease is None:
         raise HTTPException(
@@ -92,6 +116,11 @@ async def scan_status_stream(
                     break
                 now = time.monotonic()
                 if now >= next_heartbeat_at:
+                    if not await _stream_session_is_active(
+                        session_id=session_id,
+                        user_id=user_id,
+                    ):
+                        break
                     if not await renew_scan_stream(lease=stream_lease):
                         break
                     next_heartbeat_at = now + STREAM_HEARTBEAT_SECONDS

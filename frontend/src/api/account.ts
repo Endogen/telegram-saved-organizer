@@ -43,6 +43,7 @@ export async function deleteAccount(payload: DeleteAccountPayload): Promise<void
     body: JSON.stringify(payload),
   }, {
     fallbackMessage: "Could not delete your account.",
+    notifyUnauthorized: false,
   });
 }
 
@@ -53,5 +54,6 @@ export async function changePassword(payload: ChangePasswordPayload): Promise<vo
     body: JSON.stringify(payload),
   }, {
     fallbackMessage: "Could not change your password.",
+    notifyUnauthorized: false,
   });
 }

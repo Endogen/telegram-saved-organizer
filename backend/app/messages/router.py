@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.accounts.dependencies import get_current_user
@@ -32,6 +34,9 @@ from app.telegram.client import (
 )
 
 router = APIRouter(prefix="/messages", tags=["messages"])
+MAX_DB_IDENTIFIER = 2**63 - 1
+MAX_PAGE_NUMBER = 1_000_000
+MessageIdentifier = Annotated[int, Path(ge=1, le=MAX_DB_IDENTIFIER)]
 
 
 async def get_message_service(
@@ -45,7 +50,7 @@ async def get_message_service(
 
 @router.get("", response_model=MessageListResponse)
 async def list_messages(
-    page: int = Query(default=1, ge=1),
+    page: int = Query(default=1, ge=1, le=MAX_PAGE_NUMBER),
     per_page: int = Query(default=50, ge=1, le=200),
     sort: MessageSort = Query(default=MessageSort.DATE_DESC),
     category: str | None = Query(default=None, min_length=1),
@@ -122,7 +127,7 @@ async def clear_all_messages(
 
 @router.get("/{message_id}", response_model=MessageResponse)
 async def get_message(
-    message_id: int,
+    message_id: MessageIdentifier,
     service: MessageService = Depends(get_message_service),
 ) -> MessageResponse:
     try:
@@ -134,7 +139,7 @@ async def get_message(
 
 @router.patch("/{message_id}", response_model=MessageResponse)
 async def update_message(
-    message_id: int,
+    message_id: MessageIdentifier,
     payload: MessageUpdateRequest,
     service: MessageService = Depends(get_message_service),
 ) -> MessageResponse:
@@ -154,7 +159,7 @@ async def update_message(
 
 @router.delete("/{message_id}", response_model=MessageDeleteResponse)
 async def delete_message(
-    message_id: int,
+    message_id: MessageIdentifier,
     local_only: bool = Query(default=False),
     service: MessageService = Depends(get_message_service),
 ) -> MessageDeleteResponse:

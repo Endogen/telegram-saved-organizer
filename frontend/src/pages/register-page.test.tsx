@@ -13,9 +13,9 @@ vi.mock("@/components/auth/auth-provider", () => ({
 describe("RegisterPage", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  function renderPage() {
+  function renderPage(returnTo?: string) {
     return render(
-      <MemoryRouter initialEntries={["/register"]}>
+      <MemoryRouter initialEntries={[returnTo ? { pathname: "/register", state: { returnTo } } : "/register"]}>
         <Routes>
           <Route path="register" element={<RegisterPage />} />
           <Route path="onboarding/telegram" element={<div>Telegram onboarding</div>} />
@@ -38,7 +38,7 @@ describe("RegisterPage", () => {
 
   it("preserves passwords and continues to Telegram onboarding", async () => {
     authMocks.register.mockResolvedValue({});
-    renderPage();
+    renderPage("/messages");
     fireEvent.change(screen.getByLabelText("Display name"), { target: { value: "  Ada  " } });
     fireEvent.change(screen.getByLabelText("Email address"), { target: { value: "  ada@example.com  " } });
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "  exact password  " } });

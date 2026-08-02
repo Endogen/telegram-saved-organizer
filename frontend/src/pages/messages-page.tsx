@@ -21,7 +21,7 @@ import { TagInputDialog } from "@/components/tags/tag-input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatePanel } from "@/components/ui/state-panel";
-import { useCategories } from "@/hooks/use-categories";
+import { notifyCategoriesChanged, useCategories } from "@/hooks/use-categories";
 import { MESSAGE_DROP_TO_CATEGORY_EVENT, readMessageDropToCategoryEvent } from "@/lib/message-drag-events";
 import type { CategoryWithCount } from "@/types/category";
 import type { MessageListItem, MessageTag } from "@/types/message";
@@ -160,7 +160,7 @@ export function MessagesPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(60);
   const gridTopRef = useRef<HTMLDivElement | null>(null);
-  const { categories: fetchedCategories } = useCategories();
+  const { categories: fetchedCategories, isFallback: isCategoriesFallback } = useCategories();
   const categoryFilter = searchParams.get("category")?.trim().toLowerCase() ?? "";
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
 
@@ -235,8 +235,12 @@ export function MessagesPage() {
   ]);
 
   const actionCategories = useMemo(
-    () => (fetchedCategories.length > 0 ? fetchedCategories : deriveCategoriesFromMessages(messages)),
-    [fetchedCategories, messages],
+    () => (
+      !isCategoriesFallback && fetchedCategories.length > 0
+        ? fetchedCategories
+        : deriveCategoriesFromMessages(messages)
+    ),
+    [fetchedCategories, isCategoriesFallback, messages],
   );
 
   useEffect(() => {
@@ -369,8 +373,12 @@ export function MessagesPage() {
       setMessages((currentMessages) =>
         currentMessages.map((message) => (message.id === messageId ? updatedMessage : message)),
       );
+      if (hasActiveFilters) {
+        setReloadRevision((current) => current + 1);
+      }
+      notifyCategoriesChanged();
     },
-    [],
+    [hasActiveFilters],
   );
 
   useEffect(() => {
@@ -492,6 +500,9 @@ export function MessagesPage() {
       setMessages((currentMessages) =>
         currentMessages.map((message) => (message.id === messageId ? { ...message, tags: updatedTags } : message)),
       );
+      if (hasActiveFilters) {
+        setReloadRevision((current) => current + 1);
+      }
     } catch (error) {
       setTagDialogError(toErrorMessage(error, "Unable to add that tag."));
     } finally {
@@ -509,6 +520,9 @@ export function MessagesPage() {
       setMessages((currentMessages) =>
         currentMessages.map((message) => (message.id === messageId ? { ...message, tags: updatedTags } : message)),
       );
+      if (hasActiveFilters) {
+        setReloadRevision((current) => current + 1);
+      }
     } catch (error) {
       setTagDialogError(toErrorMessage(error, "Unable to remove that tag."));
     } finally {
@@ -534,6 +548,9 @@ export function MessagesPage() {
           message.id === activeTagMessage.id ? { ...message, tags: updatedTags } : message,
         ),
       );
+      if (hasActiveFilters) {
+        setReloadRevision((current) => current + 1);
+      }
     } catch (error) {
       setTagDialogError(toErrorMessage(error, "Unable to create tag."));
     } finally {
@@ -559,6 +576,7 @@ export function MessagesPage() {
         currentMessages.filter((message) => message.id !== targetMessage.id),
       );
       setTotalMessages((currentTotal) => Math.max(0, currentTotal - 1));
+      notifyCategoriesChanged();
       setSelectedMessageIds((currentIds) =>
         currentIds.filter((messageId) => messageId !== targetMessage.id),
       );
@@ -619,6 +637,10 @@ export function MessagesPage() {
       setMessages((currentMessages) =>
         localMoveMessages(currentMessages, targetMessageIds, targetCategory),
       );
+      if (hasActiveFilters) {
+        setReloadRevision((current) => current + 1);
+      }
+      notifyCategoriesChanged();
       setSelectedMessageIds([]);
     } catch (error) {
       setBulkActionError(toErrorMessage(error, "Unable to move selected messages right now."));
@@ -654,6 +676,7 @@ export function MessagesPage() {
         currentMessages.filter((message) => !targetIdSet.has(message.id)),
       );
       setTotalMessages((currentTotal) => Math.max(0, currentTotal - targetMessageIds.length));
+      notifyCategoriesChanged();
       setSelectedMessageIds([]);
 
       if (moveDialogMessageId !== null && targetIdSet.has(moveDialogMessageId)) {
@@ -923,7 +946,7 @@ export function MessagesPage() {
       )}
 
       {!isInitialLoading && loadError === null && totalPages > 1 ? (
-        <div className="mt-5 flex items-center justify-center gap-2">
+        <nav className="mt-5 flex items-center justify-center gap-2" aria-label="Message pages">
           <Button
             variant="outline"
             size="sm"
@@ -962,6 +985,8 @@ export function MessagesPage() {
                   size="sm"
                   className="h-8 w-8 p-0 text-xs"
                   onClick={() => goToPage(item)}
+                  aria-current={item === safePage ? "page" : undefined}
+                  aria-label={`Page ${item}`}
                 >
                   {item}
                 </Button>
@@ -978,7 +1003,7 @@ export function MessagesPage() {
             Next
             <ChevronRight className="size-4" />
           </Button>
-        </div>
+        </nav>
       ) : null}
 
       {!isInitialLoading && loadError === null && !hasResults ? (

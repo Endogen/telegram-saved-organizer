@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 PRIVATE_DIRECTORY_MODE = 0o700
 PRIVATE_FILE_MODE = 0o600
+PRODUCTION_PLACEHOLDER_MARKERS = ("replace-with", "organizer.example.com")
 
 
 def _read_bool(name: str, *, default: bool) -> bool:
@@ -37,6 +38,14 @@ def _read_positive_int(name: str, *, default: int) -> int:
     if value <= 0:
         raise RuntimeError(f"{name} must be greater than zero.")
     return value
+
+
+def _reject_production_placeholder(name: str, value: str) -> None:
+    normalized = value.strip().casefold()
+    if any(marker in normalized for marker in PRODUCTION_PLACEHOLDER_MARKERS):
+        raise RuntimeError(f"{name} still contains an example placeholder.")
+    if name == "TSO_TELEGRAM_API_ID" and normalized == "123456":
+        raise RuntimeError(f"{name} still contains the example placeholder.")
 
 
 def _normalize_origin(value: str, *, require_https: bool) -> str:
@@ -154,6 +163,9 @@ def _build_settings() -> Settings:
 
     database_url = os.getenv("TSO_DATABASE_URL", f"sqlite+aiosqlite:///{data_dir / 'app.db'}").strip()
     master_key, master_key_file = _load_master_key(data_dir=data_dir, production=production)
+    if production:
+        _reject_production_placeholder("TSO_DATABASE_URL", database_url)
+        _reject_production_placeholder("TSO_MASTER_KEY", master_key)
 
     origin_value = os.getenv("TSO_PUBLIC_ORIGIN")
     public_origin = (
@@ -161,6 +173,8 @@ def _build_settings() -> Settings:
     )
     if production and public_origin is None:
         raise RuntimeError("TSO_PUBLIC_ORIGIN is required in production.")
+    if production and public_origin is not None:
+        _reject_production_placeholder("TSO_PUBLIC_ORIGIN", public_origin)
     if public_origin is not None:
         public_host = urlsplit(public_origin).hostname
         if not production and (public_host is None or not _is_loopback_host(public_host)):
@@ -173,6 +187,9 @@ def _build_settings() -> Settings:
         for host in os.getenv("TSO_ALLOWED_HOSTS", "").split(",")
         if host.strip()
     )
+    if production:
+        for configured_host in configured_hosts:
+            _reject_production_placeholder("TSO_ALLOWED_HOSTS", configured_host)
     derived_host = urlsplit(public_origin).hostname if public_origin else None
     allowed_hosts = configured_hosts or ((derived_host,) if derived_host else ("127.0.0.1", "localhost", "testserver"))
     if production and any(host == "*" or host.startswith("*.") for host in allowed_hosts):
@@ -201,6 +218,10 @@ def _build_settings() -> Settings:
             raise RuntimeError("TSO_TELEGRAM_API_ID must be positive.")
     if bool(telegram_api_id) != bool(telegram_api_hash):
         raise RuntimeError("TSO_TELEGRAM_API_ID and TSO_TELEGRAM_API_HASH must be configured together.")
+    if production and telegram_api_id_raw:
+        _reject_production_placeholder("TSO_TELEGRAM_API_ID", telegram_api_id_raw)
+    if production and telegram_api_hash:
+        _reject_production_placeholder("TSO_TELEGRAM_API_HASH", telegram_api_hash)
 
     absolute_seconds = _read_positive_int("TSO_SESSION_ABSOLUTE_SECONDS", default=30 * 24 * 60 * 60)
     idle_seconds = _read_positive_int("TSO_SESSION_IDLE_SECONDS", default=7 * 24 * 60 * 60)

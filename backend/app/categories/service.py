@@ -146,8 +146,8 @@ class CategoryService:
         category = await self._load_category(category_id=category_id)
         if category is None:
             raise CategoryNotFoundError(f"Category {category_id} was not found.")
-        if category.system_key == OTHER_CATEGORY_SLUG:
-            raise CategoryProtectedError("Category 'other' cannot be deleted.")
+        if category.is_default or category.system_key is not None:
+            raise CategoryProtectedError("Default categories cannot be deleted.")
 
         fallback_category = await self._load_fallback_category(excluded_category_id=category.id)
         if fallback_category is None:

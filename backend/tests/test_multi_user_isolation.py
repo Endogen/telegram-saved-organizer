@@ -118,6 +118,8 @@ async def test_duplicate_tenant_relative_values_are_allowed_and_services_are_iso
             )
         with pytest.raises(TagNotFoundError):
             await first_tags.delete_tag(tag_id=second_tag.id)
+        with pytest.raises(TagNotFoundError):
+            await first_tags.update_tag(tag_id=second_tag.id, updates={"name": "Stolen"})
         with pytest.raises(TagMessageNotFoundError):
             await first_tags.add_tags_to_message(
                 message_id=second_message.id,

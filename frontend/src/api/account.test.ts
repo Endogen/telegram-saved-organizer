@@ -53,4 +53,24 @@ describe("account api", () => {
       body: JSON.stringify({ password: " delete password ", confirmation: "DELETE" }),
     }));
   });
+
+  it("does not broadcast a global logout for account reauthentication failures", async () => {
+    const unauthorizedListener = vi.fn();
+    window.addEventListener("tso:api-unauthorized", unauthorizedListener);
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: vi.fn().mockResolvedValue({ detail: "invalid_password" }),
+    } as unknown as Response);
+
+    try {
+      await expect(changePassword({ current_password: "wrong", new_password: "new password value" }))
+        .rejects.toThrow("invalid_password");
+      await expect(deleteAccount({ password: "wrong", confirmation: "DELETE" }))
+        .rejects.toThrow("invalid_password");
+      expect(unauthorizedListener).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("tso:api-unauthorized", unauthorizedListener);
+    }
+  });
 });

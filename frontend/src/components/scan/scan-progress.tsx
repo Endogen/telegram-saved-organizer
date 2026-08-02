@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle2, CircleAlert, LoaderCircle, Play, RefreshCw, RotateCcw, Square } from "lucide-react";
 
-import { clearAllMessages } from "@/api/messages";
 import { fetchScanStatus, startScan, stopScan, subscribeToScanStatus } from "@/api/scan";
 import { Button } from "@/components/ui/button";
+import { notifyCategoriesChanged } from "@/hooks/use-categories";
 import type { ScanStatus } from "@/types/scan";
 
 const POLL_INTERVAL_ACTIVE_MS = 1500;
@@ -180,6 +180,9 @@ export function ScanProgress() {
         setRequestError(null);
         setIsInitialLoading(false);
         setStreamConnectionState("connected");
+        if (nextStatus.state === "completed") {
+          notifyCategoriesChanged();
+        }
       },
       onError: () => {
         setStreamConnectionState((current) => {
@@ -294,13 +297,12 @@ export function ScanProgress() {
     setIsClearing(true);
 
     try {
-      await clearAllMessages();
-
       const normalizedPageSize = clampPageSize(Number.parseInt(pageSizeInput, 10));
       setPageSizeInput(String(normalizedPageSize));
 
-      const nextStatus = await startScan(normalizedPageSize);
+      const nextStatus = await startScan(normalizedPageSize, true);
       setStatus(nextStatus);
+      notifyCategoriesChanged();
       setPageSizeInput(String(nextStatus.page_size));
       setNow(Date.now());
     } catch (error) {
@@ -368,7 +370,7 @@ export function ScanProgress() {
   const duration = formatDuration(status.started_at, status.finished_at, now);
   const completionMessage = completionReasonLabel(status);
   const scanIsActive = isActiveScan(status);
-  const isBusy = isInitialLoading || isStarting || isStopping;
+  const isBusy = isInitialLoading || isStarting || isStopping || isClearing || isRefreshing;
   const canStart = !isBusy && !scanIsActive;
   const canStop = !isBusy && scanIsActive && !status.stop_requested;
 
@@ -534,6 +536,14 @@ export function ScanProgress() {
               {status.error ? "Scanner reported an error." : "Request failed."}
             </p>
             <p className="mt-1">{status.error ?? requestError}</p>
+            {requestError === "Connect Telegram before starting a scan." ? (
+              <a
+                href="/settings/telegram"
+                className="mt-2 inline-flex rounded-md border border-current/30 px-2.5 py-1.5 text-xs font-semibold hover:bg-amber-500/10"
+              >
+                Connect Telegram
+              </a>
+            ) : null}
           </motion.div>
         ) : null}
       </AnimatePresence>

@@ -59,6 +59,19 @@ export function AccountMenu() {
       return;
     }
 
+    if (event.key === "Enter" || event.key === " ") {
+      const activeItem = document.activeElement;
+      if (
+        activeItem instanceof HTMLElement
+        && activeItem.matches(MENU_ITEM_SELECTOR)
+        && activeItem.getAttribute("aria-disabled") !== "true"
+      ) {
+        event.preventDefault();
+        activeItem.click();
+      }
+      return;
+    }
+
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
       return;
     }

@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.messages.service import MessageListResult
 
+MAX_DB_IDENTIFIER = 2**63 - 1
+
 
 class MessageCategoryResponse(BaseModel):
     """Category summary attached to a message."""
@@ -76,7 +78,7 @@ class MessageListResponse(BaseModel):
 class MessageUpdateRequest(BaseModel):
     """Updatable message fields."""
 
-    category_id: int | None = Field(default=None, gt=0)
+    category_id: int | None = Field(default=None, gt=0, le=MAX_DB_IDENTIFIER, strict=True)
     content: str | None = None
 
     @model_validator(mode="after")
@@ -86,7 +88,7 @@ class MessageUpdateRequest(BaseModel):
         return self
 
 
-PositiveIdentifier = Annotated[int, Field(gt=0, strict=True)]
+PositiveIdentifier = Annotated[int, Field(gt=0, le=MAX_DB_IDENTIFIER, strict=True)]
 
 
 class MessageBulkDeleteRequest(BaseModel):

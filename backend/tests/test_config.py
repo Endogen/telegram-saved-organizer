@@ -50,7 +50,7 @@ def test_production_rejects_wildcard_hosts(tmp_path: Path) -> None:
     result = run_config_import(
         tmp_path,
         TSO_ENVIRONMENT="production",
-        TSO_PUBLIC_ORIGIN="https://organizer.example.com",
+        TSO_PUBLIC_ORIGIN="https://real.example.net",
         TSO_ALLOWED_HOSTS="*",
         TSO_MASTER_KEY="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
     )
@@ -63,8 +63,8 @@ def test_production_uses_secure_host_prefixed_cookie(tmp_path: Path) -> None:
     result = run_config_import(
         tmp_path,
         TSO_ENVIRONMENT="production",
-        TSO_PUBLIC_ORIGIN="https://organizer.example.com",
-        TSO_ALLOWED_HOSTS="organizer.example.com",
+        TSO_PUBLIC_ORIGIN="https://real.example.net",
+        TSO_ALLOWED_HOSTS="real.example.net",
         TSO_MASTER_KEY="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
     )
 
@@ -77,3 +77,29 @@ def test_scan_resource_limits_must_be_positive(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "TSO_SCAN_MAX_MESSAGES must be greater than zero" in result.stderr
+
+
+def test_production_rejects_example_secret_placeholders(tmp_path: Path) -> None:
+    result = run_config_import(
+        tmp_path,
+        TSO_ENVIRONMENT="production",
+        TSO_PUBLIC_ORIGIN="https://real.example.net",
+        TSO_ALLOWED_HOSTS="real.example.net",
+        TSO_MASTER_KEY="replace-with-output-of-openssl-rand-base64-48",
+    )
+
+    assert result.returncode != 0
+    assert "TSO_MASTER_KEY still contains an example placeholder" in result.stderr
+
+
+def test_production_rejects_example_public_origin(tmp_path: Path) -> None:
+    result = run_config_import(
+        tmp_path,
+        TSO_ENVIRONMENT="production",
+        TSO_PUBLIC_ORIGIN="https://organizer.example.com",
+        TSO_ALLOWED_HOSTS="organizer.example.com",
+        TSO_MASTER_KEY="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    )
+
+    assert result.returncode != 0
+    assert "TSO_PUBLIC_ORIGIN still contains an example placeholder" in result.stderr

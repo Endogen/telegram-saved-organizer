@@ -187,12 +187,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const logout = useCallback(async () => {
     requestVersion.current += 1;
-    try {
-      await deleteSession();
-    } finally {
-      if (clearIdentity()) {
-        channelRef.current?.postMessage({ type: "signed-out" });
-      }
+    await deleteSession();
+    if (clearIdentity()) {
+      channelRef.current?.postMessage({ type: "signed-out" });
     }
   }, [clearIdentity]);
 

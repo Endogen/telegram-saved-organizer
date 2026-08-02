@@ -200,7 +200,7 @@ async def test_list_messages_applies_category_tag_and_search_filters() -> None:
     assert "categories.user_id" in list_statement
     assert "categories.slug" in list_statement
     assert "tags.user_id" in list_statement
-    assert "lower(tags.name)" in list_statement
+    assert "tags.normalized_name" in list_statement
     assert list_statement.count("EXISTS") >= 3
     assert "LIKE" in list_statement
     assert "categories.slug" in total_statement

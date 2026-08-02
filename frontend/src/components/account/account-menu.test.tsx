@@ -75,6 +75,18 @@ describe("AccountMenu", () => {
     await waitFor(() => expect(trigger).toHaveFocus());
   });
 
+  it("activates the focused menu destination with Enter", async () => {
+    renderMenu();
+    fireEvent.click(screen.getByRole("button", { name: /Open account menu/ }));
+    const accountLink = screen.getByRole("menuitem", { name: "Account settings" });
+    await waitFor(() => expect(accountLink).toHaveFocus());
+    fireEvent.keyDown(accountLink, { key: "ArrowDown" });
+
+    fireEvent.keyDown(screen.getByRole("menuitem", { name: "Active sessions" }), { key: "Enter" });
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
   it("closes after an outside pointer event", () => {
     renderMenu();
     fireEvent.click(screen.getByRole("button", { name: /Open account menu/ }));

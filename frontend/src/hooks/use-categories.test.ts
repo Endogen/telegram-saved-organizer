@@ -3,7 +3,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 
-import { useCategories } from "@/hooks/use-categories";
+import { notifyCategoriesChanged, useCategories } from "@/hooks/use-categories";
 import type { CategoryWithCount } from "@/types/category";
 
 function routerWrapper({ children }: { children: ReactNode }) {
@@ -159,5 +159,21 @@ describe("useCategories", () => {
     });
 
     expect(result.current.error).toBe("Failed to fetch categories.");
+  });
+
+  it("refreshes counts after message mutations announce a category change", async () => {
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(apiCategories) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve([{ ...apiCategories[0], message_count: 6 }, apiCategories[1]]),
+      });
+    const { result } = renderHook(() => useCategories(), { wrapper: routerWrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    notifyCategoriesChanged();
+
+    await waitFor(() => expect(result.current.categories[0].message_count).toBe(6));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

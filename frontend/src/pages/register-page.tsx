@@ -4,7 +4,6 @@ import { Link, useLocation, useNavigate } from "react-router";
 
 import { ApiRequestError } from "@/api/client";
 import { useAuth } from "@/components/auth/auth-provider";
-import { getSafeReturnTo } from "@/components/auth/route-guards";
 import { Button } from "@/components/ui/button";
 
 type RegistrationField = "displayName" | "email" | "password" | "passwordConfirmation";
@@ -92,7 +91,7 @@ export function RegisterPage() {
         display_name: normalizedDisplayName,
         password,
       });
-      navigate(getSafeReturnTo(location.state) ?? "/onboarding/telegram", { replace: true });
+      navigate("/onboarding/telegram", { replace: true });
     } catch (requestError) {
       setError(registrationErrorMessage(requestError));
     } finally {

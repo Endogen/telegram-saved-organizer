@@ -97,7 +97,7 @@ export function BulkActions({
         <Button
           size="sm"
           variant="outline"
-          className="gap-1.5 border-red-500/40 bg-red-500/5 text-red-100 hover:bg-red-500/15"
+          className="gap-1.5 border-red-500/40 bg-red-500/5 text-red-700 hover:bg-red-500/15 dark:text-red-300"
           onClick={onBulkDelete}
           disabled={selectedCount === 0 || isDeleteSubmitting || isMoveSubmitting}
         >
@@ -107,7 +107,7 @@ export function BulkActions({
       </div>
 
       {errorMessage ? (
-        <p className="mt-3 rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-400 dark:text-red-300">
+        <p className="mt-3 rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
           {errorMessage}
         </p>
       ) : null}

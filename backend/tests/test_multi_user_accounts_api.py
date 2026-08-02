@@ -276,6 +276,41 @@ async def test_successful_login_enforces_bounded_active_session_history() -> Non
 
 
 @pytest.mark.asyncio
+async def test_wrong_reauthentication_password_does_not_invalidate_session() -> None:
+    async with api_database() as (app, _):
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url=TEST_ORIGIN,
+        ) as client:
+            await register(client, email="reauth@example.com", display_name="Reauth")
+            await login(client, email="reauth@example.com")
+
+            changed = await client.post(
+                "/api/account/password",
+                json={
+                    "current_password": "definitely wrong",
+                    "new_password": "a different secure password",
+                },
+                headers=csrf_headers(client),
+            )
+            assert changed.status_code == 403
+            assert changed.json() == {"detail": "invalid_password"}
+
+            deleted = await client.request(
+                "DELETE",
+                "/api/account",
+                json={"password": "definitely wrong", "confirmation": "DELETE"},
+                headers=csrf_headers(client),
+            )
+            assert deleted.status_code == 403
+            assert deleted.json() == {"detail": "invalid_password"}
+
+            session = await client.get("/api/session")
+            assert session.status_code == 200
+            assert session.json()["authenticated"] is True
+
+
+@pytest.mark.asyncio
 async def test_two_user_api_isolation_duplicate_values_and_clear_all() -> None:
     async with api_database() as (app, session_factory):
         transport = ASGITransport(app=app)

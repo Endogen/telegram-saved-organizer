@@ -241,6 +241,29 @@ describe("ScanProgress", () => {
     });
   });
 
+  it("offers a Telegram connection link when starting disconnected", async () => {
+    vi.mocked(startScan).mockRejectedValue(new Error("Connect Telegram before starting a scan."));
+    render(<ScanProgress />);
+    await screen.findByText("Ready to scan");
+
+    const { fireEvent } = await import("@testing-library/react");
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+
+    const link = await screen.findByRole("link", { name: "Connect Telegram" });
+    expect(link).toHaveAttribute("href", "/settings/telegram");
+  });
+
+  it("uses one atomic request for clear and rescan", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<ScanProgress />);
+    await screen.findByText("Ready to scan");
+
+    const { fireEvent } = await import("@testing-library/react");
+    fireEvent.click(screen.getByRole("button", { name: "Clear & Rescan" }));
+
+    await waitFor(() => expect(startScan).toHaveBeenCalledWith(100, true));
+  });
+
   it("handles stop scan error", async () => {
     vi.mocked(fetchScanStatus).mockResolvedValue({
       ...idleScanStatus,

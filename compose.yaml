@@ -58,7 +58,7 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8500/api/health', timeout=2)"]
+      test: ["CMD", "python", "-c", "import os, urllib.parse, urllib.request; configured=os.environ.get('TSO_ALLOWED_HOSTS', '').split(',')[0].strip(); host=configured or urllib.parse.urlsplit(os.environ['TSO_PUBLIC_ORIGIN']).hostname; request=urllib.request.Request('http://127.0.0.1:8500/api/health', headers={'Host': host}); urllib.request.urlopen(request, timeout=2)"]
       interval: 10s
       timeout: 3s
       retries: 10

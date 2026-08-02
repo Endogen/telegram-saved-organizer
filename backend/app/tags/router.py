@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.accounts.dependencies import get_current_user
@@ -14,6 +16,8 @@ from app.tags.schemas import (
     TagCreateRequest,
     TagDeleteResponse,
     TagResponse,
+    TagUpdateRequest,
+    TagWithCountResponse,
 )
 from app.tags.service import (
     MessageNotFoundError,
@@ -24,6 +28,8 @@ from app.tags.service import (
 )
 
 router = APIRouter(tags=["tags"])
+MAX_DB_IDENTIFIER = 2**63 - 1
+DatabaseIdentifier = Annotated[int, Path(ge=1, le=MAX_DB_IDENTIFIER)]
 
 
 async def get_tag_service(
@@ -35,10 +41,12 @@ async def get_tag_service(
     return TagService(session=session, user_id=user.id)
 
 
-@router.get("/tags", response_model=list[TagResponse])
-async def list_tags(service: TagService = Depends(get_tag_service)) -> list[TagResponse]:
-    tags = await service.list_tags()
-    return [TagResponse.model_validate(tag) for tag in tags]
+@router.get("/tags", response_model=list[TagWithCountResponse])
+async def list_tags(
+    service: TagService = Depends(get_tag_service),
+) -> list[TagWithCountResponse]:
+    tags = await service.list_tags_with_counts()
+    return [TagWithCountResponse.from_result(tag) for tag in tags]
 
 
 @router.post("/tags", response_model=TagResponse, status_code=status.HTTP_201_CREATED)
@@ -55,15 +63,37 @@ async def create_tag(
     return TagResponse.model_validate(tag)
 
 
+@router.patch("/tags/{tag_id}", response_model=TagResponse)
+async def update_tag(
+    tag_id: DatabaseIdentifier,
+    payload: TagUpdateRequest,
+    service: TagService = Depends(get_tag_service),
+) -> TagResponse:
+    try:
+        tag = await service.update_tag(
+            tag_id=tag_id,
+            updates=payload.model_dump(exclude_unset=True),
+        )
+    except TagNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except TagConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return TagResponse.model_validate(tag)
+
+
 @router.delete("/tags/{tag_id}", response_model=TagDeleteResponse)
 async def delete_tag(
-    tag_id: int,
+    tag_id: DatabaseIdentifier,
     service: TagService = Depends(get_tag_service),
 ) -> TagDeleteResponse:
     try:
         await service.delete_tag(tag_id=tag_id)
     except TagNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except TagConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return TagDeleteResponse()
@@ -71,7 +101,7 @@ async def delete_tag(
 
 @router.post("/messages/{message_id}/tags", response_model=MessageTagsResponse)
 async def add_tags_to_message(
-    message_id: int,
+    message_id: DatabaseIdentifier,
     payload: MessageTagsUpdateRequest,
     service: TagService = Depends(get_tag_service),
 ) -> MessageTagsResponse:
@@ -81,6 +111,8 @@ async def add_tags_to_message(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except TagNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except TagConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return MessageTagsResponse(message_id=message_id, tags=[TagResponse.model_validate(tag) for tag in tags])
@@ -88,8 +120,8 @@ async def add_tags_to_message(
 
 @router.delete("/messages/{message_id}/tags/{tag_id}", response_model=MessageTagsResponse)
 async def remove_tag_from_message(
-    message_id: int,
-    tag_id: int,
+    message_id: DatabaseIdentifier,
+    tag_id: DatabaseIdentifier,
     service: TagService = Depends(get_tag_service),
 ) -> MessageTagsResponse:
     try:

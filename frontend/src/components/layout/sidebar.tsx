@@ -1,16 +1,5 @@
 import { type DragEvent, useEffect, useRef, useState } from "react";
-import {
-  Archive,
-  Code2,
-  FileText,
-  FolderKanban,
-  ImageIcon,
-  Link2,
-  MessageSquareText,
-  Music2,
-  type LucideIcon,
-  Video,
-} from "lucide-react";
+import { FolderKanban, type LucideIcon } from "lucide-react";
 import { Link, NavLink, useLocation } from "react-router";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -24,6 +13,7 @@ import {
   type MessageDragStartDetail,
 } from "@/lib/message-drag-events";
 import { cn } from "@/lib/utils";
+import { resolveCategoryIcon } from "@/lib/category-icons";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatePanel } from "@/components/ui/state-panel";
 import type { CategoryWithCount } from "@/types/category";
@@ -44,21 +34,6 @@ type SidebarProps = {
   isOpen: boolean;
   onClose: () => void;
 };
-
-const categoryIconMap: Record<string, LucideIcon> = {
-  video: Video,
-  music: Music2,
-  link: Link2,
-  code: Code2,
-  image: ImageIcon,
-  "file-text": FileText,
-  "message-square": MessageSquareText,
-  archive: Archive,
-};
-
-function resolveCategoryIcon(iconName: string): LucideIcon {
-  return categoryIconMap[iconName.toLowerCase()] ?? FolderKanban;
-}
 
 function navItemClassName(isActive: boolean): string {
   return cn(
@@ -166,6 +141,9 @@ export function Sidebar({
   }, []);
 
   function handleCategoryDragOver(event: DragEvent<HTMLAnchorElement>, categoryId: number) {
+    if (isCategoriesFallback) {
+      return;
+    }
     const messageId = getDraggedMessageId(event.dataTransfer);
     if (messageId === null) {
       return;
@@ -190,6 +168,9 @@ export function Sidebar({
   }
 
   function handleCategoryDrop(event: DragEvent<HTMLAnchorElement>, category: CategoryWithCount) {
+    if (isCategoriesFallback) {
+      return;
+    }
     event.preventDefault();
     setDropCategoryId(null);
 
@@ -344,7 +325,7 @@ export function Sidebar({
               />
             ) : null}
 
-            {activeDrag !== null ? (
+            {activeDrag !== null && !isCategoriesFallback ? (
               <p className="mt-2 rounded-md border border-[hsl(var(--primary)/0.25)] bg-[hsl(var(--primary)/0.1)] px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[hsl(var(--primary))]">
                 Drop a message on a category to move it.
               </p>

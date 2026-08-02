@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { KeyRound, LoaderCircle, Save, Trash2, UserRound } from "lucide-react";
 
 import { changePassword, deleteAccount, fetchAccount, updateAccount } from "@/api/account";
+import { API_UNAUTHORIZED_EVENT, ApiRequestError } from "@/api/client";
 import { useAuth } from "@/components/auth/auth-provider";
 import { Button } from "@/components/ui/button";
 import { StatePanel } from "@/components/ui/state-panel";
@@ -11,6 +12,9 @@ const INPUT_CLASS_NAME =
   "mt-2 h-11 w-full rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--background)/0.72)] px-3 text-sm text-[hsl(var(--foreground))] outline-none transition placeholder:text-[hsl(var(--muted-foreground))] focus:border-[hsl(var(--primary)/0.7)] focus:ring-4 focus:ring-[hsl(var(--primary)/0.12)] disabled:cursor-not-allowed disabled:opacity-60";
 
 function toErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ApiRequestError && error.detail === "invalid_password") {
+    return "Your current password is incorrect.";
+  }
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
   }
@@ -147,7 +151,10 @@ export function AccountSettingsPage() {
       try {
         await logout();
       } catch {
-        // AuthProvider clears local identity even if the already-deleted session returns 401.
+        // The account deletion already cleared the server cookie. Explicitly
+        // clear in-memory identity if the follow-up logout sees that missing
+        // session or cannot complete.
+        window.dispatchEvent(new Event(API_UNAUTHORIZED_EVENT));
       }
     } catch (error) {
       setDeleteError(toErrorMessage(error, "Could not delete your account."));

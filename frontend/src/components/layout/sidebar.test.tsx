@@ -137,4 +137,27 @@ describe("Sidebar", () => {
       window.removeEventListener(MESSAGE_DRAG_END_EVENT, onDragEndEvent as EventListener);
     }
   });
+
+  it("never uses display-only fallback category ids as mutation targets", () => {
+    const onDropEvent = vi.fn<(event: Event) => void>();
+    window.addEventListener(MESSAGE_DROP_TO_CATEGORY_EVENT, onDropEvent as EventListener);
+
+    try {
+      renderSidebar({ isCategoriesFallback: true, categoriesError: "API unavailable" });
+      act(() => {
+        window.dispatchEvent(new CustomEvent(MESSAGE_DRAG_START_EVENT, { detail: { messageId: 901, categoryId: 1 } }));
+      });
+
+      const targetCategoryLink = screen.getByRole("link", { name: /Links/ });
+      const dataTransfer = {
+        getData: (key: string) => (key === "application/x-saved-message-id" ? "901" : ""),
+      } as DataTransfer;
+      fireEvent.drop(targetCategoryLink, { dataTransfer });
+
+      expect(onDropEvent).not.toHaveBeenCalled();
+      expect(screen.queryByText("Drop a message on a category to move it.")).not.toBeInTheDocument();
+    } finally {
+      window.removeEventListener(MESSAGE_DROP_TO_CATEGORY_EVENT, onDropEvent as EventListener);
+    }
+  });
 });

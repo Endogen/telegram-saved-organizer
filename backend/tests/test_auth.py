@@ -295,3 +295,24 @@ async def test_verify_uses_ephemeral_code_and_clears_challenge(
     assert connection.pending_expires_at is None
     assert connection.state == "connected"
     assert connection.telegram_user_id == 123
+
+
+@pytest.mark.asyncio
+async def test_verify_is_idempotent_after_connection_succeeds() -> None:
+    connection = _connection(
+        state="connected",
+        telegram_user_id=123,
+        session_encrypted="session-cipher",
+        pending_expires_at=None,
+    )
+    session = _FakeSession(connection)
+
+    state = await TelegramAuthService(session=session, user_id="user-a").verify(  # type: ignore[arg-type]
+        code="12345",
+        password=None,
+    )
+
+    assert state is TelegramConnectionState.CONNECTED
+    assert connection.state == "connected"
+    assert connection.session_encrypted == "session-cipher"
+    assert session.commit_calls == 0

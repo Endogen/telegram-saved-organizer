@@ -33,9 +33,11 @@ class _FakeService:
     def __init__(self) -> None:
         self.job = _job()
         self.started_with: int | None = None
+        self.clear_existing = False
 
-    async def start(self, *, page_size: int):
+    async def start(self, *, page_size: int, clear_existing: bool = False):
         self.started_with = page_size
+        self.clear_existing = clear_existing
         return self.job
 
     async def status(self):
@@ -60,6 +62,7 @@ async def test_start_scan_returns_persisted_job_and_schedules_processing(
         user=SimpleNamespace(id="user-a"),
         session=object(),  # type: ignore[arg-type]
         page_size=25,
+        clear_existing=False,
     )
 
     assert response.job_id == "job-a"
@@ -86,6 +89,7 @@ async def test_start_scan_leaves_processing_to_worker_when_in_api_processing_is_
         user=SimpleNamespace(id="user-a"),
         session=object(),  # type: ignore[arg-type]
         page_size=25,
+        clear_existing=False,
     )
 
     assert response.job_id == "job-a"

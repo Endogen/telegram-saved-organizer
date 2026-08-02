@@ -105,3 +105,26 @@ async def test_seed_default_categories_is_idempotent_when_defaults_exist() -> No
     assert session.added_categories == []
     assert session.commit_calls == 0
     assert session.flush_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_seed_default_categories_preserves_renamed_built_in_category() -> None:
+    renamed = _build_category("videos")
+    renamed.name = "Watch"
+    renamed.normalized_name = "watch"
+    renamed.slug = "watch"
+    session = _FakeSession(existing_categories=[renamed])
+
+    created_categories = await seed_default_categories(session, user_id=USER_ID)
+
+    assert [category.system_key for category in created_categories] == [
+        "audio",
+        "links",
+        "repositories",
+        "images",
+        "documents",
+        "text",
+        "other",
+    ]
+    statement = str(session.scalars_calls[0])
+    assert "categories.system_key IN" in statement

@@ -5,6 +5,13 @@ import { requestJson } from "@/api/client";
 import type { CategoryWithCount } from "@/types/category";
 
 const CATEGORIES_ENDPOINT = "/api/categories";
+export const CATEGORIES_CHANGED_EVENT = "tso:categories-changed";
+
+export function notifyCategoriesChanged() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(CATEGORIES_CHANGED_EVENT));
+  }
+}
 
 const DEFAULT_CATEGORY_FALLBACK: CategoryWithCount[] = [
   {
@@ -143,6 +150,7 @@ export function useCategories(): UseCategoriesResult {
   const [isLoading, setIsLoading] = useState(true);
   const [isFallback, setIsFallback] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshRevision, setRefreshRevision] = useState(0);
   const location = useLocation();
 
   const fetchCategories = useCallback(async (signal: AbortSignal) => {
@@ -174,12 +182,18 @@ export function useCategories(): UseCategoriesResult {
 
   // Refetch when route changes (e.g. after scan completes and user navigates to Messages)
   useEffect(() => {
+    const refresh = () => setRefreshRevision((current) => current + 1);
+    window.addEventListener(CATEGORIES_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(CATEGORIES_CHANGED_EVENT, refresh);
+  }, []);
+
+  useEffect(() => {
     const controller = new AbortController();
     void fetchCategories(controller.signal);
     return () => {
       controller.abort();
     };
-  }, [fetchCategories, location.pathname]);
+  }, [fetchCategories, location.pathname, refreshRevision]);
 
   return { categories, isLoading, isFallback, error };
 }

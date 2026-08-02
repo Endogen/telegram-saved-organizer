@@ -11,13 +11,13 @@ from datetime import UTC, datetime, timedelta
 from typing import TypeVar
 from uuid import uuid4
 
-from sqlalchemy import case, func, or_, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import Category, Message, ScanJob, TelegramConnection, User
+from app.models import Category, Message, MessageTag, ScanJob, TelegramConnection, User
 from app.security import SecretDecryptionError, decrypt_secret, encrypt_secret
 from app.telegram.categorizer import categorize_scanned_message
 from app.telegram.client import TelegramClientNotConnectedError, short_lived_client
@@ -74,7 +74,7 @@ class TelegramScanService:
         self._session = session
         self._user_id = str(user_id)
 
-    async def start(self, *, page_size: int = 100) -> ScanJob:
+    async def start(self, *, page_size: int = 100, clear_existing: bool = False) -> ScanJob:
         if page_size <= 0:
             raise ValueError("page_size must be a positive integer.")
 
@@ -110,6 +110,16 @@ class TelegramScanService:
         if connection.telegram_user_id is None:
             raise TelegramClientNotConnectedError(
                 "Telegram identity is unavailable for this connection."
+            )
+        if clear_existing:
+            # Keep clearing and job creation in the same transaction. A fresh
+            # scan must never leave an empty library merely because starting
+            # the replacement job failed afterwards.
+            await self._session.execute(
+                delete(MessageTag).where(MessageTag.user_id == self._user_id)
+            )
+            await self._session.execute(
+                delete(Message).where(Message.user_id == self._user_id)
             )
         job = ScanJob(
             user_id=self._user_id,

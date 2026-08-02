@@ -217,7 +217,7 @@ async def change_password(
         )
     except AuthenticationFailedError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_password"
+            status_code=status.HTTP_403_FORBIDDEN, detail="invalid_password"
         ) from exc
     _set_session_cookies(response, credentials)
 
@@ -236,7 +236,7 @@ async def delete_account(
         )
     except AuthenticationFailedError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_password"
+            status_code=status.HTTP_403_FORBIDDEN, detail="invalid_password"
         ) from exc
     _clear_session_cookies(response, clear_site_data=True)
 

@@ -15,6 +15,7 @@ from app.tags.service import (
     TagConflictError,
     TagNotFoundError,
     TagService,
+    TagWithCount,
 )
 
 
@@ -29,12 +30,14 @@ class _FakeTagService:
     def __init__(self) -> None:
         self.list_calls = 0
         self.create_calls: list[dict[str, Any]] = []
+        self.update_calls: list[tuple[int, dict[str, Any]]] = []
         self.delete_calls: list[int] = []
         self.add_calls: list[tuple[int, tuple[int, ...]]] = []
         self.remove_calls: list[tuple[int, int]] = []
 
         self.list_error: Exception | None = None
         self.create_error: Exception | None = None
+        self.update_error: Exception | None = None
         self.delete_error: Exception | None = None
         self.add_error: Exception | None = None
         self.remove_error: Exception | None = None
@@ -44,6 +47,7 @@ class _FakeTagService:
             _FakeTag(id=3, name="urgent", color=None),
         ]
         self.create_result = _FakeTag(id=4, name="archive", color="#14B8A6")
+        self.update_result = _FakeTag(id=2, name="reading", color="#2563EB")
         self.add_result = self.tags_result
         self.remove_result = [_FakeTag(id=2, name="read-later", color="#22C55E")]
 
@@ -53,11 +57,26 @@ class _FakeTagService:
             raise self.list_error
         return self.tags_result
 
+    async def list_tags_with_counts(self) -> list[TagWithCount]:
+        self.list_calls += 1
+        if self.list_error is not None:
+            raise self.list_error
+        return [
+            TagWithCount(tag=tag, message_count=index + 1)  # type: ignore[arg-type]
+            for index, tag in enumerate(self.tags_result)
+        ]
+
     async def create_tag(self, *, name: str, color: str | None = None) -> _FakeTag:
         self.create_calls.append({"name": name, "color": color})
         if self.create_error is not None:
             raise self.create_error
         return self.create_result
+
+    async def update_tag(self, *, tag_id: int, updates: dict[str, Any]) -> _FakeTag:
+        self.update_calls.append((tag_id, updates))
+        if self.update_error is not None:
+            raise self.update_error
+        return self.update_result
 
     async def delete_tag(self, *, tag_id: int) -> None:
         self.delete_calls.append(tag_id)
@@ -99,8 +118,8 @@ async def test_list_tags_endpoint_returns_tags(tag_context: tuple[Any, _FakeTagS
 
     assert response.status_code == 200
     assert response.json() == [
-        {"id": 2, "name": "read-later", "color": "#22C55E"},
-        {"id": 3, "name": "urgent", "color": None},
+        {"id": 2, "name": "read-later", "color": "#22C55E", "message_count": 1},
+        {"id": 3, "name": "urgent", "color": None, "message_count": 2},
     ]
     assert service.list_calls == 1
 
@@ -142,6 +161,56 @@ async def test_create_tag_endpoint_returns_bad_request_on_validation_error(
 
     assert response.status_code == 400
     assert response.json()["detail"] == "color must be a valid hex value like #22C55E."
+
+
+@pytest.mark.asyncio
+async def test_update_tag_endpoint_returns_updated_tag(tag_context: tuple[Any, _FakeTagService]) -> None:
+    app, service = tag_context
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.patch(
+            "/api/tags/2",
+            json={"name": "reading", "color": "#2563EB"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"id": 2, "name": "reading", "color": "#2563EB"}
+    assert service.update_calls == [(2, {"name": "reading", "color": "#2563EB"})]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected_status"),
+    [
+        (TagNotFoundError("Tag 404 was not found."), 404),
+        (TagConflictError("Tag name 'reading' already exists."), 409),
+        (ValueError("name must not be empty."), 400),
+    ],
+)
+async def test_update_tag_endpoint_maps_service_errors(
+    tag_context: tuple[Any, _FakeTagService],
+    error: Exception,
+    expected_status: int,
+) -> None:
+    app, service = tag_context
+    service.update_error = error
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.patch("/api/tags/2", json={"name": "reading"})
+
+    assert response.status_code == expected_status
+    assert response.json()["detail"] == str(error)
+
+
+@pytest.mark.asyncio
+async def test_update_tag_endpoint_rejects_empty_payload(tag_context: tuple[Any, _FakeTagService]) -> None:
+    app, service = tag_context
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.patch("/api/tags/2", json={})
+
+    assert response.status_code == 422
+    assert service.update_calls == []
 
 
 @pytest.mark.asyncio

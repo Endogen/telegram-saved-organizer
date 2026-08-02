@@ -18,6 +18,9 @@ from app.telegram.client import (
     delete_saved_messages,
 )
 
+MAX_DB_IDENTIFIER = 2**63 - 1
+MAX_PAGE_NUMBER = 1_000_000
+
 __all__ = [
     "CategoryNotFoundError",
     "MessageListResult",
@@ -93,6 +96,8 @@ class MessageService:
 
         if page <= 0:
             raise ValueError("page must be greater than zero.")
+        if page > MAX_PAGE_NUMBER:
+            raise ValueError(f"page must not exceed {MAX_PAGE_NUMBER}.")
         if per_page <= 0:
             raise ValueError("per_page must be greater than zero.")
         if per_page > 200:
@@ -134,7 +139,7 @@ class MessageService:
             filtered_statement = filtered_statement.where(
                 Message.tags.any(
                     (Tag.user_id == self.user_id)
-                    & (func.lower(Tag.name) == tag_name)
+                    & (Tag.normalized_name == tag_name)
                 )
             )
         if normalized_search is not None:
@@ -356,7 +361,12 @@ class MessageService:
         normalized_ids: list[int] = []
         seen_ids: set[int] = set()
         for message_id in message_ids:
-            if not isinstance(message_id, int) or isinstance(message_id, bool) or message_id <= 0:
+            if (
+                not isinstance(message_id, int)
+                or isinstance(message_id, bool)
+                or message_id <= 0
+                or message_id > MAX_DB_IDENTIFIER
+            ):
                 raise ValueError("message_ids must contain only positive integers.")
             if message_id in seen_ids:
                 continue

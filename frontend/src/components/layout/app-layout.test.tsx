@@ -60,6 +60,8 @@ describe("AppLayout", () => {
             <Route index element={<div>Dashboard Content</div>} />
             <Route path="messages" element={<div>Messages Content</div>} />
             <Route path="settings/telegram" element={<div>Telegram Content</div>} />
+            <Route path="settings/categories" element={<div>Categories Content</div>} />
+            <Route path="settings/tags" element={<div>Tags Content</div>} />
           </Route>
         </Routes>
       </MemoryRouter>,
@@ -93,8 +95,17 @@ describe("AppLayout", () => {
 
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Messages" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Categories" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Tags" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Telegram" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Account" })).toBeInTheDocument();
+  });
+
+  it("renders organization route metadata", () => {
+    renderAppLayout("/settings/categories");
+    expect(screen.getByRole("heading", { level: 1, name: "Category management" })).toBeInTheDocument();
+    expect(screen.getByText("Categories Content")).toBeInTheDocument();
+    expect(document.title).toBe("Category management · Telegram Saved Organizer");
   });
 
   it("exposes a skip link and updates the document title", () => {

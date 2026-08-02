@@ -15,6 +15,7 @@ vi.mock("@/components/auth/auth-provider", () => ({
 import { changePassword, deleteAccount, fetchAccount, updateAccount } from "@/api/account";
 import { useAuth, type AuthContextValue } from "@/components/auth/auth-provider";
 import { AccountSettingsPage } from "@/pages/account-settings-page";
+import { ApiRequestError } from "@/api/client";
 import type { AccountUser } from "@/types/account";
 
 const account: AccountUser = {
@@ -114,6 +115,22 @@ describe("AccountSettingsPage", () => {
 
     expect(screen.getByText("New password and confirmation do not match.")).toBeInTheDocument();
     expect(changePassword).not.toHaveBeenCalled();
+  });
+
+  it("shows a human reauthentication error without signing the user out", async () => {
+    vi.mocked(changePassword).mockRejectedValue(
+      new ApiRequestError("invalid_password", 403, "invalid_password"),
+    );
+    render(<AccountSettingsPage />);
+    await screen.findByRole("heading", { name: "Account settings" });
+
+    fireEvent.change(screen.getByLabelText("Current password"), { target: { value: "wrong password" } });
+    fireEvent.change(screen.getByLabelText("New password"), { target: { value: "a long new password" } });
+    fireEvent.change(screen.getByLabelText("Confirm new password"), { target: { value: "a long new password" } });
+    fireEvent.click(screen.getByRole("button", { name: "Change password" }));
+
+    expect(await screen.findByText("Your current password is incorrect.")).toBeInTheDocument();
+    expect(logout).not.toHaveBeenCalled();
   });
 
   it("requires explicit deletion confirmation", async () => {

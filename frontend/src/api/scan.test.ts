@@ -66,6 +66,17 @@ describe("scan api client", () => {
     expect(result).toEqual(runningScanStatus);
   });
 
+  it("starts an atomic clear-and-rescan request", async () => {
+    fetchMock.mockResolvedValue(createResponse(runningScanStatus));
+
+    await startScan(100, true);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scan/start?page_size=100&clear_existing=true",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("clamps page size to valid range", async () => {
     fetchMock.mockResolvedValue(createResponse(runningScanStatus));
 
@@ -117,6 +128,16 @@ describe("scan api client", () => {
     fetchMock.mockResolvedValue(createResponse({}, false));
 
     await expect(fetchScanStatus()).rejects.toThrow("Scan request failed.");
+  });
+
+  it("turns a disconnected Telegram response into actionable copy", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: vi.fn().mockResolvedValue({ detail: "telegram_not_connected" }),
+    } as unknown as Response);
+
+    await expect(startScan()).rejects.toThrow("Connect Telegram before starting a scan.");
   });
 
   it("throws fallback when payload is null", async () => {

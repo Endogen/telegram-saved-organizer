@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { AnimatePresence, motion } from "framer-motion";
-import { MessageSquareMore, PlugZap, Rows3, UserRound } from "lucide-react";
+import { FolderKanban, MessageSquareMore, PlugZap, Rows3, Tags, UserRound } from "lucide-react";
 import { Outlet, useLocation } from "react-router";
 
 import { Sidebar, type SidebarPrimaryItem } from "@/components/layout/sidebar";
@@ -11,6 +10,8 @@ import { useUiStore } from "@/stores/ui-store";
 const navigation: SidebarPrimaryItem[] = [
   { to: "/", label: "Dashboard", icon: Rows3, end: true },
   { to: "/messages", label: "Messages", icon: MessageSquareMore },
+  { to: "/settings/categories", label: "Categories", icon: FolderKanban },
+  { to: "/settings/tags", label: "Tags", icon: Tags },
   { to: "/settings/telegram", label: "Telegram", icon: PlugZap },
   { to: "/settings/account", label: "Account", icon: UserRound },
 ];
@@ -25,6 +26,16 @@ const routeMeta = [
     matcher: (pathname: string) => pathname.startsWith("/messages"),
     title: "Messages",
     subtitle: "Search, filter, and manage imported Saved Messages.",
+  },
+  {
+    matcher: (pathname: string) => pathname === "/settings/categories",
+    title: "Category management",
+    subtitle: "Create, style, order, and review your workspace categories.",
+  },
+  {
+    matcher: (pathname: string) => pathname === "/settings/tags",
+    title: "Tag management",
+    subtitle: "Create, edit, and clean up reusable message tags.",
   },
   {
     matcher: (pathname: string) => pathname === "/onboarding/telegram",
@@ -99,17 +110,7 @@ export function AppLayout() {
             tabIndex={-1}
             className="min-h-[calc(100vh-11.5rem)] min-w-0 flex-1 rounded-2xl border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--card)/0.8)] p-4 shadow-sm backdrop-blur md:p-6"
           >
-            <AnimatePresence mode="popLayout">
-              <motion.div
-                key={location.pathname}
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.15, ease: "easeOut" }}
-              >
-                <Outlet />
-              </motion.div>
-            </AnimatePresence>
+            <Outlet />
           </main>
         </div>
       </div>

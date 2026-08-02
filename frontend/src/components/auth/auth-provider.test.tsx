@@ -25,7 +25,7 @@ function Probe() {
       <span>{auth.user?.display_name ?? "no user"}</span>
       <button type="button" onClick={() => void auth.login({ email: user.email, password: "  exact  " })}>Log in</button>
       <button type="button" onClick={() => void auth.register({ email: user.email, display_name: user.display_name, password: "  exact  " })}>Register</button>
-      <button type="button" onClick={() => void auth.logout()}>Log out</button>
+      <button type="button" onClick={() => void auth.logout().catch(() => undefined)}>Log out</button>
       <button type="button" onClick={() => void auth.refreshSession()}>Refresh</button>
     </div>
   );
@@ -112,5 +112,18 @@ describe("AuthProvider", () => {
     await waitFor(() => expect(sessionMocks.deleteSession).toHaveBeenCalled());
     expect(await screen.findByText("anonymous")).toBeInTheDocument();
     expect(useUiStore.getState().searchQuery).toBe("");
+  });
+
+  it("keeps the authenticated view when logout cannot reach the server", async () => {
+    sessionMocks.fetchSession.mockResolvedValue({ authenticated: true, user });
+    sessionMocks.deleteSession.mockRejectedValue(new Error("offline"));
+    render(<AuthProvider><Probe /></AuthProvider>);
+    await screen.findByText("authenticated");
+
+    fireEvent.click(screen.getByRole("button", { name: "Log out" }));
+    await waitFor(() => expect(sessionMocks.deleteSession).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByText("authenticated")).toBeInTheDocument();
+    expect(screen.getByText("Ada")).toBeInTheDocument();
   });
 });

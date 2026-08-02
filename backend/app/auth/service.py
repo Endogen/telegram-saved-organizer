@@ -112,6 +112,15 @@ class TelegramAuthService:
         if connection is None or not connection.session_encrypted:
             raise TelegramConnectionNotFoundError("Telegram verification has not been started.")
 
+        # Verification requests can be retried by browsers and reverse proxies.
+        # Once the connection is complete, treat a duplicate request as an
+        # idempotent success instead of interpreting the cleared challenge as
+        # expired and crypto-erasing a valid Telegram session.
+        if connection.state == "connected":
+            return TelegramConnectionState.CONNECTED
+        if connection.state != "pending":
+            raise TelegramConnectionNotFoundError("Telegram verification has not been started.")
+
         if self._challenge_expired(connection.pending_expires_at):
             self._erase_expired_challenge(connection)
             await self._session.commit()
