@@ -18,8 +18,8 @@ jobs:
     timeout-minutes: 15
     env:
       TSO_ENVIRONMENT: test
-      TSO_DATA_DIR: ${{ runner.temp }}/tso-backend
-      TSO_DATABASE_URL: sqlite+aiosqlite:///${{ runner.temp }}/tso-tests.db
+      TSO_DATA_DIR: /tmp/tso-backend
+      TSO_DATABASE_URL: sqlite+aiosqlite:////tmp/tso-tests.db
       TSO_MASTER_KEY: ci-only-master-key-never-use-outside-tests-2026
       TSO_TELEGRAM_API_ID: ""
       TSO_TELEGRAM_API_HASH: ""
@@ -83,7 +83,7 @@ jobs:
           --health-retries 20
     env:
       TSO_ENVIRONMENT: test
-      TSO_DATA_DIR: ${{ runner.temp }}/tso-migration
+      TSO_DATA_DIR: /tmp/tso-migration
       TSO_DATABASE_URL: postgresql+asyncpg://tso:migration-test-only@127.0.0.1:5432/tso
       TSO_MASTER_KEY: ci-only-master-key-never-use-outside-tests-2026
       TSO_TELEGRAM_API_ID: ""
