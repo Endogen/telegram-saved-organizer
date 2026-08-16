@@ -46,7 +46,8 @@ TERMINAL_SCAN_STATES = ("completed", "failed", "cancelled")
 SCAN_LEASE_SECONDS = 90
 SCAN_HEARTBEAT_SECONDS = 20
 SCAN_CLAIM_RETRY_LIMIT = 3
-SCAN_SLICE_CLEANUP_GRACE_SECONDS = 5.0
+SCAN_CLIENT_DISCONNECT_TIMEOUT_SECONDS = 30.0
+SCAN_SLICE_CLEANUP_GRACE_SECONDS = SCAN_CLIENT_DISCONNECT_TIMEOUT_SECONDS + 5.0
 
 _ResultT = TypeVar("_ResultT")
 
@@ -671,6 +672,7 @@ async def _execute_claimed_scan(
         session_string=session_string,
         api_id=api_id,
         api_hash=api_hash,
+        disconnect_timeout_seconds=SCAN_CLIENT_DISCONNECT_TIMEOUT_SECONDS,
     ) as client:
         if not await client.is_user_authorized():
             await _downgrade_connection(lease=lease)

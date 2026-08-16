@@ -783,7 +783,10 @@ async def test_bounded_slice_passes_scanner_only_the_time_remaining_after_setup(
             return ScanProgress(completion_reason=SLICE_TIME_LIMIT)
 
     @asynccontextmanager
-    async def delayed_client_context(**_: object):
+    async def delayed_client_context(**kwargs: object):
+        captured["disconnect_timeout_seconds"] = kwargs.get(
+            "disconnect_timeout_seconds"
+        )
         await asyncio.sleep(0.08)
         yield _Client()
 
@@ -833,6 +836,7 @@ async def test_bounded_slice_passes_scanner_only_the_time_remaining_after_setup(
 
     assert progress.completion_reason == SLICE_TIME_LIMIT
     assert captured["scanner_finished"] is True
+    assert captured["disconnect_timeout_seconds"] == 30.0
     timeout_seconds = captured["timeout_seconds"]
     assert isinstance(timeout_seconds, (int, float))
     assert 0 < timeout_seconds < 0.18
