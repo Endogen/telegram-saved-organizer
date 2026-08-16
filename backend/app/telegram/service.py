@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import TypeVar
 from uuid import uuid4
@@ -702,6 +702,45 @@ async def _execute_claimed_scan(
         async def persist_page(page: ScanPage) -> None:
             await _persist_scan_page(lease=lease, page=page)
 
+        async def load_cached_media(page: ScanPage) -> ScanPage:
+            telegram_ids = [message.telegram_id for message in page.messages]
+            if not telegram_ids:
+                return page
+            async with SessionLocal() as cache_session:
+                cached_rows = (
+                    await cache_session.execute(
+                        select(
+                            Message.telegram_id,
+                            Message.cached_media,
+                            Message.cached_media_mime_type,
+                        ).where(
+                            Message.user_id == lease.user_id,
+                            Message.telegram_user_id == lease.telegram_user_id,
+                            Message.telegram_id.in_(telegram_ids),
+                            Message.cached_media.is_not(None),
+                        )
+                    )
+                ).all()
+            cached_by_id = {
+                int(telegram_id): (cached_media, cached_media_mime_type)
+                for telegram_id, cached_media, cached_media_mime_type in cached_rows
+            }
+            if not cached_by_id:
+                return page
+            return replace(
+                page,
+                messages=tuple(
+                    replace(
+                        message,
+                        cached_media=cached_by_id[message.telegram_id][0],
+                        cached_media_mime_type=cached_by_id[message.telegram_id][1],
+                    )
+                    if message.telegram_id in cached_by_id
+                    else message
+                    for message in page.messages
+                ),
+            )
+
         async def should_stop() -> bool:
             return await _scan_stop_requested(lease=lease)
 
@@ -714,6 +753,7 @@ async def _execute_claimed_scan(
             max_messages=remaining_messages,
             max_pages=settings.scan_slice_max_pages,
             timeout_seconds=scanner_timeout,
+            load_cached_media=load_cached_media,
             media_cache_max_bytes=getattr(
                 settings,
                 "media_cache_max_bytes",

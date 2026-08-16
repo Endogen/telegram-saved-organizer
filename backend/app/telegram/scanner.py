@@ -117,6 +117,7 @@ class ScanProgress:
 
 
 OnScanPage = Callable[[ScanPage], Awaitable[None]]
+LoadCachedMedia = Callable[[ScanPage], Awaitable[ScanPage]]
 ShouldStop = Callable[[], Awaitable[bool]]
 
 
@@ -139,6 +140,7 @@ class SavedMessagesScanner:
         max_pages: int | None = None,
         timeout_seconds: float | None = None,
         media_cache_max_bytes: int | None = None,
+        load_cached_media: LoadCachedMedia | None = None,
     ) -> ScanProgress:
         """Scan a resumable, optionally bounded Saved Messages slice."""
 
@@ -229,6 +231,22 @@ class SavedMessagesScanner:
                     page_size=page_capacity,
                     has_more=has_more,
                 )
+                if load_cached_media is not None:
+                    try:
+                        if deadline is None:
+                            page = await load_cached_media(page)
+                        else:
+                            remaining_seconds = (
+                                deadline - asyncio.get_running_loop().time()
+                            )
+                            if remaining_seconds <= 0:
+                                completion_reason = SLICE_TIME_LIMIT
+                                break
+                            async with asyncio.timeout(remaining_seconds):
+                                page = await load_cached_media(page)
+                    except TimeoutError:
+                        completion_reason = SLICE_TIME_LIMIT
+                        break
                 preview_deadline_reached = False
                 if media_cache_max_bytes is not None:
                     page, preview_deadline_reached = await self._cache_media_previews(
@@ -412,6 +430,9 @@ class SavedMessagesScanner:
 
         enriched_messages: list[ScannedMessage] = []
         for raw_message, scanned in zip(raw_page, page.messages, strict=True):
+            if scanned.cached_media is not None:
+                enriched_messages.append(scanned)
+                continue
             download_plan = self._preview_download_plan(
                 raw_message=raw_message,
                 scanned=scanned,

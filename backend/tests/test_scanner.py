@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -331,6 +331,48 @@ async def test_preview_deadline_before_first_message_preserves_starting_cursor(
     assert progress.pages_scanned == 0
     assert progress.last_message_id == 99
     assert seen == []
+
+
+@pytest.mark.asyncio
+async def test_scanner_reuses_a_persisted_preview_without_downloading_it() -> None:
+    class _NoDownloadClient(_FakeTelegramClient):
+        async def download_media(self, *_: object, **__: object) -> bytes:
+            raise AssertionError("an existing preview must not be downloaded again")
+
+    now = datetime.now(tz=UTC)
+    message = _FakeMessage(id=7, date=now)
+    message.photo = SimpleNamespace(  # type: ignore[assignment]
+        sizes=[SimpleNamespace(w=320, h=240, size=10)]
+    )
+    client = _NoDownloadClient({0: [message]})
+    seen: list[ScanPage] = []
+
+    async def load_cached_media(page: ScanPage) -> ScanPage:
+        return replace(
+            page,
+            messages=(
+                replace(
+                    page.messages[0],
+                    cached_media=b"persisted-preview",
+                    cached_media_mime_type="image/jpeg",
+                ),
+            ),
+        )
+
+    async def on_page(page: ScanPage) -> None:
+        seen.append(page)
+
+    progress = await SavedMessagesScanner().scan(
+        client=client,
+        page_size=10,
+        max_messages=10,
+        media_cache_max_bytes=1024,
+        load_cached_media=load_cached_media,
+        on_page=on_page,
+    )
+
+    assert progress.completion_reason == SOURCE_EXHAUSTED
+    assert seen[0].messages[0].cached_media == b"persisted-preview"
 
 
 @pytest.mark.asyncio
