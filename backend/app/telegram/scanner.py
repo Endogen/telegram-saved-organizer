@@ -34,9 +34,7 @@ RUNTIME_LIMIT_REACHED = "runtime_limit_reached"
 STOPPED_BY_USER = "stopped_by_user"
 SLICE_PAGE_LIMIT = "slice_page_limit"
 SLICE_TIME_LIMIT = "slice_time_limit"
-TERMINAL_COMPLETION_REASONS = frozenset(
-    (SOURCE_EXHAUSTED, MESSAGE_LIMIT_REACHED)
-)
+TERMINAL_COMPLETION_REASONS = frozenset((SOURCE_EXHAUSTED, MESSAGE_LIMIT_REACHED))
 logger = logging.getLogger(__name__)
 
 
@@ -49,7 +47,9 @@ def _trim_url_punctuation(value: str) -> str:
             continue
 
         opening_character = URL_CLOSING_PAIRS.get(final_character)
-        if opening_character is not None and normalized.count(final_character) > normalized.count(opening_character):
+        if opening_character is not None and normalized.count(
+            final_character
+        ) > normalized.count(opening_character):
             normalized = normalized[:-1]
             continue
         break
@@ -174,7 +174,10 @@ class SavedMessagesScanner:
                     break
 
                 progress = await self.get_progress()
-                if max_messages is not None and progress.messages_scanned >= max_messages:
+                if (
+                    max_messages is not None
+                    and progress.messages_scanned >= max_messages
+                ):
                     completion_reason = MESSAGE_LIMIT_REACHED
                     break
                 if max_pages is not None and progress.pages_scanned >= max_pages:
@@ -187,7 +190,9 @@ class SavedMessagesScanner:
                         page_capacity,
                         max_messages - progress.messages_scanned,
                     )
-                fetch_limit = page_capacity + 1 if max_messages is not None else page_capacity
+                fetch_limit = (
+                    page_capacity + 1 if max_messages is not None else page_capacity
+                )
 
                 try:
                     if deadline is None:
@@ -224,18 +229,24 @@ class SavedMessagesScanner:
                     page_size=page_capacity,
                     has_more=has_more,
                 )
+                preview_deadline_reached = False
                 if media_cache_max_bytes is not None:
-                    page = await self._cache_media_previews(
+                    page, preview_deadline_reached = await self._cache_media_previews(
                         client=client,
                         raw_page=raw_page[:page_capacity],
                         page=page,
                         max_bytes=media_cache_max_bytes,
                         deadline=deadline,
                     )
-                if on_page is not None:
-                    await on_page(page)
+                if page.messages:
+                    if on_page is not None:
+                        await on_page(page)
 
-                await self._record_page(page=page)
+                    await self._record_page(page=page)
+
+                if preview_deadline_reached:
+                    completion_reason = SLICE_TIME_LIMIT
+                    break
 
                 if not page.has_more or page.next_offset_id is None:
                     completion_reason = SOURCE_EXHAUSTED
@@ -326,7 +337,9 @@ class SavedMessagesScanner:
         offset_id: int,
     ) -> list[Any]:
         page: list[Any] = []
-        async for message in client.iter_messages("me", limit=limit, offset_id=offset_id):
+        async for message in client.iter_messages(
+            "me", limit=limit, offset_id=offset_id
+        ):
             if message is not None:
                 page.append(message)
         return page
@@ -338,7 +351,9 @@ class SavedMessagesScanner:
         page_size: int,
         has_more: bool | None = None,
     ) -> ScanPage:
-        messages = tuple(self._normalize_message(raw_message) for raw_message in raw_page)
+        messages = tuple(
+            self._normalize_message(raw_message) for raw_message in raw_page
+        )
         next_offset_id = self._minimum_message_id(raw_page)
         page_has_more = (
             len(raw_page) >= page_size and next_offset_id is not None
@@ -377,15 +392,26 @@ class SavedMessagesScanner:
         page: ScanPage,
         max_bytes: int,
         deadline: float | None,
-    ) -> ScanPage:
+    ) -> tuple[ScanPage, bool]:
         download_media = getattr(client, "download_media", None)
         if not callable(download_media):
-            return page
+            return (page, False)
+
+        def deadline_page() -> ScanPage:
+            processed_messages = tuple(enriched_messages)
+            return replace(
+                page,
+                messages=processed_messages,
+                has_more=True,
+                next_offset_id=(
+                    min(message.telegram_id for message in processed_messages)
+                    if processed_messages
+                    else None
+                ),
+            )
 
         enriched_messages: list[ScannedMessage] = []
-        for index, (raw_message, scanned) in enumerate(
-            zip(raw_page, page.messages, strict=True)
-        ):
+        for raw_message, scanned in zip(raw_page, page.messages, strict=True):
             download_plan = self._preview_download_plan(
                 raw_message=raw_message,
                 scanned=scanned,
@@ -398,7 +424,9 @@ class SavedMessagesScanner:
 
             try:
                 if deadline is None:
-                    content = await download_media(raw_message, bytes, **download_kwargs)
+                    content = await download_media(
+                        raw_message, bytes, **download_kwargs
+                    )
                 else:
                     remaining_seconds = (
                         deadline
@@ -406,13 +434,13 @@ class SavedMessagesScanner:
                         - MEDIA_PERSISTENCE_RESERVE_SECONDS
                     )
                     if remaining_seconds <= 0:
-                        enriched_messages.extend(page.messages[index:])
-                        break
+                        return (deadline_page(), True)
                     async with asyncio.timeout(remaining_seconds):
-                        content = await download_media(raw_message, bytes, **download_kwargs)
+                        content = await download_media(
+                            raw_message, bytes, **download_kwargs
+                        )
             except TimeoutError:
-                enriched_messages.extend(page.messages[index:])
-                break
+                return (deadline_page(), True)
             except Exception:
                 logger.info(
                     "Unable to cache Telegram image preview for message %s",
@@ -422,7 +450,11 @@ class SavedMessagesScanner:
                 enriched_messages.append(scanned)
                 continue
 
-            if not isinstance(content, bytes) or not content or len(content) > max_bytes:
+            if (
+                not isinstance(content, bytes)
+                or not content
+                or len(content) > max_bytes
+            ):
                 enriched_messages.append(scanned)
                 continue
             enriched_messages.append(
@@ -433,7 +465,7 @@ class SavedMessagesScanner:
                 )
             )
 
-        return replace(page, messages=tuple(enriched_messages))
+        return (replace(page, messages=tuple(enriched_messages)), False)
 
     def _renderable_image_mime_type(self, scanned: ScannedMessage) -> str | None:
         if scanned.media_type == "photo":
@@ -492,7 +524,11 @@ class SavedMessagesScanner:
             height = self._coerce_non_negative_int(getattr(size, "h", None)) or 0
             candidates.append((width * height, estimated_size or 0, size))
 
-        return max(candidates, key=lambda candidate: candidate[:2])[2] if candidates else None
+        return (
+            max(candidates, key=lambda candidate: candidate[:2])[2]
+            if candidates
+            else None
+        )
 
     def _telegram_media_size(self, size: Any) -> int | None:
         direct_size = self._coerce_non_negative_int(getattr(size, "size", None))
@@ -508,7 +544,9 @@ class SavedMessagesScanner:
         ]
         return max(normalized_sizes) if normalized_sizes else None
 
-    def _extract_media(self, raw_message: Any) -> tuple[str | None, str | None, int | None, str | None]:
+    def _extract_media(
+        self, raw_message: Any
+    ) -> tuple[str | None, str | None, int | None, str | None]:
         if getattr(raw_message, "video", None):
             return ("video", None, None, None)
         if getattr(raw_message, "audio", None):
@@ -605,8 +643,12 @@ class SavedMessagesScanner:
         return datetime.now(tz=UTC)
 
     def _minimum_message_id(self, raw_page: list[Any]) -> int | None:
-        message_ids = [self._coerce_int(getattr(message, "id", None)) for message in raw_page]
-        valid_message_ids = [message_id for message_id in message_ids if message_id is not None]
+        message_ids = [
+            self._coerce_int(getattr(message, "id", None)) for message in raw_page
+        ]
+        valid_message_ids = [
+            message_id for message_id in message_ids if message_id is not None
+        ]
         if not valid_message_ids:
             return None
         return min(valid_message_ids)

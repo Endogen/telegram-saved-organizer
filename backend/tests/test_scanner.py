@@ -121,7 +121,10 @@ async def test_scanner_paginates_and_tracks_progress() -> None:
                 ),
                 _FakeMessage(id=4, date=now, video=True),
             ],
-            4: [_FakeMessage(id=3, date=now, photo=True), _FakeMessage(id=2, date=now, audio=True)],
+            4: [
+                _FakeMessage(id=3, date=now, photo=True),
+                _FakeMessage(id=2, date=now, audio=True),
+            ],
             2: [_FakeMessage(id=1, date=now, message="No media")],
         }
     )
@@ -188,6 +191,55 @@ async def test_scanner_caches_a_bounded_photo_preview() -> None:
     assert scanned.cached_media == b"jpeg-preview"
     assert scanned.cached_media_mime_type == "image/jpeg"
     assert client.download_calls == [(message, thumbnail)]
+
+
+@pytest.mark.asyncio
+async def test_preview_deadline_does_not_advance_past_uncached_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _DeadlineMediaClient(_FakeTelegramClient):
+        async def download_media(
+            self,
+            message: Any,
+            file: Any,
+            **kwargs: Any,
+        ) -> bytes:
+            assert file is bytes
+            if message.id == 2:
+                return b"first-preview"
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    monkeypatch.setattr(
+        "app.telegram.scanner.MEDIA_PERSISTENCE_RESERVE_SECONDS",
+        0,
+    )
+    now = datetime.now(tz=UTC)
+    thumbnail = SimpleNamespace(w=320, h=240, size=10)
+    first = _FakeMessage(id=2, date=now)
+    first.photo = SimpleNamespace(sizes=[thumbnail])  # type: ignore[assignment]
+    timed_out = _FakeMessage(id=1, date=now)
+    timed_out.photo = SimpleNamespace(sizes=[thumbnail])  # type: ignore[assignment]
+    client = _DeadlineMediaClient({0: [first, timed_out]})
+    seen: list[ScanPage] = []
+
+    async def on_page(page: ScanPage) -> None:
+        seen.append(page)
+
+    progress = await SavedMessagesScanner().scan(
+        client=client,
+        page_size=2,
+        max_messages=10,
+        timeout_seconds=0.05,
+        media_cache_max_bytes=1024,
+        on_page=on_page,
+    )
+
+    assert progress.completion_reason == SLICE_TIME_LIMIT
+    assert progress.messages_scanned == 1
+    assert progress.last_message_id == 2
+    assert [message.telegram_id for message in seen[0].messages] == [2]
+    assert seen[0].messages[0].cached_media == b"first-preview"
 
 
 @pytest.mark.asyncio
@@ -387,7 +439,9 @@ async def test_scanner_rejects_parallel_runs() -> None:
         page_started.set()
         await unblock.wait()
 
-    first_scan_task = asyncio.create_task(scanner.scan(client=client, page_size=2, on_page=on_page))
+    first_scan_task = asyncio.create_task(
+        scanner.scan(client=client, page_size=2, on_page=on_page)
+    )
     await asyncio.wait_for(page_started.wait(), timeout=1.0)
 
     with pytest.raises(ScanAlreadyRunningError):
@@ -448,7 +502,9 @@ async def test_scanner_stops_when_offset_id_does_not_advance() -> None:
     assert client.calls == [("me", 2, 0)]
 
 
-def test_scanner_normalizes_voice_messages_with_text_sender_and_minimal_raw_data() -> None:
+def test_scanner_normalizes_voice_messages_with_text_sender_and_minimal_raw_data() -> (
+    None
+):
     scanner = SavedMessagesScanner()
     naive_date = datetime(2026, 1, 1, 12, 0, 0)
     normalized = scanner._normalize_message(
@@ -481,7 +537,10 @@ def test_scanner_normalizes_document_sender_name_and_date_fallbacks() -> None:
             document=_FakeDocument(
                 mime_type=None,
                 size=True,
-                attributes=[_FakeDocumentAttribute(file_name=""), _FakeDocumentAttribute(file_name="")],
+                attributes=[
+                    _FakeDocumentAttribute(file_name=""),
+                    _FakeDocumentAttribute(file_name=""),
+                ],
             ),
             sender=_FakeSender(first_name="Jane", last_name="Doe", username="jane"),
         )
@@ -531,7 +590,11 @@ def test_scanner_extract_file_name_returns_none_without_attributes() -> None:
 
 def test_scanner_minimum_message_id_ignores_invalid_values() -> None:
     scanner = SavedMessagesScanner()
-    raw_page = [SimpleNamespace(id=True), SimpleNamespace(id=None), SimpleNamespace(id="not-an-int")]
+    raw_page = [
+        SimpleNamespace(id=True),
+        SimpleNamespace(id=None),
+        SimpleNamespace(id="not-an-int"),
+    ]
 
     assert scanner._minimum_message_id(raw_page) is None
 
@@ -563,10 +626,15 @@ def test_scanner_rejects_ids_outside_database_range(telegram_id: int) -> None:
         ("Read https://example.com/article.", "https://example.com/article"),
         ("Watch (https://youtu.be/dQw4w9WgXcQ).", "https://youtu.be/dQw4w9WgXcQ"),
         ("Docs https://example.com/guide_(draft)", "https://example.com/guide_(draft)"),
-        ("Repository www.github.com/openai/codex", "https://www.github.com/openai/codex"),
+        (
+            "Repository www.github.com/openai/codex",
+            "https://www.github.com/openai/codex",
+        ),
     ],
 )
-def test_scanner_trims_sentence_punctuation_from_urls(content: str, expected_url: str) -> None:
+def test_scanner_trims_sentence_punctuation_from_urls(
+    content: str, expected_url: str
+) -> None:
     scanner = SavedMessagesScanner()
 
     assert scanner._extract_url(content) == expected_url
