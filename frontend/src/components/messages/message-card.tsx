@@ -41,44 +41,54 @@ function resolveCategoryIcon(iconName: string): LucideIcon {
   return categoryIconMap[iconName.toLowerCase()] ?? FolderKanban;
 }
 
-function resolveMediaIcon(mediaType: string | null, hasUrl: boolean): LucideIcon {
-  const normalizedType = mediaType?.toLowerCase() ?? "";
-  if (normalizedType.includes("video")) {
-    return Video;
-  }
-  if (normalizedType.includes("audio") || normalizedType.includes("voice")) {
-    return Music2;
-  }
-  if (normalizedType.includes("photo") || normalizedType.includes("image")) {
-    return ImageIcon;
-  }
-  if (normalizedType.includes("document") || normalizedType.includes("file") || normalizedType.includes("pdf")) {
-    return FileText;
-  }
-  if (hasUrl) {
-    return Link2;
-  }
-  return MessageSquareText;
-}
+type MediaPresentation = {
+  icon: LucideIcon;
+  label: string;
+};
 
-function resolveMediaLabel(mediaType: string | null, hasUrl: boolean): string {
+function resolveMediaPresentation(
+  mediaType: string | null,
+  mimeType: string | null,
+  hasUrl: boolean,
+): MediaPresentation {
   const normalizedType = mediaType?.toLowerCase() ?? "";
-  if (normalizedType.includes("video")) {
-    return "Video";
+  const normalizedMimeType = mimeType?.toLowerCase() ?? "";
+  if (
+    normalizedType.includes("video")
+    || normalizedType.includes("animation")
+    || normalizedMimeType.startsWith("video/")
+  ) {
+    return { icon: Video, label: "Video" };
   }
-  if (normalizedType.includes("audio") || normalizedType.includes("voice")) {
-    return "Audio";
+  if (
+    normalizedType.includes("audio")
+    || normalizedType.includes("voice")
+    || normalizedMimeType.startsWith("audio/")
+  ) {
+    return { icon: Music2, label: "Audio" };
   }
-  if (normalizedType.includes("photo") || normalizedType.includes("image")) {
-    return "Image";
+  if (
+    normalizedType.includes("photo")
+    || normalizedType.includes("image")
+    || normalizedMimeType.startsWith("image/")
+  ) {
+    return { icon: ImageIcon, label: "Image" };
   }
-  if (normalizedType.includes("document") || normalizedType.includes("file") || normalizedType.includes("pdf")) {
-    return "Document";
+  if (
+    normalizedType.includes("document")
+    || normalizedType.includes("file")
+    || normalizedType.includes("pdf")
+    || normalizedMimeType.length > 0
+  ) {
+    return { icon: FileText, label: "Document" };
+  }
+  if (normalizedType.length > 0 && normalizedType !== "text") {
+    return { icon: Archive, label: "Other media" };
   }
   if (hasUrl) {
-    return "Link";
+    return { icon: Link2, label: "Link" };
   }
-  return "Text";
+  return { icon: MessageSquareText, label: "Text" };
 }
 
 function formatRelativeDate(isoDate: string): string {
@@ -155,8 +165,11 @@ export function MessageCard({
   const [isDragging, setIsDragging] = useState(false);
   const CategoryIcon = resolveCategoryIcon(message.category.icon);
   const hasUrl = message.url !== null && message.url.trim().length > 0;
-  const MediaIcon = resolveMediaIcon(message.media_type, hasUrl);
-  const mediaLabel = resolveMediaLabel(message.media_type, hasUrl);
+  const { icon: MediaIcon, label: mediaLabel } = resolveMediaPresentation(
+    message.media_type,
+    message.mime_type,
+    hasUrl,
+  );
   const cardEnterAnimation = shouldReduceMotion ? false : { opacity: 0, y: 20, scale: 0.98 };
   const cardExitAnimation = shouldReduceMotion
     ? { opacity: 0, transition: { duration: 0.12 } }
@@ -446,7 +459,14 @@ export function MessageCard({
       </div>
 
       <div className="mt-3">
-        <MessageContent content={message.content} url={message.url} compact />
+        <MessageContent
+          content={message.content}
+          url={message.url}
+          mediaUrl={message.media_url}
+          mediaType={message.media_type}
+          mimeType={message.mime_type}
+          compact
+        />
       </div>
       <button
         type="button"

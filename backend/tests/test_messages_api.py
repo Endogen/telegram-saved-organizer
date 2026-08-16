@@ -13,7 +13,9 @@ from app.accounts.dependencies import get_current_user
 from app.main import create_app
 from app.messages.router import get_message_service
 from app.messages.service import (
+    CachedMessageMedia,
     CategoryNotFoundError,
+    MessageKind,
     MessageListResult,
     MessageNotFoundError,
     MessageService,
@@ -64,15 +66,25 @@ class _FakeMessage:
 class _FakeMessageService:
     def __init__(self) -> None:
         self.list_calls: list[
-            tuple[int, int, MessageSort, str | None, tuple[str, ...] | None, str | None]
+            tuple[
+                int,
+                int,
+                MessageSort,
+                str | None,
+                tuple[str, ...] | None,
+                str | None,
+                MessageKind | None,
+            ]
         ] = []
         self.get_calls: list[int] = []
+        self.get_media_calls: list[int] = []
         self.update_calls: list[tuple[int, dict[str, Any]]] = []
         self.delete_calls: list[tuple[int, bool]] = []
         self.bulk_delete_calls: list[tuple[tuple[int, ...], bool]] = []
         self.bulk_move_calls: list[tuple[tuple[int, ...], int]] = []
         self.list_error: Exception | None = None
         self.get_error: Exception | None = None
+        self.get_media_error: Exception | None = None
         self.update_error: Exception | None = None
         self.delete_error: Exception | None = None
         self.bulk_delete_error: Exception | None = None
@@ -80,6 +92,10 @@ class _FakeMessageService:
         self.message = _build_message()
         self.list_result = MessageListResult(items=[self.message], total=1, page=1, per_page=50)
         self.get_result = self.message
+        self.get_media_result = CachedMessageMedia(
+            content=b"image-bytes",
+            mime_type="image/jpeg",
+        )
         self.update_result = self.message
         self.bulk_delete_result = 0
         self.bulk_move_result = 0
@@ -93,6 +109,7 @@ class _FakeMessageService:
         category_slug: str | None = None,
         tag_names: list[str] | None = None,
         search: str | None = None,
+        message_kind: MessageKind | None = None,
     ) -> MessageListResult:
         self.list_calls.append(
             (
@@ -102,6 +119,7 @@ class _FakeMessageService:
                 category_slug,
                 tuple(tag_names) if tag_names is not None else None,
                 search,
+                message_kind,
             )
         )
         if self.list_error is not None:
@@ -113,6 +131,12 @@ class _FakeMessageService:
         if self.get_error is not None:
             raise self.get_error
         return self.get_result
+
+    async def get_cached_media(self, *, message_id: int) -> CachedMessageMedia:
+        self.get_media_calls.append(message_id)
+        if self.get_media_error is not None:
+            raise self.get_media_error
+        return self.get_media_result
 
     async def update_message(self, *, message_id: int, updates: dict[str, Any]) -> _FakeMessage:
         self.update_calls.append((message_id, updates))
@@ -220,7 +244,7 @@ async def test_list_messages_endpoint_returns_paginated_response(
     assert body["items"][0]["id"] == 12
     assert body["items"][0]["category"]["slug"] == "links"
     assert body["items"][0]["tags"] == [{"id": 2, "name": "read-later", "color": "#22C55E"}]
-    assert service.list_calls == [(2, 10, MessageSort.DATE_ASC, None, None, None)]
+    assert service.list_calls == [(2, 10, MessageSort.DATE_ASC, None, None, None, None)]
 
 
 @pytest.mark.asyncio
@@ -236,6 +260,7 @@ async def test_list_messages_endpoint_forwards_search_and_filter_params(
             "tag=read-later&"
             "tag=urgent&"
             "search=telegram&"
+            "kind=mixed&"
             "page=1&"
             "per_page=25&"
             "sort=date_desc"
@@ -243,8 +268,29 @@ async def test_list_messages_endpoint_forwards_search_and_filter_params(
 
     assert response.status_code == 200
     assert service.list_calls == [
-        (1, 25, MessageSort.DATE_DESC, "links", ("read-later", "urgent"), "telegram")
+        (
+            1,
+            25,
+            MessageSort.DATE_DESC,
+            "links",
+            ("read-later", "urgent"),
+            "telegram",
+            MessageKind.MIXED,
+        )
     ]
+
+
+@pytest.mark.asyncio
+async def test_list_messages_endpoint_rejects_unknown_message_kind(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/api/messages?kind=unknown")
+
+    assert response.status_code == 422
+    assert service.list_calls == []
 
 
 @pytest.mark.asyncio
@@ -462,6 +508,46 @@ async def test_get_message_endpoint_returns_not_found(
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Message 999 was not found."
+
+
+@pytest.mark.asyncio
+async def test_get_message_media_returns_cached_image(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/api/messages/12/media")
+
+    assert response.status_code == 200
+    assert response.content == b"image-bytes"
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.headers["cache-control"] == "private, max-age=86400"
+    assert response.headers["content-disposition"] == "inline"
+    assert service.get_media_calls == [12]
+
+
+@pytest.mark.asyncio
+async def test_get_message_media_rejects_missing_or_unsafe_cache(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    transport = ASGITransport(app=app)
+
+    service.get_media_error = MessageNotFoundError("Media for message 12 was not found.")
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        missing_response = await client.get("/api/messages/12/media")
+    assert missing_response.status_code == 404
+
+    service.get_media_error = None
+    service.get_media_result = CachedMessageMedia(
+        content=b"<svg></svg>",
+        mime_type="image/svg+xml",
+    )
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        unsafe_response = await client.get("/api/messages/12/media")
+    assert unsafe_response.status_code == 415
+    assert unsafe_response.json()["detail"] == "unsupported_cached_media_type"
 
 
 @pytest.mark.asyncio

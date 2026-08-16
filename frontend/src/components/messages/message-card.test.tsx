@@ -13,6 +13,7 @@ function createMessage(overrides: Partial<MessageListItem> = {}): MessageListIte
     file_name: null,
     file_size: null,
     mime_type: null,
+    media_url: null,
     url: "https://www.example.com/path",
     sender_name: "Me",
     date: "2026-02-15T10:00:00.000Z",
@@ -46,6 +47,32 @@ function createMessage(overrides: Partial<MessageListItem> = {}): MessageListIte
 }
 
 describe("MessageCard", () => {
+  it("labels unknown native Telegram media as other media instead of text", () => {
+    render(
+      <MessageCard
+        message={createMessage({
+          content: null,
+          media_type: "sticker",
+          url: null,
+          category: {
+            id: 8,
+            name: "Other",
+            slug: "other",
+            icon: "archive",
+            color: "#64748B",
+          },
+        })}
+        onOpenDetailRequest={vi.fn()}
+        onMoveRequest={vi.fn()}
+        onTagRequest={vi.fn()}
+        onDeleteRequest={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Other media")).toBeInTheDocument();
+    expect(screen.queryByText("Text")).not.toBeInTheDocument();
+  });
+
   it("renders message metadata, parsed domain, and tags", () => {
     const message = createMessage({ content: "  Ship this build  " });
 

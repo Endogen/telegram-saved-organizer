@@ -19,6 +19,7 @@ function createMessage(id: number): MessageListItem {
     file_name: null,
     file_size: null,
     mime_type: null,
+    media_url: null,
     url: null,
     sender_name: null,
     date: "2026-02-15T10:00:00.000Z",
@@ -75,12 +76,13 @@ describe("messages api client", () => {
       per_page: 4.8,
       sort: "date_desc",
       category: " links ",
+      kind: "image",
       search: "  release notes ",
       tag: [" frontend ", "", "release"],
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/messages?page=1&per_page=4&sort=date_desc&category=links&search=release+notes&tag=frontend&tag=release",
+      "/api/messages?page=1&per_page=4&sort=date_desc&category=links&kind=image&search=release+notes&tag=frontend&tag=release",
       { credentials: "same-origin" },
     );
     expect(result).toEqual(payload);

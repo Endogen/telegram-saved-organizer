@@ -87,6 +87,13 @@ def test_scan_resource_limits_must_be_positive(tmp_path: Path) -> None:
     assert "TSO_SCAN_MAX_MESSAGES must be greater than zero" in result.stderr
 
 
+def test_media_cache_limit_must_be_positive(tmp_path: Path) -> None:
+    result = run_config_import(tmp_path, TSO_MEDIA_CACHE_MAX_BYTES="0")
+
+    assert result.returncode != 0
+    assert "TSO_MEDIA_CACHE_MAX_BYTES must be greater than zero" in result.stderr
+
+
 def test_telegram_client_timeouts_must_be_positive(tmp_path: Path) -> None:
     result = run_config_import(tmp_path, TSO_TELEGRAM_CONNECT_TIMEOUT_SECONDS="0")
 

@@ -22,7 +22,7 @@ describe("MessageContent", () => {
     );
   });
 
-  it("loads a YouTube thumbnail only after an explicit privacy choice", () => {
+  it("loads a YouTube thumbnail immediately", () => {
     render(
       <MessageContent
         content="Worth watching:\nhttps://www.youtube.com/watch?v=dQw4w9WgXcQ"
@@ -33,14 +33,59 @@ describe("MessageContent", () => {
     expect(screen.getByText(/Worth watching/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" })).toBeInTheDocument();
     expect(screen.getByText("YouTube")).toBeInTheDocument();
-    expect(document.querySelector("img")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Load YouTube thumbnail (contacts YouTube)" }));
-
     expect(document.querySelector("img")).toHaveAttribute(
       "src",
       "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
     );
+  });
+
+  it("renders a cached Telegram image with or without a caption", () => {
+    const { rerender } = render(
+      <MessageContent
+        content="A useful diagram"
+        url={null}
+        mediaUrl="/api/messages/42/media"
+        mediaType="photo"
+        mimeType="image/jpeg"
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: "Saved Telegram image: A useful diagram" })).toHaveAttribute(
+      "src",
+      "/api/messages/42/media",
+    );
+    expect(screen.getByText("A useful diagram")).toBeInTheDocument();
+
+    rerender(
+      <MessageContent
+        content={null}
+        url={null}
+        mediaUrl="/api/messages/43/media"
+        mediaType="photo"
+        mimeType="image/jpeg"
+      />,
+    );
+    expect(screen.getByRole("img", { name: "Saved Telegram image" })).toBeInTheDocument();
+    expect(screen.queryByText("No text or link content on this message.")).not.toBeInTheDocument();
+  });
+
+  it("shows a useful fallback when an image preview is not cached or fails", () => {
+    const { rerender } = render(
+      <MessageContent content={null} url={null} mediaType="photo" mimeType="image/jpeg" />,
+    );
+    expect(screen.getByText("Image preview will be cached during the next scan.")).toBeInTheDocument();
+
+    rerender(
+      <MessageContent
+        content={null}
+        url={null}
+        mediaUrl="/api/messages/42/media"
+        mediaType="photo"
+        mimeType="image/jpeg"
+      />,
+    );
+    fireEvent.error(screen.getByRole("img", { name: "Saved Telegram image" }));
+    expect(screen.getByText("Image preview unavailable.")).toBeInTheDocument();
   });
 
   it("does not duplicate the previewed URL in compact cards", () => {

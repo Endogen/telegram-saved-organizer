@@ -45,6 +45,7 @@ class MessageResponse(BaseModel):
     file_name: str | None
     file_size: int | None
     mime_type: str | None
+    media_url: str | None = None
     url: str | None
     sender_name: str | None
     date: datetime

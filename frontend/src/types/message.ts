@@ -20,6 +20,7 @@ export type MessageListItem = {
   file_name: string | null;
   file_size: number | null;
   mime_type: string | null;
+  media_url: string | null;
   url: string | null;
   sender_name: string | null;
   date: string;

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from app.messages.service import (
     CategoryNotFoundError,
+    MessageKind,
     MessageListResult,
     MessageNotFoundError,
     MessageService,
@@ -30,6 +32,14 @@ class _FakeScalarResult:
         return iter(self._values)
 
 
+class _FakeRowResult:
+    def __init__(self, row: Any | None) -> None:
+        self._row = row
+
+    def one_or_none(self) -> Any | None:
+        return self._row
+
+
 class _FakeSession:
     def __init__(self) -> None:
         self.scalar_values: list[Any] = []
@@ -37,6 +47,7 @@ class _FakeSession:
         self.scalar_calls: list[Any] = []
         self.scalars_calls: list[Any] = []
         self.execute_calls: list[Any] = []
+        self.execute_values: list[Any] = []
         self.delete_calls: list[Any] = []
         self.commit_calls = 0
 
@@ -51,8 +62,9 @@ class _FakeSession:
         values = self.scalars_values.pop(0) if self.scalars_values else []
         return _FakeScalarResult(values)
 
-    async def execute(self, statement: Any) -> None:
+    async def execute(self, statement: Any) -> Any:
         self.execute_calls.append(statement)
+        return self.execute_values.pop(0) if self.execute_values else None
 
     async def delete(self, item: Any) -> None:
         self.delete_calls.append(item)
@@ -207,6 +219,31 @@ async def test_list_messages_applies_category_tag_and_search_filters() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("message_kind", list(MessageKind))
+async def test_list_messages_applies_message_kind_filters(message_kind: MessageKind) -> None:
+    session = _FakeSession()
+    session.scalar_values = [0]
+    service = MessageService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    await service.list_messages(message_kind=message_kind)
+
+    statement = str(session.scalars_calls[0])
+    assert "messages.media_type" in statement
+    assert "messages.mime_type" in statement
+    assert "messages.content" in statement
+    assert "messages.url" in statement
+
+
+@pytest.mark.asyncio
+async def test_list_messages_rejects_unknown_message_kind() -> None:
+    session = _FakeSession()
+    service = MessageService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="not a valid MessageKind"):
+        await service.list_messages(message_kind="unknown")  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("sort", "expected_ordering"),
     [
@@ -255,6 +292,38 @@ async def test_get_message_raises_when_not_found() -> None:
     statement = str(session.scalar_calls[0])
     assert "messages.user_id" in statement
     assert "messages.id" in statement
+
+
+@pytest.mark.asyncio
+async def test_get_cached_media_is_tenant_scoped_and_returns_bytes() -> None:
+    session = _FakeSession()
+    session.execute_values = [
+        _FakeRowResult(
+            SimpleNamespace(
+                cached_media=b"jpeg-preview",
+                cached_media_mime_type="image/jpeg",
+            )
+        )
+    ]
+    service = MessageService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    media = await service.get_cached_media(message_id=12)
+
+    assert media.content == b"jpeg-preview"
+    assert media.mime_type == "image/jpeg"
+    statement = str(session.execute_calls[0])
+    assert "messages.user_id" in statement
+    assert "messages.id" in statement
+
+
+@pytest.mark.asyncio
+async def test_get_cached_media_raises_when_not_cached() -> None:
+    session = _FakeSession()
+    session.execute_values = [_FakeRowResult(None)]
+    service = MessageService(session=session, user_id=USER_ID)  # type: ignore[arg-type]
+
+    with pytest.raises(MessageNotFoundError, match="Media for message 12 was not found."):
+        await service.get_cached_media(message_id=12)
 
 
 @pytest.mark.asyncio

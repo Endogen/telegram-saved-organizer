@@ -24,6 +24,7 @@ MAX_PAGE_NUMBER = 1_000_000
 __all__ = [
     "CategoryNotFoundError",
     "MessageListResult",
+    "MessageKind",
     "MessageNotFoundError",
     "MessageService",
     "MessageSort",
@@ -64,6 +65,71 @@ class MessageSort(StrEnum):
     SENDER = "sender"
 
 
+class MessageKind(StrEnum):
+    """Supported message-content filters."""
+
+    TEXT = "text"
+    LINK = "link"
+    IMAGE = "image"
+    AUDIO = "audio"
+    VIDEO = "video"
+    DOCUMENT = "document"
+    MIXED = "mixed"
+    OTHER = "other"
+
+
+def _message_kind_predicate(message_kind: MessageKind):
+    """Build an exclusive primary-kind predicate for a message list query."""
+
+    media_type = func.lower(func.trim(func.coalesce(Message.media_type, "")))
+    mime_type = func.lower(func.trim(func.coalesce(Message.mime_type, "")))
+    has_media_type = (func.length(media_type) > 0) & (media_type != "text")
+    has_mime_type = func.length(mime_type) > 0
+    has_native_media = has_media_type | has_mime_type
+    has_content = func.length(func.trim(func.coalesce(Message.content, ""))) > 0
+    has_url = func.length(func.trim(func.coalesce(Message.url, ""))) > 0
+    has_caption_or_url = has_content | has_url
+
+    is_image = or_(
+        media_type.like("%photo%"),
+        media_type.like("%image%"),
+        mime_type.like("image/%"),
+    )
+    is_audio = or_(
+        media_type.like("%audio%"),
+        media_type.like("%voice%"),
+        mime_type.like("audio/%"),
+    )
+    is_video = or_(
+        media_type.like("%video%"),
+        media_type.like("%animation%"),
+        mime_type.like("video/%"),
+    )
+    is_document = or_(
+        media_type.like("%document%"),
+        media_type.like("%file%"),
+        has_mime_type,
+    ) & ~is_image & ~is_audio & ~is_video
+    is_known_media = is_image | is_audio | is_video | is_document
+    is_media_only = has_native_media & ~has_caption_or_url
+
+    if message_kind == MessageKind.TEXT:
+        return ~has_native_media & ~has_url & has_content
+    if message_kind == MessageKind.LINK:
+        return ~has_native_media & has_url
+    if message_kind == MessageKind.IMAGE:
+        return is_media_only & is_image
+    if message_kind == MessageKind.AUDIO:
+        return is_media_only & is_audio
+    if message_kind == MessageKind.VIDEO:
+        return is_media_only & is_video
+    if message_kind == MessageKind.DOCUMENT:
+        return is_media_only & is_document
+    if message_kind == MessageKind.MIXED:
+        return has_native_media & has_caption_or_url
+    return is_media_only & ~is_known_media
+
+
 @dataclass(slots=True, frozen=True)
 class MessageListResult:
     """Paginated message list result."""
@@ -72,6 +138,14 @@ class MessageListResult:
     total: int
     page: int
     per_page: int
+
+
+@dataclass(frozen=True, slots=True)
+class CachedMessageMedia:
+    """Cached media bytes safe to serve to an authenticated owner."""
+
+    content: bytes
+    mime_type: str
 
 
 @dataclass(slots=True)
@@ -91,6 +165,7 @@ class MessageService:
         category_slug: str | None = None,
         tag_names: Sequence[str] | None = None,
         search: str | None = None,
+        message_kind: MessageKind | None = None,
     ) -> MessageListResult:
         """List messages with pagination and sorting."""
 
@@ -125,6 +200,9 @@ class MessageService:
         if any(len(tag_name) > 100 for tag_name in normalized_tag_names):
             raise ValueError("tag names must not exceed 100 characters.")
 
+        if message_kind is not None and not isinstance(message_kind, MessageKind):
+            message_kind = MessageKind(message_kind)
+
         offset = (page - 1) * per_page
 
         filtered_statement = select(Message).where(Message.user_id == self.user_id)
@@ -141,6 +219,10 @@ class MessageService:
                     (Tag.user_id == self.user_id)
                     & (Tag.normalized_name == tag_name)
                 )
+            )
+        if message_kind is not None:
+            filtered_statement = filtered_statement.where(
+                _message_kind_predicate(message_kind)
             )
         if normalized_search is not None:
             escaped_search = (
@@ -209,6 +291,23 @@ class MessageService:
         if message is None:
             raise MessageNotFoundError(f"Message {message_id} was not found.")
         return message
+
+    async def get_cached_media(self, *, message_id: int) -> CachedMessageMedia:
+        """Return a tenant-owned cached image without loading it in list queries."""
+
+        result = await self.session.execute(
+            select(Message.cached_media, Message.cached_media_mime_type).where(
+                Message.user_id == self.user_id,
+                Message.id == message_id,
+            )
+        )
+        row = result.one_or_none()
+        if row is None or row.cached_media is None or row.cached_media_mime_type is None:
+            raise MessageNotFoundError(f"Media for message {message_id} was not found.")
+        return CachedMessageMedia(
+            content=bytes(row.cached_media),
+            mime_type=str(row.cached_media_mime_type),
+        )
 
     async def update_message(self, *, message_id: int, updates: Mapping[str, Any]) -> Message:
         """Update mutable message fields and return the fresh record."""

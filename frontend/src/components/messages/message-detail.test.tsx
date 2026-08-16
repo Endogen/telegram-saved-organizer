@@ -13,6 +13,7 @@ function createMessage(overrides: Partial<MessageListItem> = {}): MessageListIte
     file_name: "report.pdf",
     file_size: 1048576,
     mime_type: "application/pdf",
+    media_url: null,
     url: "https://example.com/file",
     sender_name: "Test User",
     date: "2026-02-15T10:00:00.000Z",

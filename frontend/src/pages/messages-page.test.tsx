@@ -11,6 +11,7 @@ import {
   TelegramConnectionChangedError,
   TelegramNotConnectedError,
 } from "@/api/messages";
+import type { MessageKind } from "@/api/messages";
 import {
   addTagsToMessage,
   bulkAddTagsToMessages,
@@ -92,6 +93,7 @@ function createMessage(id: number, overrides: Partial<MessageListItem>): Message
     file_name: null,
     file_size: null,
     mime_type: null,
+    media_url: null,
     url: null,
     sender_name: "saved messages",
     date: "2026-02-18T09:00:00.000Z",
@@ -186,6 +188,35 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function matchesMessageKind(message: MessageListItem, kind: MessageKind | undefined): boolean {
+  if (kind === undefined) return true;
+
+  const mediaType = message.media_type?.trim().toLowerCase() ?? "";
+  const mimeType = message.mime_type?.trim().toLowerCase() ?? "";
+  const hasNativeMedia = (mediaType.length > 0 && mediaType !== "text") || mimeType.length > 0;
+  const hasContent = (message.content?.trim().length ?? 0) > 0;
+  const hasUrl = (message.url?.trim().length ?? 0) > 0;
+  const hasContext = hasContent || hasUrl;
+  const isImage = mediaType.includes("photo") || mediaType.includes("image") || mimeType.startsWith("image/");
+  const isAudio = mediaType.includes("audio") || mediaType.includes("voice") || mimeType.startsWith("audio/");
+  const isVideo = mediaType.includes("video") || mediaType.includes("animation") || mimeType.startsWith("video/");
+  const isDocument = (
+    mediaType.includes("document")
+    || mediaType.includes("file")
+    || mimeType.length > 0
+  ) && !isImage && !isAudio && !isVideo;
+
+  if (kind === "mixed") return hasNativeMedia && hasContext;
+  if (kind === "link") return !hasNativeMedia && hasUrl;
+  if (kind === "text") return !hasNativeMedia && !hasUrl && hasContent;
+  if (!hasNativeMedia || hasContext) return false;
+  if (kind === "image") return isImage;
+  if (kind === "audio") return isAudio;
+  if (kind === "video") return isVideo;
+  if (kind === "document") return isDocument;
+  return !isImage && !isAudio && !isVideo && !isDocument;
+}
+
 function mockMessageServer(items: MessageListItem[] = messagesFixture) {
   vi.mocked(listMessages).mockImplementation(async (query = {}) => {
     const search = query.search?.trim().toLowerCase() ?? "";
@@ -203,6 +234,7 @@ function mockMessageServer(items: MessageListItem[] = messagesFixture) {
         (search.length === 0 || searchable.includes(search))
         && (category.length === 0 || message.category.slug === category)
         && tags.every((tag) => messageTags.has(tag))
+        && matchesMessageKind(message, query.kind)
       );
     });
     filtered.sort((first, second) => {
@@ -415,6 +447,28 @@ describe("MessagesPage filters", () => {
     });
   });
 
+  it("filters by message type independently of category", async () => {
+    renderMessagesPage();
+    await screen.findByText("3 messages");
+
+    const messageTypeSelect = screen.getByRole("combobox", { name: "Message type" });
+    fireEvent.change(messageTypeSelect, { target: { value: "link" } });
+
+    await waitFor(() => {
+      expect(screen.getByText("1 matching message")).toBeInTheDocument();
+      expect(screen.getByText("React animation reference")).toBeInTheDocument();
+      expect(screen.queryByText("Weekly standup audio")).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId("location-search")).toHaveTextContent("kind=link");
+
+    fireEvent.change(messageTypeSelect, { target: { value: "mixed" } });
+
+    await waitFor(() => {
+      expect(screen.getByText("Weekly standup audio")).toBeInTheDocument();
+      expect(screen.queryByText("React animation reference")).not.toBeInTheDocument();
+    });
+  });
+
   it("hydrates every supported library option from a deep link", async () => {
     vi.mocked(listMessages).mockResolvedValue({
       items: messagesFixture,
@@ -424,7 +478,7 @@ describe("MessagesPage filters", () => {
     });
 
     renderMessagesPage(
-      "/messages?category=audio&q=Weekly%20standup&tag=frontend&tag=meeting&sort=sender&page=2&per_page=30",
+      "/messages?category=audio&q=Weekly%20standup&tag=frontend&tag=meeting&kind=mixed&sort=sender&page=2&per_page=30",
     );
 
     await waitFor(() => expect(listMessages).toHaveBeenCalledWith({
@@ -434,9 +488,11 @@ describe("MessagesPage filters", () => {
       category: "audio",
       search: "weekly standup",
       tag: ["frontend", "meeting"],
+      kind: "mixed",
     }));
     expect(screen.getByPlaceholderText("Search by text, URL, sender, or tag...")).toHaveValue("Weekly standup");
     expect(screen.getByRole("combobox", { name: "Category" })).toHaveValue("audio");
+    expect(screen.getByRole("combobox", { name: "Message type" })).toHaveValue("mixed");
     expect(screen.getByRole("combobox", { name: "Sort" })).toHaveValue("sender");
     expect(screen.getByRole("combobox", { name: "Per page" })).toHaveValue("30");
     expect(screen.getByRole("button", { name: "#frontend" })).toHaveAttribute("aria-pressed", "true");
@@ -447,7 +503,7 @@ describe("MessagesPage filters", () => {
     const oversizedSearch = "x".repeat(501);
     const oversizedTag = "t".repeat(101);
     renderMessagesPage(
-      `/messages?q=${oversizedSearch}&tag=&tag=${oversizedTag}&sort=unknown&page=0&per_page=30items`,
+      `/messages?q=${oversizedSearch}&tag=&tag=${oversizedTag}&kind=unknown&sort=unknown&page=0&per_page=30items`,
     );
 
     await waitFor(() => expect(listMessages).toHaveBeenCalledWith({
@@ -457,9 +513,11 @@ describe("MessagesPage filters", () => {
       category: undefined,
       search: undefined,
       tag: undefined,
+      kind: undefined,
     }));
     expect(screen.getByPlaceholderText("Search by text, URL, sender, or tag...")).toHaveValue("");
     expect(screen.getByRole("combobox", { name: "Sort" })).toHaveValue("date_desc");
+    expect(screen.getByRole("combobox", { name: "Message type" })).toHaveValue("");
     expect(screen.getByRole("combobox", { name: "Per page" })).toHaveValue("60");
     expect(screen.getByText("0 selected")).toBeInTheDocument();
   });
@@ -476,6 +534,7 @@ describe("MessagesPage filters", () => {
 
     fireEvent.change(screen.getByRole("combobox", { name: "Category" }), { target: { value: "audio" } });
     await waitFor(() => expect(screen.getByTestId("location-search")).toHaveTextContent("category=audio"));
+    fireEvent.change(screen.getByRole("combobox", { name: "Message type" }), { target: { value: "audio" } });
     fireEvent.click(screen.getByRole("button", { name: "#frontend" }));
     fireEvent.change(screen.getByRole("combobox", { name: "Sort" }), { target: { value: "category" } });
     fireEvent.change(screen.getByRole("combobox", { name: "Per page" }), { target: { value: "30" } });
@@ -491,6 +550,7 @@ describe("MessagesPage filters", () => {
       const params = new URLSearchParams(screen.getByTestId("location-search").textContent ?? "");
       expect(params.get("extra")).toBe("keep");
       expect(params.get("category")).toBe("audio");
+      expect(params.get("kind")).toBe("audio");
       expect(params.getAll("tag")).toEqual(["frontend"]);
       expect(params.get("sort")).toBe("category");
       expect(params.get("per_page")).toBe("30");

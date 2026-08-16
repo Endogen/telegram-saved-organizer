@@ -11,6 +11,8 @@ A multi-user web application for importing and organizing each account's own Tel
 - Encrypted Telegram `StringSession`, phone, and verification challenge at rest
 - Active-session review/revocation, password rotation, and account deletion
 - Provider-aware GitHub, YouTube, X/Twitter, generic-link, and plain-text message rendering
+- Immediate YouTube thumbnails and bounded, database-backed Telegram image previews
+- Bookmarkable message-type filters for text, links, images, audio, video, documents, mixed, and other media
 - Alembic migrations plus a durable scan worker suitable for multi-process deployment
 
 ## Local development
@@ -80,6 +82,7 @@ This branch introduces a new tenant schema and intentionally refuses to adopt th
 | `TSO_SCAN_SLICE_MAX_PAGES` | Maximum pages processed before yielding to another job | Defaults to 5 |
 | `TSO_SCAN_SLICE_SECONDS` | Maximum duration of one worker slice | Defaults to 30 seconds |
 | `TSO_SCAN_MAX_STREAMS_PER_USER` | Concurrent durable status streams per account | Defaults to 3 |
+| `TSO_MEDIA_CACHE_MAX_BYTES` | Maximum cached bytes per renderable Telegram image preview | Defaults to 10 MiB |
 | `TSO_TELEGRAM_CONNECT_TIMEOUT_SECONDS` | Deadline for establishing a Telegram client connection | Defaults to 15 seconds |
 | `TSO_TELEGRAM_DISCONNECT_TIMEOUT_SECONDS` | Deadline for Telegram client cleanup | Defaults to 5 seconds |
 

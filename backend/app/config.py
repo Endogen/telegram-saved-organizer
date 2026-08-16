@@ -185,6 +185,7 @@ class Settings:
     scan_slice_max_pages: int
     scan_slice_seconds: int
     scan_max_streams_per_user: int
+    media_cache_max_bytes: int
     telegram_connect_timeout_seconds: int
     telegram_disconnect_timeout_seconds: int
 
@@ -310,6 +311,10 @@ def _build_settings() -> Settings:
         scan_max_streams_per_user=_read_positive_int(
             "TSO_SCAN_MAX_STREAMS_PER_USER",
             default=3,
+        ),
+        media_cache_max_bytes=_read_positive_int(
+            "TSO_MEDIA_CACHE_MAX_BYTES",
+            default=10 * 1024 * 1024,
         ),
         telegram_connect_timeout_seconds=_read_positive_int(
             "TSO_TELEGRAM_CONNECT_TIMEOUT_SECONDS",

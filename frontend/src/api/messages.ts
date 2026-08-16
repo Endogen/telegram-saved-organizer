@@ -3,6 +3,16 @@ import { ApiRequestError, requestJson } from "@/api/client";
 
 const MESSAGES_BASE_PATH = "/api/messages";
 
+export type MessageKind =
+  | "text"
+  | "link"
+  | "image"
+  | "audio"
+  | "video"
+  | "document"
+  | "mixed"
+  | "other";
+
 type MessageListQuery = {
   page?: number;
   per_page?: number;
@@ -10,6 +20,7 @@ type MessageListQuery = {
   category?: string;
   search?: string;
   tag?: string[];
+  kind?: MessageKind;
 };
 
 type BulkDeleteResponse = {
@@ -57,6 +68,9 @@ function buildQueryString(query: MessageListQuery): string {
   }
   if (typeof query.category === "string" && query.category.trim().length > 0) {
     params.set("category", query.category.trim());
+  }
+  if (typeof query.kind === "string" && query.kind.length > 0) {
+    params.set("kind", query.kind);
   }
   if (typeof query.search === "string" && query.search.trim().length > 0) {
     params.set("search", query.search.trim());

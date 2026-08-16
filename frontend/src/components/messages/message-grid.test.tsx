@@ -13,6 +13,7 @@ function createMessage(id: number, overrides: Partial<MessageListItem> = {}): Me
     file_name: null,
     file_size: null,
     mime_type: null,
+    media_url: null,
     url: null,
     sender_name: null,
     date: "2026-02-15T10:00:00.000Z",

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.orm import undefer
 
 from app.models import (
     Base,
@@ -1625,6 +1626,8 @@ async def test_incremental_scan_refreshes_source_metadata_but_preserves_organiza
                         sender_name="New sender",
                         date=refreshed_at,
                         raw_data={"fresh": True},
+                        cached_media=b"jpeg-preview",
+                        cached_media_mime_type="image/jpeg",
                     ),
                 ),
                 has_more=False,
@@ -1633,7 +1636,9 @@ async def test_incremental_scan_refreshes_source_metadata_but_preserves_organiza
         )
 
         async with sessions() as session:
-            refreshed = await session.scalar(select(Message))
+            refreshed = await session.scalar(
+                select(Message).options(undefer(Message.cached_media))
+            )
             assignments = list(await session.scalars(select(MessageTag)))
             assert refreshed is not None
             assert refreshed.content == "fresh"
@@ -1641,6 +1646,9 @@ async def test_incremental_scan_refreshes_source_metadata_but_preserves_organiza
             assert refreshed.file_name == "new.jpg"
             assert refreshed.file_size == 42
             assert refreshed.mime_type == "image/jpeg"
+            assert refreshed.cached_media == b"jpeg-preview"
+            assert refreshed.cached_media_mime_type == "image/jpeg"
+            assert refreshed.media_url == f"/api/messages/{refreshed.id}/media"
             assert refreshed.url == "https://example.com/new"
             assert refreshed.sender_name == "New sender"
             assert refreshed.raw_data == {"fresh": True}

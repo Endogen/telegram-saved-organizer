@@ -85,6 +85,8 @@ def test_fresh_alembic_upgrade_creates_current_multi_user_schema(
         "telegram_id",
         "category_id",
         "last_seen_replacement_job_id",
+        "cached_media",
+        "cached_media_mime_type",
     } <= message_columns
     assert {
         "last_message_id",

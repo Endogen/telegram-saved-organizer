@@ -697,6 +697,11 @@ async def _execute_claimed_scan(*, lease: ScanLease) -> ScanProgress:
                 float(settings.scan_slice_seconds),
                 remaining_runtime,
             ),
+            media_cache_max_bytes=getattr(
+                settings,
+                "media_cache_max_bytes",
+                10 * 1024 * 1024,
+            ),
         )
         refreshed_session = client.session.save()
 
@@ -1162,6 +1167,15 @@ async def _persist_scan_page(*, lease: ScanLease, page: ScanPage) -> None:
                     existing.file_name = scanned.file_name
                     existing.file_size = scanned.file_size
                     existing.mime_type = scanned.mime_type
+                    if scanned.cached_media is not None:
+                        existing.cached_media = scanned.cached_media
+                        existing.cached_media_mime_type = scanned.cached_media_mime_type
+                    elif not (
+                        scanned.media_type == "photo"
+                        or (scanned.mime_type or "").lower().startswith("image/")
+                    ):
+                        existing.cached_media = None
+                        existing.cached_media_mime_type = None
                     existing.url = scanned.url
                     existing.sender_name = scanned.sender_name
                     existing.date = scanned.date
@@ -1182,6 +1196,8 @@ async def _persist_scan_page(*, lease: ScanLease, page: ScanPage) -> None:
                         file_name=scanned.file_name,
                         file_size=scanned.file_size,
                         mime_type=scanned.mime_type,
+                        cached_media=scanned.cached_media,
+                        cached_media_mime_type=scanned.cached_media_mime_type,
                         url=scanned.url,
                         sender_name=scanned.sender_name,
                         date=scanned.date,

@@ -16,6 +16,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     String,
     Text,
@@ -399,6 +400,11 @@ class Message(Base):
             "connection_generation IS NULL OR connection_generation >= 0",
             name="connection_generation_non_negative",
         ),
+        CheckConstraint(
+            "(cached_media IS NULL AND cached_media_mime_type IS NULL) OR "
+            "(cached_media IS NOT NULL AND cached_media_mime_type IS NOT NULL)",
+            name="cached_media_complete",
+        ),
         ForeignKeyConstraint(
             ("user_id", "category_id"),
             ("categories.user_id", "categories.id"),
@@ -431,6 +437,12 @@ class Message(Base):
     file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     mime_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    cached_media: Mapped[bytes | None] = mapped_column(
+        LargeBinary,
+        nullable=True,
+        deferred=True,
+    )
+    cached_media_mime_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     sender_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -454,6 +466,14 @@ class Message(Base):
         back_populates="messages",
         viewonly=True,
     )
+
+    @property
+    def media_url(self) -> str | None:
+        """Return the authenticated API URL for a cached media preview."""
+
+        if not self.cached_media_mime_type:
+            return None
+        return f"/api/messages/{self.id}/media"
 
 
 class Tag(Base):

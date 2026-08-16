@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.accounts.dependencies import get_current_user
@@ -24,6 +24,7 @@ from app.messages.schemas import (
 )
 from app.messages.service import (
     CategoryNotFoundError,
+    MessageKind,
     MessageNotFoundError,
     MessageService,
     MessageSort,
@@ -36,6 +37,15 @@ from app.telegram.client import (
 
 router = APIRouter(prefix="/messages", tags=["messages"])
 MAX_PAGE_NUMBER = 1_000_000
+SAFE_CACHED_MEDIA_MIME_TYPES = frozenset(
+    {
+        "image/avif",
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }
+)
 MessageIdentifier = Annotated[int, Path(ge=1, le=MAX_DATABASE_INTEGER)]
 
 
@@ -56,6 +66,7 @@ async def list_messages(
     category: str | None = Query(default=None, min_length=1),
     tag: list[str] | None = Query(default=None, max_length=20),
     search: str | None = Query(default=None, max_length=500),
+    kind: MessageKind | None = Query(default=None),
     service: MessageService = Depends(get_message_service),
 ) -> MessageListResponse:
     try:
@@ -66,6 +77,7 @@ async def list_messages(
             category_slug=category,
             tag_names=tag,
             search=search,
+            message_kind=kind,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -123,6 +135,30 @@ async def clear_all_messages(
 ) -> MessageClearResponse:
     cleared_count = await service.clear_all_messages()
     return MessageClearResponse(cleared_count=cleared_count)
+
+
+@router.get("/{message_id}/media", response_class=Response)
+async def get_message_media(
+    message_id: MessageIdentifier,
+    service: MessageService = Depends(get_message_service),
+) -> Response:
+    try:
+        media = await service.get_cached_media(message_id=message_id)
+    except MessageNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if media.mime_type not in SAFE_CACHED_MEDIA_MIME_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="unsupported_cached_media_type",
+        )
+    return Response(
+        content=media.content,
+        media_type=media.mime_type,
+        headers={
+            "Cache-Control": "private, max-age=86400",
+            "Content-Disposition": "inline",
+        },
+    )
 
 
 @router.get("/{message_id}", response_model=MessageResponse)

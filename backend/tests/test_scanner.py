@@ -79,6 +79,28 @@ class _FakeTelegramClient:
         return _iterator()
 
 
+class _FakeMediaClient(_FakeTelegramClient):
+    def __init__(
+        self,
+        pages_by_offset: dict[int, list[_FakeMessage]],
+        *,
+        media_content: bytes,
+    ) -> None:
+        super().__init__(pages_by_offset)
+        self.media_content = media_content
+        self.download_calls: list[tuple[Any, Any]] = []
+
+    async def download_media(
+        self,
+        message: Any,
+        file: Any,
+        **kwargs: Any,
+    ) -> bytes:
+        self.download_calls.append((message, kwargs.get("thumb")))
+        assert file is bytes
+        return self.media_content
+
+
 @pytest.mark.asyncio
 async def test_scanner_paginates_and_tracks_progress() -> None:
     scanner = SavedMessagesScanner()
@@ -138,6 +160,91 @@ async def test_scanner_paginates_and_tracks_progress() -> None:
     assert seen_pages[0].has_more is True
     assert seen_pages[2].has_more is False
     assert client.calls == [("me", 2, 0), ("me", 2, 4), ("me", 2, 2)]
+
+
+@pytest.mark.asyncio
+async def test_scanner_caches_a_bounded_photo_preview() -> None:
+    now = datetime.now(tz=UTC)
+    thumbnail = SimpleNamespace(w=1280, h=720, size=10)
+    message = _FakeMessage(id=1, date=now)
+    message.photo = SimpleNamespace(sizes=[thumbnail])  # type: ignore[assignment]
+    client = _FakeMediaClient(
+        pages_by_offset={0: [message]},
+        media_content=b"jpeg-preview",
+    )
+    seen: list[ScanPage] = []
+
+    async def on_page(page: ScanPage) -> None:
+        seen.append(page)
+
+    await SavedMessagesScanner().scan(
+        client=client,
+        page_size=2,
+        on_page=on_page,
+        media_cache_max_bytes=1024,
+    )
+
+    scanned = seen[0].messages[0]
+    assert scanned.cached_media == b"jpeg-preview"
+    assert scanned.cached_media_mime_type == "image/jpeg"
+    assert client.download_calls == [(message, thumbnail)]
+
+
+@pytest.mark.asyncio
+async def test_scanner_discards_a_download_that_exceeds_the_cache_limit() -> None:
+    now = datetime.now(tz=UTC)
+    message = _FakeMessage(id=1, date=now, photo=True)
+    client = _FakeMediaClient(
+        pages_by_offset={0: [message]},
+        media_content=b"too-large",
+    )
+    seen: list[ScanPage] = []
+
+    async def on_page(page: ScanPage) -> None:
+        seen.append(page)
+
+    await SavedMessagesScanner().scan(
+        client=client,
+        page_size=2,
+        on_page=on_page,
+        media_cache_max_bytes=4,
+    )
+
+    assert seen[0].messages[0].cached_media is None
+    assert seen[0].messages[0].cached_media_mime_type is None
+
+
+@pytest.mark.asyncio
+async def test_scanner_uses_jpeg_type_for_a_large_image_document_thumbnail() -> None:
+    now = datetime.now(tz=UTC)
+    thumbnail = SimpleNamespace(w=640, h=480, size=100)
+    document = SimpleNamespace(
+        mime_type="image/png",
+        size=4096,
+        attributes=[],
+        thumbs=[thumbnail],
+    )
+    message = _FakeMessage(id=1, date=now)
+    message.document = document  # type: ignore[assignment]
+    client = _FakeMediaClient(
+        pages_by_offset={0: [message]},
+        media_content=b"jpeg-thumbnail",
+    )
+    seen: list[ScanPage] = []
+
+    async def on_page(page: ScanPage) -> None:
+        seen.append(page)
+
+    await SavedMessagesScanner().scan(
+        client=client,
+        page_size=2,
+        on_page=on_page,
+        media_cache_max_bytes=1024,
+    )
+
+    assert seen[0].messages[0].cached_media == b"jpeg-thumbnail"
+    assert seen[0].messages[0].cached_media_mime_type == "image/jpeg"
+    assert client.download_calls == [(message, thumbnail)]
 
 
 @pytest.mark.asyncio

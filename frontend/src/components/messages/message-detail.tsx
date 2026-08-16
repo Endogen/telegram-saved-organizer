@@ -227,7 +227,13 @@ export function MessageDetail({
                   Content
                 </h4>
                 <div className="mt-2 rounded-xl border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--background)/0.75)] p-3">
-                  <MessageContent content={message.content} url={message.url} />
+                  <MessageContent
+                    content={message.content}
+                    url={message.url}
+                    mediaUrl={message.media_url}
+                    mediaType={message.media_type}
+                    mimeType={message.mime_type}
+                  />
                 </div>
               </section>
 

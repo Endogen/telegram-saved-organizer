@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.categories.service import CategoryNotFoundError, CategoryService
 from app.database import _configure_sqlite_connection
-from app.messages.service import MessageNotFoundError, MessageService
+from app.messages.service import MessageKind, MessageNotFoundError, MessageService
 from app.models import Base, Category, Message, MessageTag, Tag, User
 from app.tags.service import MessageNotFoundError as TagMessageNotFoundError
 from app.tags.service import TagNotFoundError, TagService
@@ -155,6 +155,64 @@ async def test_duplicate_tenant_relative_values_are_allowed_and_services_are_iso
         assert [(link.user_id, link.message_id, link.tag_id) for link in remaining_links] == [
             (second_user.id, second_message.id, second_tag.id)
         ]
+
+
+@pytest.mark.asyncio
+async def test_message_kind_filters_are_exclusive_and_category_independent() -> None:
+    async with isolated_session() as session:
+        user = build_user(
+            user_id="00000000-0000-0000-0000-000000000001",
+            email="filters@example.com",
+        )
+        session.add(user)
+        await session.flush()
+        category = build_category(user_id=user.id)
+        session.add(category)
+        await session.flush()
+
+        shared = {
+            "user_id": user.id,
+            "date": datetime.now(tz=UTC),
+            "category_id": category.id,
+            "raw_data": {},
+        }
+        messages = {
+            MessageKind.TEXT: Message(telegram_id=2001, content="A note", **shared),
+            MessageKind.LINK: Message(
+                telegram_id=2002,
+                content="A useful link",
+                url="https://example.com",
+                **shared,
+            ),
+            MessageKind.IMAGE: Message(telegram_id=2003, media_type="photo", **shared),
+            MessageKind.AUDIO: Message(
+                telegram_id=2004,
+                media_type="voice",
+                mime_type="audio/ogg",
+                **shared,
+            ),
+            MessageKind.VIDEO: Message(telegram_id=2005, media_type="video", **shared),
+            MessageKind.DOCUMENT: Message(
+                telegram_id=2006,
+                media_type="document",
+                mime_type="application/pdf",
+                **shared,
+            ),
+            MessageKind.MIXED: Message(
+                telegram_id=2007,
+                content="Photo caption",
+                media_type="photo",
+                **shared,
+            ),
+            MessageKind.OTHER: Message(telegram_id=2008, media_type="sticker", **shared),
+        }
+        session.add_all(messages.values())
+        await session.commit()
+
+        service = MessageService(session=session, user_id=user.id)
+        for message_kind, expected_message in messages.items():
+            result = await service.list_messages(message_kind=message_kind)
+            assert [item.id for item in result.items] == [expected_message.id]
 
 
 @pytest.mark.asyncio

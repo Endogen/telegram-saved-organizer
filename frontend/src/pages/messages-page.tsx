@@ -11,6 +11,7 @@ import {
   TelegramConnectionChangedError,
   TelegramNotConnectedError,
 } from "@/api/messages";
+import type { MessageKind } from "@/api/messages";
 import {
   addTagsToMessage,
   bulkAddTagsToMessages,
@@ -48,6 +49,16 @@ const sortOptions: { value: SortOption; label: string }[] = [
   { value: "category", label: "Category" },
   { value: "sender", label: "Sender" },
 ];
+const messageKindOptions: { value: MessageKind; label: string }[] = [
+  { value: "mixed", label: "Mixed media" },
+  { value: "image", label: "Images only" },
+  { value: "video", label: "Videos only" },
+  { value: "audio", label: "Audio only" },
+  { value: "document", label: "Documents only" },
+  { value: "link", label: "Links only" },
+  { value: "text", label: "Text only" },
+  { value: "other", label: "Other media only" },
+];
 const DEFAULT_SORT_OPTION: SortOption = "date_desc";
 const DEFAULT_ITEMS_PER_PAGE = 60;
 const MAX_PAGE_NUMBER = 1_000_000;
@@ -58,6 +69,10 @@ const itemsPerPageOptions = [30, 60, 120, 200] as const;
 
 function isSortOption(value: string | null): value is SortOption {
   return sortOptions.some((option) => option.value === value);
+}
+
+function isMessageKind(value: string | null): value is MessageKind {
+  return messageKindOptions.some((option) => option.value === value);
 }
 
 function readPageNumber(value: string | null): number {
@@ -217,6 +232,8 @@ export function MessagesPage() {
   );
   const requestedSortOption = searchParams.get("sort");
   const sortOption = isSortOption(requestedSortOption) ? requestedSortOption : DEFAULT_SORT_OPTION;
+  const requestedMessageKind = searchParams.get("kind");
+  const messageKindFilter = isMessageKind(requestedMessageKind) ? requestedMessageKind : "";
   const currentPage = readPageNumber(searchParams.get("page"));
   const itemsPerPage = readItemsPerPage(searchParams.get("per_page"));
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
@@ -296,6 +313,7 @@ export function MessagesPage() {
           category: categoryFilter || undefined,
           search: normalizedUrlSearchQuery || undefined,
           tag: selectedTagFilters.length > 0 ? selectedTagFilters : undefined,
+          kind: messageKindFilter || undefined,
         });
         if (isCanceled) return;
         setMessages(messageResponse.items);
@@ -327,6 +345,7 @@ export function MessagesPage() {
     categoryFilter,
     currentPage,
     itemsPerPage,
+    messageKindFilter,
     normalizedUrlSearchQuery,
     reloadRevision,
     selectedTagFilters,
@@ -482,6 +501,7 @@ export function MessagesPage() {
     normalizedSearchQuery.length > 0 ||
     categoryFilter.length > 0 ||
     selectedTagFilters.length > 0 ||
+    messageKindFilter.length > 0 ||
     sortOption !== "date_desc";
   const hasResults = messages.length > 0;
 
@@ -569,6 +589,19 @@ export function MessagesPage() {
     });
   }
 
+  function setMessageKindParam(nextMessageKind: MessageKind | "") {
+    setSearchParams((currentParams) => {
+      const nextParams = new URLSearchParams(currentParams);
+      if (nextMessageKind.length === 0) {
+        nextParams.delete("kind");
+      } else {
+        nextParams.set("kind", nextMessageKind);
+      }
+      nextParams.delete("page");
+      return nextParams;
+    });
+  }
+
   function setItemsPerPageParam(nextItemsPerPage: number) {
     setSearchParams((currentParams) => {
       const nextParams = new URLSearchParams(currentParams);
@@ -589,6 +622,7 @@ export function MessagesPage() {
       nextParams.delete("q");
       nextParams.delete("category");
       nextParams.delete("tag");
+      nextParams.delete("kind");
       nextParams.delete("sort");
       nextParams.delete("page");
       return nextParams;
@@ -975,8 +1009,8 @@ export function MessagesPage() {
       </div>
 
       <div className="mt-4 rounded-xl border border-[hsl(var(--border)/0.8)] bg-[hsl(var(--card)/0.72)] p-3 sm:p-4">
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-end">
-          <label className="relative block">
+        <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-[minmax(0,2fr)_minmax(10.5rem,1.15fr)_repeat(2,minmax(0,1fr))_auto] 2xl:items-end">
+          <label className="relative block lg:col-span-2 2xl:col-span-1">
             <span className="sr-only">Search messages</span>
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" />
             <input
@@ -986,6 +1020,25 @@ export function MessagesPage() {
               disabled={isInitialLoading}
               className="h-10 w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] pl-9 pr-3 text-sm text-[hsl(var(--foreground))] outline-none ring-[hsl(var(--ring))] transition focus:ring-2"
             />
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[hsl(var(--muted-foreground))]">
+              Message type
+            </span>
+            <select
+              value={messageKindFilter}
+              onChange={(event) => setMessageKindParam(event.target.value as MessageKind | "")}
+              disabled={isInitialLoading}
+              className="h-10 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 text-sm text-[hsl(var(--foreground))] outline-none ring-[hsl(var(--ring))] transition focus:ring-2"
+            >
+              <option value="">All message types</option>
+              {messageKindOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
 
           <label className="flex flex-col gap-1">
@@ -1029,7 +1082,7 @@ export function MessagesPage() {
             <Button
               variant="outline"
               size="sm"
-              className="h-10 gap-1.5 lg:self-end"
+              className="h-10 gap-1.5 justify-self-start lg:self-end"
               onClick={clearFilters}
               disabled={isInitialLoading}
             >

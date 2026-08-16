@@ -45,6 +45,9 @@ def test_message_table_columns_and_indexes_match_spec() -> None:
     assert message_table.c.date.nullable is False
     assert message_table.c.category_id.nullable is False
     assert message_table.c.raw_data.nullable is False
+    assert message_table.c.cached_media.nullable is True
+    assert message_table.c.cached_media_mime_type.nullable is True
+    assert Message.cached_media.property.deferred is True
     assert "ix_messages_user_id_category_id_date" in index_names
     assert "ix_messages_user_id_date_id" in index_names
 

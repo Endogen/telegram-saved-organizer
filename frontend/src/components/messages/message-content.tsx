@@ -6,6 +6,9 @@ import { analyzeMessageContent, messageTextParts, type LinkProvider, type Messag
 type MessageContentProps = {
   content: string | null;
   url: string | null;
+  mediaUrl?: string | null;
+  mediaType?: string | null;
+  mimeType?: string | null;
   compact?: boolean;
 };
 
@@ -31,7 +34,6 @@ function ProviderIcon({ provider }: { provider: LinkProvider }) {
 
 function LinkPreview({ link, compact }: { link: MessageLink; compact: boolean }) {
   const [isCopied, setIsCopied] = useState(false);
-  const [thumbnailRequested, setThumbnailRequested] = useState(false);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
 
   useEffect(() => {
@@ -55,39 +57,13 @@ function LinkPreview({ link, compact }: { link: MessageLink; compact: boolean })
     setIsCopied(true);
   }
 
-  function loadThumbnail(event: MouseEvent<HTMLButtonElement>) {
-    stopCardInteraction(event);
-    setThumbnailRequested(true);
-  }
-
   const thumbnailUrl = link.youtubeVideoId === null
     ? null
     : `https://i.ytimg.com/vi/${link.youtubeVideoId}/hqdefault.jpg`;
 
   return (
     <div className={`overflow-hidden rounded-xl border ${providerStyles[link.provider]}`} data-provider={link.provider}>
-      {thumbnailUrl !== null && !thumbnailRequested ? (
-        <div className={`grid place-items-center bg-slate-950 px-4 text-center ${compact ? "aspect-[16/7]" : "aspect-video"}`}>
-          <button
-            type="button"
-            draggable={false}
-            onClick={loadThumbnail}
-            onMouseDown={stopCardInteraction}
-            className="group/thumbnail-load inline-flex min-h-11 items-center gap-3 rounded-xl border border-white/15 bg-white/10 px-4 py-2.5 text-left text-white shadow-lg transition hover:border-white/25 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
-            aria-label="Load YouTube thumbnail (contacts YouTube)"
-          >
-            <span className="grid size-9 shrink-0 place-items-center rounded-full bg-red-600">
-              <Play className="ml-0.5 size-4 fill-current" aria-hidden="true" />
-            </span>
-            <span>
-              <span className="block text-sm font-semibold">Load video thumbnail</span>
-              <span className="block text-[11px] text-white/70">Contacts YouTube only when you choose</span>
-            </span>
-          </button>
-        </div>
-      ) : null}
-
-      {thumbnailUrl !== null && thumbnailRequested && !thumbnailFailed ? (
+      {thumbnailUrl !== null && !thumbnailFailed ? (
         <a
           href={link.url}
           target="_blank"
@@ -114,7 +90,7 @@ function LinkPreview({ link, compact }: { link: MessageLink; compact: boolean })
         </a>
       ) : null}
 
-      {thumbnailUrl !== null && thumbnailRequested && thumbnailFailed ? (
+      {thumbnailUrl !== null && thumbnailFailed ? (
         <div className={`grid place-items-center bg-slate-950 px-4 text-center text-xs font-medium text-white/70 ${compact ? "aspect-[16/7]" : "aspect-video"}`}>
           Thumbnail unavailable. You can still open the video below.
         </div>
@@ -156,6 +132,59 @@ function LinkPreview({ link, compact }: { link: MessageLink; compact: boolean })
   );
 }
 
+function isImageMessage(mediaType: string | null | undefined, mimeType: string | null | undefined): boolean {
+  const normalizedMediaType = mediaType?.trim().toLowerCase() ?? "";
+  const normalizedMimeType = mimeType?.trim().toLowerCase() ?? "";
+  return normalizedMediaType.includes("photo")
+    || normalizedMediaType.includes("image")
+    || normalizedMimeType.startsWith("image/");
+}
+
+function MessageImage({
+  mediaUrl,
+  compact,
+  content,
+}: {
+  mediaUrl: string;
+  compact: boolean;
+  content: string | null;
+}) {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => setFailed(false), [mediaUrl]);
+
+  if (failed) {
+    return (
+      <p className="rounded-xl border border-dashed border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.4)] px-3 py-6 text-center text-sm text-[hsl(var(--muted-foreground))]">
+        Image preview unavailable.
+      </p>
+    );
+  }
+
+  const alternativeText = content?.trim() ? `Saved Telegram image: ${content.trim()}` : "Saved Telegram image";
+  return (
+    <a
+      href={mediaUrl}
+      target="_blank"
+      rel="noreferrer"
+      draggable={false}
+      onClick={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+      className={`block overflow-hidden rounded-xl bg-[hsl(var(--muted))] outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] ${compact ? "max-h-64" : "max-h-[70vh]"}`}
+      aria-label="Open saved image"
+    >
+      <img
+        src={mediaUrl}
+        alt={alternativeText}
+        loading="lazy"
+        decoding="async"
+        onError={() => setFailed(true)}
+        className={`w-full object-contain ${compact ? "max-h-64" : "max-h-[70vh]"}`}
+      />
+    </a>
+  );
+}
+
 function LinkedText({ text, compact }: { text: string; compact: boolean }) {
   return (
     <p
@@ -193,18 +222,29 @@ function compactTextWithoutPreviewedUrl(text: string, previewUrl: string): strin
   return compactText.length > 0 ? compactText : null;
 }
 
-export function MessageContent({ content, url, compact = false }: MessageContentProps) {
+export function MessageContent({
+  content,
+  url,
+  mediaUrl = null,
+  mediaType = null,
+  mimeType = null,
+  compact = false,
+}: MessageContentProps) {
   const analysis = analyzeMessageContent(content, url);
+  const imageMessage = isImageMessage(mediaType, mimeType);
   const displayedText = analysis.text !== null && compact && analysis.link !== null
     ? compactTextWithoutPreviewedUrl(analysis.text, analysis.link.url)
     : analysis.text;
 
   return (
     <div className="space-y-3">
+      {mediaUrl !== null ? <MessageImage mediaUrl={mediaUrl} compact={compact} content={analysis.text} /> : null}
       {displayedText !== null ? <LinkedText text={displayedText} compact={compact} /> : null}
       {analysis.link !== null ? <LinkPreview key={analysis.link.url} link={analysis.link} compact={compact} /> : null}
-      {analysis.text === null && analysis.link === null ? (
-        <p className="text-sm italic text-[hsl(var(--muted-foreground))]">No text or link content on this message.</p>
+      {analysis.text === null && analysis.link === null && mediaUrl === null ? (
+        <p className="text-sm italic text-[hsl(var(--muted-foreground))]">
+          {imageMessage ? "Image preview will be cached during the next scan." : "No text or link content on this message."}
+        </p>
       ) : null}
     </div>
   );

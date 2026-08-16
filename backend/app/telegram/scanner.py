@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -17,6 +18,16 @@ MAX_FILE_NAME_LENGTH = 255
 MAX_MIME_TYPE_LENGTH = 100
 MAX_SENDER_NAME_LENGTH = 255
 MAX_URL_LENGTH = 2048
+MEDIA_PERSISTENCE_RESERVE_SECONDS = 2.0
+RENDERABLE_IMAGE_MIME_TYPES = frozenset(
+    {
+        "image/avif",
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }
+)
 SOURCE_EXHAUSTED = "source_exhausted"
 MESSAGE_LIMIT_REACHED = "message_limit_reached"
 RUNTIME_LIMIT_REACHED = "runtime_limit_reached"
@@ -26,6 +37,7 @@ SLICE_TIME_LIMIT = "slice_time_limit"
 TERMINAL_COMPLETION_REASONS = frozenset(
     (SOURCE_EXHAUSTED, MESSAGE_LIMIT_REACHED)
 )
+logger = logging.getLogger(__name__)
 
 
 def _trim_url_punctuation(value: str) -> str:
@@ -74,6 +86,8 @@ class ScannedMessage:
     sender_name: str | None
     date: datetime
     raw_data: dict[str, Any]
+    cached_media: bytes | None = None
+    cached_media_mime_type: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -124,6 +138,7 @@ class SavedMessagesScanner:
         max_messages: int | None = None,
         max_pages: int | None = None,
         timeout_seconds: float | None = None,
+        media_cache_max_bytes: int | None = None,
     ) -> ScanProgress:
         """Scan a resumable, optionally bounded Saved Messages slice."""
 
@@ -135,6 +150,8 @@ class SavedMessagesScanner:
             raise ValueError("max_pages must be a positive integer.")
         if timeout_seconds is not None and timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive.")
+        if media_cache_max_bytes is not None and media_cache_max_bytes <= 0:
+            raise ValueError("media_cache_max_bytes must be positive.")
 
         await self._begin_scan(page_size=page_size, start_offset_id=start_offset_id)
 
@@ -207,6 +224,14 @@ class SavedMessagesScanner:
                     page_size=page_capacity,
                     has_more=has_more,
                 )
+                if media_cache_max_bytes is not None:
+                    page = await self._cache_media_previews(
+                        client=client,
+                        raw_page=raw_page[:page_capacity],
+                        page=page,
+                        max_bytes=media_cache_max_bytes,
+                        deadline=deadline,
+                    )
                 if on_page is not None:
                     await on_page(page)
 
@@ -344,6 +369,145 @@ class SavedMessagesScanner:
             raw_data=self._extract_raw_data(telegram_id=telegram_id),
         )
 
+    async def _cache_media_previews(
+        self,
+        *,
+        client: TelegramScannerClientProtocol,
+        raw_page: list[Any],
+        page: ScanPage,
+        max_bytes: int,
+        deadline: float | None,
+    ) -> ScanPage:
+        download_media = getattr(client, "download_media", None)
+        if not callable(download_media):
+            return page
+
+        enriched_messages: list[ScannedMessage] = []
+        for index, (raw_message, scanned) in enumerate(
+            zip(raw_page, page.messages, strict=True)
+        ):
+            download_plan = self._preview_download_plan(
+                raw_message=raw_message,
+                scanned=scanned,
+                max_bytes=max_bytes,
+            )
+            if download_plan is None:
+                enriched_messages.append(scanned)
+                continue
+            download_kwargs, cached_mime_type = download_plan
+
+            try:
+                if deadline is None:
+                    content = await download_media(raw_message, bytes, **download_kwargs)
+                else:
+                    remaining_seconds = (
+                        deadline
+                        - asyncio.get_running_loop().time()
+                        - MEDIA_PERSISTENCE_RESERVE_SECONDS
+                    )
+                    if remaining_seconds <= 0:
+                        enriched_messages.extend(page.messages[index:])
+                        break
+                    async with asyncio.timeout(remaining_seconds):
+                        content = await download_media(raw_message, bytes, **download_kwargs)
+            except TimeoutError:
+                enriched_messages.extend(page.messages[index:])
+                break
+            except Exception:
+                logger.info(
+                    "Unable to cache Telegram image preview for message %s",
+                    scanned.telegram_id,
+                    exc_info=True,
+                )
+                enriched_messages.append(scanned)
+                continue
+
+            if not isinstance(content, bytes) or not content or len(content) > max_bytes:
+                enriched_messages.append(scanned)
+                continue
+            enriched_messages.append(
+                replace(
+                    scanned,
+                    cached_media=content,
+                    cached_media_mime_type=cached_mime_type,
+                )
+            )
+
+        return replace(page, messages=tuple(enriched_messages))
+
+    def _renderable_image_mime_type(self, scanned: ScannedMessage) -> str | None:
+        if scanned.media_type == "photo":
+            return "image/jpeg"
+        normalized_mime_type = (scanned.mime_type or "").strip().lower()
+        return (
+            normalized_mime_type
+            if normalized_mime_type in RENDERABLE_IMAGE_MIME_TYPES
+            else None
+        )
+
+    def _preview_download_plan(
+        self,
+        *,
+        raw_message: Any,
+        scanned: ScannedMessage,
+        max_bytes: int,
+    ) -> tuple[dict[str, Any], str] | None:
+        mime_type = self._renderable_image_mime_type(scanned)
+        if mime_type is None:
+            return None
+        if scanned.media_type == "photo":
+            thumbnail = self._largest_bounded_thumbnail(
+                getattr(getattr(raw_message, "photo", None), "sizes", None),
+                max_bytes=max_bytes,
+            )
+            kwargs = {"thumb": thumbnail} if thumbnail is not None else {}
+            return (kwargs, "image/jpeg")
+
+        if scanned.file_size is None or scanned.file_size <= max_bytes:
+            return ({}, mime_type)
+
+        thumbnail = self._largest_bounded_thumbnail(
+            getattr(getattr(raw_message, "document", None), "thumbs", None),
+            max_bytes=max_bytes,
+        )
+        return ({"thumb": thumbnail}, "image/jpeg") if thumbnail is not None else None
+
+    def _largest_bounded_thumbnail(
+        self,
+        sizes: Any,
+        *,
+        max_bytes: int,
+    ) -> Any | None:
+        if not isinstance(sizes, (list, tuple)):
+            return None
+
+        candidates: list[tuple[int, int, Any]] = []
+        for size in sizes:
+            if "video" in type(size).__name__.lower():
+                continue
+            estimated_size = self._telegram_media_size(size)
+            if estimated_size is not None and estimated_size > max_bytes:
+                continue
+            width = self._coerce_non_negative_int(getattr(size, "w", None)) or 0
+            height = self._coerce_non_negative_int(getattr(size, "h", None)) or 0
+            candidates.append((width * height, estimated_size or 0, size))
+
+        return max(candidates, key=lambda candidate: candidate[:2])[2] if candidates else None
+
+    def _telegram_media_size(self, size: Any) -> int | None:
+        direct_size = self._coerce_non_negative_int(getattr(size, "size", None))
+        if direct_size is not None:
+            return direct_size
+        progressive_sizes = getattr(size, "sizes", None)
+        if not isinstance(progressive_sizes, (list, tuple)):
+            return None
+        normalized_sizes = [
+            value
+            for candidate in progressive_sizes
+            if (value := self._coerce_non_negative_int(candidate)) is not None
+        ]
+        return max(normalized_sizes) if normalized_sizes else None
+
     def _extract_media(self, raw_message: Any) -> tuple[str | None, str | None, int | None, str | None]:
         if getattr(raw_message, "video", None):
             return ("video", None, None, None)
@@ -471,6 +635,10 @@ class SavedMessagesScanner:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    def _coerce_non_negative_int(self, value: Any) -> int | None:
+        integer = self._coerce_int(value)
+        return integer if integer is not None and integer >= 0 else None
 
     def _coerce_db_bigint(self, value: Any, *, minimum: int) -> int | None:
         integer = self._coerce_int(value)
