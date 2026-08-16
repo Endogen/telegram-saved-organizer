@@ -12,6 +12,7 @@ from app.telegram.scanner import (
     MESSAGE_LIMIT_REACHED,
     SLICE_PAGE_LIMIT,
     SLICE_TIME_LIMIT,
+    SOURCE_EXHAUSTED,
     ScanAlreadyRunningError,
     ScanPage,
     SavedMessagesScanner,
@@ -266,6 +267,70 @@ async def test_preview_deadline_does_not_advance_past_uncached_messages(
     assert progress.last_message_id == 2
     assert [message.telegram_id for message in seen[0].messages] == [2]
     assert seen[0].messages[0].cached_media == b"first-preview"
+
+    resumed_client = _FakeMediaClient(
+        pages_by_offset={2: [timed_out]},
+        media_content=b"retried-preview",
+    )
+    resumed_pages: list[ScanPage] = []
+
+    async def on_resumed_page(page: ScanPage) -> None:
+        resumed_pages.append(page)
+
+    resumed = await SavedMessagesScanner().scan(
+        client=resumed_client,
+        page_size=2,
+        start_offset_id=progress.last_message_id,
+        max_messages=9,
+        media_cache_max_bytes=1024,
+        on_page=on_resumed_page,
+    )
+
+    assert resumed.completion_reason == SOURCE_EXHAUSTED
+    assert [message.telegram_id for message in resumed_pages[0].messages] == [1]
+    assert resumed_pages[0].messages[0].cached_media == b"retried-preview"
+    assert resumed_client.calls == [("me", 3, 2)]
+
+
+@pytest.mark.asyncio
+async def test_preview_deadline_before_first_message_preserves_starting_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _BlockingMediaClient(_FakeTelegramClient):
+        async def download_media(self, *_: object, **__: object) -> bytes:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    monkeypatch.setattr(
+        "app.telegram.scanner.MEDIA_PERSISTENCE_RESERVE_SECONDS",
+        0,
+    )
+    now = datetime.now(tz=UTC)
+    message = _FakeMessage(id=1, date=now)
+    message.photo = SimpleNamespace(  # type: ignore[assignment]
+        sizes=[SimpleNamespace(w=320, h=240, size=10)]
+    )
+    client = _BlockingMediaClient({99: [message]})
+    seen: list[ScanPage] = []
+
+    async def on_page(page: ScanPage) -> None:
+        seen.append(page)
+
+    progress = await SavedMessagesScanner().scan(
+        client=client,
+        page_size=2,
+        start_offset_id=99,
+        max_messages=10,
+        timeout_seconds=0.05,
+        media_cache_max_bytes=1024,
+        on_page=on_page,
+    )
+
+    assert progress.completion_reason == SLICE_TIME_LIMIT
+    assert progress.messages_scanned == 0
+    assert progress.pages_scanned == 0
+    assert progress.last_message_id == 99
+    assert seen == []
 
 
 @pytest.mark.asyncio

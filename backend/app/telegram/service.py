@@ -46,6 +46,7 @@ TERMINAL_SCAN_STATES = ("completed", "failed", "cancelled")
 SCAN_LEASE_SECONDS = 90
 SCAN_HEARTBEAT_SECONDS = 20
 SCAN_CLAIM_RETRY_LIMIT = 3
+SCAN_SLICE_CLEANUP_GRACE_SECONDS = 5.0
 
 _ResultT = TypeVar("_ResultT")
 
@@ -608,7 +609,11 @@ async def _run_with_lease_heartbeat(
                 await task
 
 
-async def _execute_claimed_scan(*, lease: ScanLease) -> ScanProgress:
+async def _execute_claimed_scan(
+    *,
+    lease: ScanLease,
+    slice_deadline: float | None = None,
+) -> ScanProgress:
     remaining_messages = lease.max_messages - lease.messages_scanned
     if remaining_messages <= 0:
         return ScanProgress(
@@ -679,6 +684,19 @@ async def _execute_claimed_scan(*, lease: ScanLease) -> ScanProgress:
                 "Telegram identity changed while the scan was running."
             )
 
+        remaining_runtime = _remaining_runtime_seconds(lease=lease)
+        if remaining_runtime <= 0:
+            return ScanProgress(
+                is_complete=True,
+                completion_reason=RUNTIME_LIMIT_REACHED,
+            )
+        scanner_timeout = min(float(settings.scan_slice_seconds), remaining_runtime)
+        if slice_deadline is not None:
+            remaining_slice = slice_deadline - asyncio.get_running_loop().time()
+            if remaining_slice <= 0:
+                return ScanProgress(completion_reason=SLICE_TIME_LIMIT)
+            scanner_timeout = min(scanner_timeout, remaining_slice)
+
         async def persist_page(page: ScanPage) -> None:
             await _persist_scan_page(lease=lease, page=page)
 
@@ -693,10 +711,7 @@ async def _execute_claimed_scan(*, lease: ScanLease) -> ScanProgress:
             start_offset_id=lease.last_message_id,
             max_messages=remaining_messages,
             max_pages=settings.scan_slice_max_pages,
-            timeout_seconds=min(
-                float(settings.scan_slice_seconds),
-                remaining_runtime,
-            ),
+            timeout_seconds=scanner_timeout,
             media_cache_max_bytes=getattr(
                 settings,
                 "media_cache_max_bytes",
@@ -719,9 +734,13 @@ async def _execute_bounded_scan_slice(*, lease: ScanLease) -> ScanProgress:
             completion_reason=RUNTIME_LIMIT_REACHED,
         )
     slice_seconds = min(float(settings.scan_slice_seconds), remaining_runtime)
+    slice_deadline = asyncio.get_running_loop().time() + slice_seconds
     try:
-        async with asyncio.timeout(slice_seconds):
-            return await _execute_claimed_scan(lease=lease)
+        async with asyncio.timeout(slice_seconds + SCAN_SLICE_CLEANUP_GRACE_SECONDS):
+            return await _execute_claimed_scan(
+                lease=lease,
+                slice_deadline=slice_deadline,
+            )
     except TimeoutError:
         reason = (
             RUNTIME_LIMIT_REACHED

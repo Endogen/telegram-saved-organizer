@@ -34,6 +34,7 @@ from app.telegram.scanner import (
     MESSAGE_LIMIT_REACHED,
     RUNTIME_LIMIT_REACHED,
     SLICE_PAGE_LIMIT,
+    SLICE_TIME_LIMIT,
     SOURCE_EXHAUSTED,
     ScanAlreadyRunningError,
     ScanPage,
@@ -751,6 +752,90 @@ async def test_reclaimed_scan_passes_durable_cursor_and_remaining_quota_to_scann
         assert captured["start_offset_id"] == 777
         assert captured["max_messages"] == 375
         assert captured["max_pages"] == 4
+
+
+@pytest.mark.asyncio
+async def test_bounded_slice_passes_scanner_only_the_time_remaining_after_setup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _ClientSession:
+        def save(self) -> str:
+            return "refreshed"
+
+    class _Client:
+        session = _ClientSession()
+
+        async def is_user_authorized(self) -> bool:
+            return True
+
+        async def get_me(self) -> SimpleNamespace:
+            return SimpleNamespace(id=TELEGRAM_USER_ID)
+
+    class _Scanner:
+        async def scan(self, **kwargs: object) -> ScanProgress:
+            timeout_seconds = float(kwargs["timeout_seconds"])  # type: ignore[arg-type]
+            captured["timeout_seconds"] = timeout_seconds
+            await asyncio.sleep(max(timeout_seconds - 0.05, 0))
+            captured["scanner_finished"] = True
+            return ScanProgress(completion_reason=SLICE_TIME_LIMIT)
+
+    @asynccontextmanager
+    async def delayed_client_context(**_: object):
+        await asyncio.sleep(0.08)
+        yield _Client()
+
+    async with _scan_database(tmp_path=tmp_path, monkeypatch=monkeypatch) as sessions:
+        await _seed_user(sessions)
+        encrypted = encrypt_secret("session", context="telegram:user-a:session")
+        async with sessions() as session:
+            session.add_all(
+                [
+                    TelegramConnection(
+                        user_id="user-a",
+                        state="connected",
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        generation=CONNECTION_GENERATION,
+                        session_encrypted=encrypted,
+                    ),
+                    ScanJob(
+                        id="job-a",
+                        user_id="user-a",
+                        state="running",
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        connection_generation=CONNECTION_GENERATION,
+                        lease_owner="worker-a",
+                        lease_expires_at=_future_lease(),
+                    ),
+                ]
+            )
+            await session.commit()
+
+        monkeypatch.setattr(service_module, "SavedMessagesScanner", _Scanner)
+        monkeypatch.setattr(
+            service_module, "short_lived_client", delayed_client_context
+        )
+        monkeypatch.setattr(
+            service_module,
+            "settings",
+            SimpleNamespace(
+                scan_slice_max_pages=4,
+                scan_slice_seconds=0.2,
+                media_cache_max_bytes=1024,
+            ),
+        )
+
+        progress = await service_module._execute_bounded_scan_slice(
+            lease=_lease(owner="worker-a")
+        )
+
+    assert progress.completion_reason == SLICE_TIME_LIMIT
+    assert captured["scanner_finished"] is True
+    timeout_seconds = captured["timeout_seconds"]
+    assert isinstance(timeout_seconds, (int, float))
+    assert 0 < timeout_seconds < 0.18
 
 
 @pytest.mark.asyncio
