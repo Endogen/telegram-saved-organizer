@@ -194,6 +194,32 @@ async def test_scanner_caches_a_bounded_photo_preview() -> None:
 
 
 @pytest.mark.asyncio
+async def test_scanner_selects_progressive_photo_thumbnail_by_telegram_type() -> None:
+    class PhotoSizeProgressive:
+        type = "y"
+        w = 1280
+        h = 720
+        sizes = [20, 100]
+
+    now = datetime.now(tz=UTC)
+    thumbnail = PhotoSizeProgressive()
+    message = _FakeMessage(id=1, date=now)
+    message.photo = SimpleNamespace(sizes=[thumbnail])  # type: ignore[assignment]
+    client = _FakeMediaClient(
+        pages_by_offset={0: [message]},
+        media_content=b"jpeg-preview",
+    )
+
+    await SavedMessagesScanner().scan(
+        client=client,
+        page_size=2,
+        media_cache_max_bytes=1024,
+    )
+
+    assert client.download_calls == [(message, "y")]
+
+
+@pytest.mark.asyncio
 async def test_preview_deadline_does_not_advance_past_uncached_messages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

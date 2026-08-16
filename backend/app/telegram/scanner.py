@@ -492,7 +492,11 @@ class SavedMessagesScanner:
                 getattr(getattr(raw_message, "photo", None), "sizes", None),
                 max_bytes=max_bytes,
             )
-            kwargs = {"thumb": thumbnail} if thumbnail is not None else {}
+            kwargs = (
+                {"thumb": self._telegram_thumbnail_selector(thumbnail)}
+                if thumbnail is not None
+                else {}
+            )
             return (kwargs, "image/jpeg")
 
         if scanned.file_size is None or scanned.file_size <= max_bytes:
@@ -502,7 +506,22 @@ class SavedMessagesScanner:
             getattr(getattr(raw_message, "document", None), "thumbs", None),
             max_bytes=max_bytes,
         )
-        return ({"thumb": thumbnail}, "image/jpeg") if thumbnail is not None else None
+        return (
+            (
+                {"thumb": self._telegram_thumbnail_selector(thumbnail)},
+                "image/jpeg",
+            )
+            if thumbnail is not None
+            else None
+        )
+
+    def _telegram_thumbnail_selector(self, thumbnail: Any) -> Any:
+        thumbnail_type = getattr(thumbnail, "type", None)
+        return (
+            thumbnail_type
+            if isinstance(thumbnail_type, str) and thumbnail_type
+            else thumbnail
+        )
 
     def _largest_bounded_thumbnail(
         self,
