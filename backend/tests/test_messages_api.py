@@ -528,13 +528,15 @@ async def test_get_message_media_returns_cached_image(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mime_type", ["audio/ogg", "audio/mp3", "audio/x-opus+ogg"])
 async def test_get_message_media_returns_cached_audio_inline(
     message_context: tuple[Any, _FakeMessageService],
+    mime_type: str,
 ) -> None:
     app, service = message_context
     service.get_media_result = CachedMessageMedia(
         content=b"ogg-audio",
-        mime_type="audio/ogg",
+        mime_type=mime_type,
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -542,7 +544,7 @@ async def test_get_message_media_returns_cached_audio_inline(
 
     assert response.status_code == 200
     assert response.content == b"ogg-audio"
-    assert response.headers["content-type"] == "audio/ogg"
+    assert response.headers["content-type"] == mime_type
     assert response.headers["content-disposition"] == "inline"
 
 

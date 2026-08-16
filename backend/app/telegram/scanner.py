@@ -33,10 +33,12 @@ PLAYABLE_AUDIO_MIME_TYPES = frozenset(
         "audio/aac",
         "audio/flac",
         "audio/mp4",
+        "audio/mp3",
         "audio/mpeg",
         "audio/ogg",
         "audio/wav",
         "audio/webm",
+        "audio/x-opus+ogg",
         "audio/x-wav",
     }
 )

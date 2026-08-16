@@ -143,6 +143,37 @@ async def test_scanner_caches_bounded_audio_for_inline_playback() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mime_type", ["audio/mp3", "audio/x-opus+ogg"])
+async def test_scanner_caches_telegram_audio_mime_variants(mime_type: str) -> None:
+    audio_message = _FakeMessage(
+        id=9,
+        date=datetime.now(tz=UTC),
+        voice=True,
+        document=_FakeDocument(
+            mime_type=mime_type,
+            size=512,
+            attributes=None,
+        ),
+    )
+    client = _FakeMediaClient({0: [audio_message]}, media_content=b"audio")
+    seen: list[ScanPage] = []
+
+    async def on_page(page: ScanPage) -> None:
+        seen.append(page)
+
+    await SavedMessagesScanner().scan(
+        client=client,
+        page_size=10,
+        max_messages=10,
+        media_cache_max_bytes=1024,
+        on_page=on_page,
+    )
+
+    assert seen[0].messages[0].cached_media == b"audio"
+    assert seen[0].messages[0].cached_media_mime_type == mime_type
+
+
+@pytest.mark.asyncio
 async def test_scanner_paginates_and_tracks_progress() -> None:
     scanner = SavedMessagesScanner()
     now = datetime.now(tz=UTC)
