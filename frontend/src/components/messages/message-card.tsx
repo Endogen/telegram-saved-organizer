@@ -308,7 +308,8 @@ export function MessageCard({
       onDragStartCapture={handleDragStart}
       onDragEnd={handleDragEnd}
       className={[
-        "group overflow-visible rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.96)] p-4 shadow-sm transition-colors",
+        "group relative overflow-visible rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card)/0.96)] p-4 shadow-sm transition-colors",
+        isActionsOpen ? "z-[100]" : "",
         isDeletePending ? "cursor-not-allowed opacity-80" : "cursor-grab active:cursor-grabbing",
         isDragging ? "border-[hsl(var(--primary)/0.55)] bg-[hsl(var(--card)/0.88)] shadow-lg" : "",
       ].join(" ")}
@@ -425,7 +426,7 @@ export function MessageCard({
                 role="menuitem"
               >
                 <Tags className="size-3.5" />
-                Edit message tags
+                Edit tags
               </button>
               <button
                 type="button"

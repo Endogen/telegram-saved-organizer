@@ -140,6 +140,29 @@ function isImageMessage(mediaType: string | null | undefined, mimeType: string |
     || normalizedMimeType.startsWith("image/");
 }
 
+function isAudioMessage(mediaType: string | null | undefined, mimeType: string | null | undefined): boolean {
+  const normalizedMediaType = mediaType?.trim().toLowerCase() ?? "";
+  const normalizedMimeType = mimeType?.trim().toLowerCase() ?? "";
+  return normalizedMediaType.includes("audio")
+    || normalizedMediaType.includes("voice")
+    || normalizedMimeType.startsWith("audio/");
+}
+
+function MessageAudio({ mediaUrl }: { mediaUrl: string }) {
+  return (
+    <audio
+      src={mediaUrl}
+      controls
+      preload="metadata"
+      aria-label="Play saved audio"
+      draggable={false}
+      onClick={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+      className="w-full max-w-xl"
+    />
+  );
+}
+
 function MessageImage({
   mediaUrl,
   compact,
@@ -232,18 +255,26 @@ export function MessageContent({
 }: MessageContentProps) {
   const analysis = analyzeMessageContent(content, url);
   const imageMessage = isImageMessage(mediaType, mimeType);
+  const audioMessage = isAudioMessage(mediaType, mimeType);
   const displayedText = analysis.text !== null && compact && analysis.link !== null
     ? compactTextWithoutPreviewedUrl(analysis.text, analysis.link.url)
     : analysis.text;
 
   return (
     <div className="space-y-3">
-      {mediaUrl !== null ? <MessageImage mediaUrl={mediaUrl} compact={compact} content={analysis.text} /> : null}
+      {mediaUrl !== null && imageMessage
+        ? <MessageImage mediaUrl={mediaUrl} compact={compact} content={analysis.text} />
+        : null}
+      {mediaUrl !== null && audioMessage ? <MessageAudio mediaUrl={mediaUrl} /> : null}
       {displayedText !== null ? <LinkedText text={displayedText} compact={compact} /> : null}
       {analysis.link !== null ? <LinkPreview key={analysis.link.url} link={analysis.link} compact={compact} /> : null}
       {analysis.text === null && analysis.link === null && mediaUrl === null ? (
         <p className="text-sm italic text-[hsl(var(--muted-foreground))]">
-          {imageMessage ? "Image preview will be cached during the next scan." : "No text or link content on this message."}
+          {imageMessage
+            ? "Image preview will be cached during the next scan."
+            : audioMessage
+              ? "Audio will be cached during the next scan."
+              : "No text or link content on this message."}
         </p>
       ) : null}
     </div>

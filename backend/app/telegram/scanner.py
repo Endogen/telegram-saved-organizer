@@ -28,6 +28,18 @@ RENDERABLE_IMAGE_MIME_TYPES = frozenset(
         "image/webp",
     }
 )
+PLAYABLE_AUDIO_MIME_TYPES = frozenset(
+    {
+        "audio/aac",
+        "audio/flac",
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/ogg",
+        "audio/wav",
+        "audio/webm",
+        "audio/x-wav",
+    }
+)
 SOURCE_EXHAUSTED = "source_exhausted"
 MESSAGE_LIMIT_REACHED = "message_limit_reached"
 RUNTIME_LIMIT_REACHED = "runtime_limit_reached"
@@ -505,6 +517,18 @@ class SavedMessagesScanner:
         scanned: ScannedMessage,
         max_bytes: int,
     ) -> tuple[dict[str, Any], str] | None:
+        normalized_mime_type = (scanned.mime_type or "").strip().lower()
+        if scanned.media_type in {"audio", "voice"} or normalized_mime_type.startswith(
+            "audio/"
+        ):
+            if (
+                normalized_mime_type in PLAYABLE_AUDIO_MIME_TYPES
+                and scanned.file_size is not None
+                and scanned.file_size <= max_bytes
+            ):
+                return ({}, normalized_mime_type)
+            return None
+
         mime_type = self._renderable_image_mime_type(scanned)
         if mime_type is None:
             return None
@@ -587,27 +611,36 @@ class SavedMessagesScanner:
     def _extract_media(
         self, raw_message: Any
     ) -> tuple[str | None, str | None, int | None, str | None]:
+        document = getattr(raw_message, "document", None)
         if getattr(raw_message, "video", None):
             return ("video", None, None, None)
         if getattr(raw_message, "audio", None):
-            return ("audio", None, None, None)
+            return self._extract_document_metadata("audio", document)
         if getattr(raw_message, "voice", None):
-            return ("voice", None, None, None)
+            return self._extract_document_metadata("voice", document)
         if getattr(raw_message, "photo", None):
             return ("photo", None, None, None)
 
-        document = getattr(raw_message, "document", None)
         if document is not None:
-            return (
-                "document",
-                self._extract_file_name(document),
-                self._coerce_db_bigint(getattr(document, "size", None), minimum=0),
-                self._coerce_str(
-                    getattr(document, "mime_type", None),
-                    max_length=MAX_MIME_TYPE_LENGTH,
-                ),
-            )
+            return self._extract_document_metadata("document", document)
         return (None, None, None, None)
+
+    def _extract_document_metadata(
+        self,
+        media_type: str,
+        document: Any,
+    ) -> tuple[str, str | None, int | None, str | None]:
+        if document is None:
+            return (media_type, None, None, None)
+        return (
+            media_type,
+            self._extract_file_name(document),
+            self._coerce_db_bigint(getattr(document, "size", None), minimum=0),
+            self._coerce_str(
+                getattr(document, "mime_type", None),
+                max_length=MAX_MIME_TYPE_LENGTH,
+            ),
+        )
 
     def _extract_file_name(self, document: Any) -> str | None:
         attributes = getattr(document, "attributes", None)

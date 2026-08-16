@@ -659,7 +659,7 @@ describe("MessagesPage actions", () => {
 
     const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
     fireEvent.click(menuButtons[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit tags" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Tags for this message" })).toBeInTheDocument();
@@ -812,7 +812,7 @@ describe("MessagesPage actions", () => {
 
     const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
     fireEvent.click(menuButtons[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit tags" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Tags for this message" })).toBeInTheDocument();
@@ -835,7 +835,7 @@ describe("MessagesPage actions", () => {
 
     const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
     fireEvent.click(menuButtons[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit tags" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Tags for this message" })).toBeInTheDocument();
@@ -858,7 +858,7 @@ describe("MessagesPage actions", () => {
 
     const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
     fireEvent.click(menuButtons[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit tags" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Tags for this message" })).toBeInTheDocument();
@@ -880,7 +880,7 @@ describe("MessagesPage actions", () => {
     await screen.findByText("3 messages");
 
     fireEvent.click(screen.getAllByRole("button", { name: "Message actions" })[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit tags" }));
     const input = await screen.findByPlaceholderText("e.g. read-later");
     fireEvent.change(input, { target: { value: "new-tag" } });
     fireEvent.click(screen.getByRole("button", { name: "Add tag" }));
@@ -1080,7 +1080,7 @@ describe("MessagesPage actions", () => {
 
     const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
     fireEvent.click(menuButtons[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit tags" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Tags for this message" })).toBeInTheDocument();
@@ -1104,7 +1104,7 @@ describe("MessagesPage actions", () => {
 
     const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
     fireEvent.click(menuButtons[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit tags" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Tags for this message" })).toBeInTheDocument();
@@ -1127,7 +1127,7 @@ describe("MessagesPage actions", () => {
 
     const menuButtons = screen.getAllByRole("button", { name: "Message actions" });
     fireEvent.click(menuButtons[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit tags" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Tags for this message" })).toBeInTheDocument();

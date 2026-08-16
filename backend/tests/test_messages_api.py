@@ -528,6 +528,25 @@ async def test_get_message_media_returns_cached_image(
 
 
 @pytest.mark.asyncio
+async def test_get_message_media_returns_cached_audio_inline(
+    message_context: tuple[Any, _FakeMessageService],
+) -> None:
+    app, service = message_context
+    service.get_media_result = CachedMessageMedia(
+        content=b"ogg-audio",
+        mime_type="audio/ogg",
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/api/messages/12/media")
+
+    assert response.status_code == 200
+    assert response.content == b"ogg-audio"
+    assert response.headers["content-type"] == "audio/ogg"
+    assert response.headers["content-disposition"] == "inline"
+
+
+@pytest.mark.asyncio
 async def test_get_message_media_rejects_missing_or_unsafe_cache(
     message_context: tuple[Any, _FakeMessageService],
 ) -> None:

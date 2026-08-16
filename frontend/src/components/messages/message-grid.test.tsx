@@ -81,7 +81,7 @@ describe("MessageGrid", () => {
     expect(onMoveRequest).toHaveBeenCalledWith(messages[0]);
 
     fireEvent.click(screen.getAllByRole("button", { name: "Message actions" })[0]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit tags" }));
     expect(onTagRequest).toHaveBeenCalledWith(messages[0]);
 
     fireEvent.click(screen.getAllByRole("button", { name: "Message actions" })[0]);

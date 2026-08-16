@@ -39,6 +39,14 @@ router = APIRouter(prefix="/messages", tags=["messages"])
 MAX_PAGE_NUMBER = 1_000_000
 SAFE_CACHED_MEDIA_MIME_TYPES = frozenset(
     {
+        "audio/aac",
+        "audio/flac",
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/ogg",
+        "audio/wav",
+        "audio/webm",
+        "audio/x-wav",
         "image/avif",
         "image/gif",
         "image/jpeg",

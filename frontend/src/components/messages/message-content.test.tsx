@@ -88,6 +88,24 @@ describe("MessageContent", () => {
     expect(screen.getByText("Image preview unavailable.")).toBeInTheDocument();
   });
 
+  it("renders cached audio-only Telegram messages as an inline player", () => {
+    render(
+      <MessageContent
+        content={null}
+        url={null}
+        mediaUrl="/api/messages/44/media"
+        mediaType="voice"
+        mimeType="audio/ogg"
+      />,
+    );
+
+    const player = screen.getByLabelText("Play saved audio");
+    expect(player.tagName).toBe("AUDIO");
+    expect(player).toHaveAttribute("src", "/api/messages/44/media");
+    expect(player).toHaveAttribute("controls");
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  });
+
   it("does not duplicate the previewed URL in compact cards", () => {
     render(
       <MessageContent

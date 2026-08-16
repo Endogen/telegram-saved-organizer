@@ -149,7 +149,7 @@ describe("MessageCard", () => {
     expect(onMoveRequest).toHaveBeenCalledWith(message);
 
     fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Edit message tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit tags" }));
     expect(onTagRequest).toHaveBeenCalledWith(message);
 
     fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
@@ -222,5 +222,24 @@ describe("MessageCard", () => {
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("raises the whole card above neighboring stacking contexts while its menu is open", () => {
+    render(
+      <MessageCard
+        message={createMessage()}
+        onOpenDetailRequest={vi.fn()}
+        onMoveRequest={vi.fn()}
+        onTagRequest={vi.fn()}
+        onDeleteRequest={vi.fn()}
+      />,
+    );
+
+    const card = screen.getByText("Links").closest("article");
+    expect(card).not.toHaveClass("z-[100]");
+
+    fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
+
+    expect(card).toHaveClass("relative", "z-[100]");
   });
 });

@@ -103,6 +103,46 @@ class _FakeMediaClient(_FakeTelegramClient):
 
 
 @pytest.mark.asyncio
+async def test_scanner_caches_bounded_audio_for_inline_playback() -> None:
+    now = datetime.now(tz=UTC)
+    audio_message = _FakeMessage(
+        id=8,
+        date=now,
+        audio=True,
+        document=_FakeDocument(
+            mime_type="audio/ogg",
+            size=512,
+            attributes=[_FakeDocumentAttribute(file_name="voice.ogg")],
+        ),
+    )
+    client = _FakeMediaClient(
+        {0: [audio_message]},
+        media_content=b"ogg-audio",
+    )
+    seen: list[ScanPage] = []
+
+    async def on_page(page: ScanPage) -> None:
+        seen.append(page)
+
+    await SavedMessagesScanner().scan(
+        client=client,
+        page_size=10,
+        max_messages=10,
+        media_cache_max_bytes=1024,
+        on_page=on_page,
+    )
+
+    scanned = seen[0].messages[0]
+    assert scanned.media_type == "audio"
+    assert scanned.file_name == "voice.ogg"
+    assert scanned.file_size == 512
+    assert scanned.mime_type == "audio/ogg"
+    assert scanned.cached_media == b"ogg-audio"
+    assert scanned.cached_media_mime_type == "audio/ogg"
+    assert client.download_calls == [(audio_message, None)]
+
+
+@pytest.mark.asyncio
 async def test_scanner_paginates_and_tracks_progress() -> None:
     scanner = SavedMessagesScanner()
     now = datetime.now(tz=UTC)
