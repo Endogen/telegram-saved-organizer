@@ -193,7 +193,7 @@ function MessageImage({
       draggable={false}
       onClick={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
-      className={`block overflow-hidden rounded-xl bg-[hsl(var(--muted))] outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] ${compact ? "max-h-64" : "max-h-[70vh]"}`}
+      className={`block overflow-hidden rounded-xl bg-[hsl(var(--muted))] outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] ${compact ? "h-64 w-full" : "max-h-[70vh]"}`}
       aria-label="Open saved image"
     >
       <img
@@ -202,7 +202,7 @@ function MessageImage({
         loading="lazy"
         decoding="async"
         onError={() => setFailed(true)}
-        className={`w-full object-contain ${compact ? "max-h-64" : "max-h-[70vh]"}`}
+        className={compact ? "h-full w-full object-cover" : "max-h-[70vh] w-full object-contain"}
       />
     </a>
   );

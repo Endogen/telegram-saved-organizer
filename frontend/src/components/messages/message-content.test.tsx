@@ -69,6 +69,26 @@ describe("MessageContent", () => {
     expect(screen.queryByText("No text or link content on this message.")).not.toBeInTheDocument();
   });
 
+  it("fills compact message-card width and crops tall images", () => {
+    render(
+      <MessageContent
+        content={null}
+        url={null}
+        mediaUrl="/api/messages/44/media"
+        mediaType="photo"
+        mimeType="image/jpeg"
+        compact
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Open saved image" })).toHaveClass("h-64");
+    expect(screen.getByRole("img", { name: "Saved Telegram image" })).toHaveClass(
+      "h-full",
+      "w-full",
+      "object-cover",
+    );
+  });
+
   it("shows a useful fallback when an image preview is not cached or fails", () => {
     const { rerender } = render(
       <MessageContent content={null} url={null} mediaType="photo" mimeType="image/jpeg" />,
