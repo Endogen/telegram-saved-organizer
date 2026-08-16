@@ -29,6 +29,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
+          cache-suffix: backend
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -94,6 +95,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
+          cache-suffix: migration-compose
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -124,6 +126,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
+          cache-suffix: playwright
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
